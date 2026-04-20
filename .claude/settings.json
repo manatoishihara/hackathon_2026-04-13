@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "mcp__codex__*",
+      "mcp__context7__*",
+      "Read",
+      "Glob",
+      "Grep",
+      "LS",
+      "Bash(pnpm *)",
+      "Bash(pytest *)",
+      "Bash(python *)",
+      "Bash(flask *)",
+      "Bash(node *)",
+      "Bash(npx *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git branch *)",
+      "Bash(git checkout *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(mkdir *)",
+      "Bash(mv *)",
+      "Bash(cp *)",
+      "Bash(curl *)",
+      "Edit(apps/**)",
+      "Edit(packages/**)",
+      "Edit(docs/**)",
+      "Edit(tasks/**)",
+      "Edit(.claude/**)",
+      "Write(apps/**)",
+      "Write(packages/**)",
+      "Write(docs/**)",
+      "Write(tasks/**)",
+      "Write(.claude/**)"
+    ],
+    "deny": [
+      "Bash(git push --force *)",
+      "Bash(rm -rf *)",
+      "Bash(rm -f *)",
+      "Read(.env*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(.env*)",
+      "Edit(**/secrets/**)",
+      "Write(.env*)",
+      "Write(**/secrets/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(git commit*)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "このコミットの変更は Codex によるレビューを経ていますか？ 5行以内の自明な変更であれば yes で通して構いません。それ以外でレビュー未実施なら no と回答し、Codex MCP でレビューを実行してから再度コミットを試みてください。"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write(apps/web/src/components/**)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "書き込んだコンポーネントが .claude/rules/frontend-design.md のアンチパターン（Interフォント、Lucideのみ、青→紫グラデーション、shadcn/uiデフォルト、全要素均一、情報の盛り込みすぎ、Empty State未実装）に違反していないか確認してください。違反があれば即修正してください。"
+          }
+        ]
+      }
+    ]
+  }
+}

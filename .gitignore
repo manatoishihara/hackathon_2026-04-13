@@ -1,0 +1,46 @@
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Env ===
+.env
+.env.local
+.env.*.local
+
+# === Node / Next.js / Turborepo ===
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# === Logs ===
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# === Python (apps/api) ===
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# === Editor / IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Playwright ===
+/test-results/
+/playwright-report/
+/playwright/.cache/
