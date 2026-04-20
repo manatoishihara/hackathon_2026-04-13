@@ -10,6 +10,7 @@
     "test": "echo 'no tests yet (Phase 1.1 以降で追加)' && exit 0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.104.0",
     "next": "15.5.15",
     "react": "19.1.0",
     "react-dom": "19.1.0",

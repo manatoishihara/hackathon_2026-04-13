@@ -17,12 +17,12 @@
 - [x] 検証: 手動動作確認（必要に応じて Codex レビューを依頼）
 
 ### 0.2 Supabase 連携
-- [ ] Supabase プロジェクト作成、URL と anon key を取得
-- [ ] `docs/data-model.md` の DDL を Supabase SQL Editor で実行
-- [ ] フロント側に `@supabase/supabase-js` を導入
-- [ ] バック側に `supabase-py` を導入
-- [ ] 匿名認証が動くことを確認（テスト: セッション作成 → 取得）
-- [ ] 検証: `pytest apps/api/tests/test_supabase.py` パス
+- [x] Supabase プロジェクト作成、URL と anon key を取得（ユーザ手動）
+- [x] `docs/data-model.md` の DDL を Supabase SQL Editor で実行（ユーザ手動、4テーブル作成確認済み）
+- [x] フロント側に `@supabase/supabase-js` を導入（`apps/web/src/lib/supabase.ts`）
+- [x] バック側に `supabase` (supabase-py) を導入（`apps/api/src/supabase_client.py`）
+- [x] 匿名認証が動くことを確認（ライブで sign_in_anonymously → 691 chars の JWT 取得 → admin delete でクリーンアップ、全て OK）
+- [x] 検証: `pytest apps/api/tests/test_supabase.py` パス（4件）
 
 ### 0.3 外部 API キー取得と疎通
 - [ ] Google Cloud Console で Places / Routes / Geocoding API を有効化
