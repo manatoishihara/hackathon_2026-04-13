@@ -45,6 +45,7 @@ AI感のあるデフォルトデザインより、プロダクトらしい仕上
 Flask API実装時: @.claude/rules/api-rules.md
 LLM呼び出し実装時: @.claude/rules/llm-rules.md
 テスト作成時: @.claude/rules/testing.md
+データモデル変更時: @.claude/rules/data-model-sync.md
 
 ## ドキュメント記述ルール
 todo.md の各タスクはTDD形式（テスト→Red→Green→Refactor→検証）で書け。
