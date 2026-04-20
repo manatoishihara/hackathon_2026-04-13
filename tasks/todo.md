@@ -37,10 +37,10 @@
 ## Phase 1 / MVP （絶対完成させる）
 
 ### 1.1 データモデルと型の定義
-- [ ] テスト: `shared-types/tests/test_plan_item.ts` で型の必須フィールドを検証
-- [ ] 実装: `packages/shared-types/src/index.ts` に `Plan`, `PlanItem`, `Participant`, `EvidenceBadge` 型を定義
-- [ ] 実装: Pydantic v2 のスキーマを Flask 側に同期（または codegen）
-- [ ] 検証: フロント型とバック型が同じ構造を表現している
+- [x] テスト: vitest で `isValidBudgetBreakdown` / `isValidParticipantCount` / `getEvidenceBadgeInfo` を検証（`packages/shared-types/src/index.test.ts`、12件 PASS）
+- [x] 実装: `packages/shared-types/src/index.ts` に enum / entity / API / UI ヘルパー型を定義（`Plan` / `PlanItem` / `Participant` / `Evidence` / `EvidenceBadgeInfo` 他）
+- [x] 実装: Pydantic v2 のスキーマを `apps/api/src/schemas/__init__.py` に同期（手動ミラー、`_StrictBase` で未知フィールド拒否）
+- [x] 検証: フロント型とバック型が同じ構造（`apps/api/tests/test_schema_parity.py` でフィールド名セットの一致をアサート、12モデル × 26フィールドで 2件 PASS）
 
 ### 1.2 Evidence Pack Builder（コア機能）
 - [ ] テスト: Places API で「箱根湯本駅」を検索 → 結果に place_id と営業時間が含まれる

@@ -1,0 +1,179 @@
+"""Pydantic モデルの振る舞いテスト。
+
+- 正常構造の構築
+- バリデーションエラー（範囲外 / 未知フィールド / 必須未指定）
+- JSON ラウンドトリップ
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+
+import pytest
+from pydantic import ValidationError
+
+from src.schemas import (
+    BudgetBreakdown,
+    Evidence,
+    GeneratePlanRequest,
+    Location,
+    ParticipantInput,
+    Plan,
+    PlanItem,
+    TransitToNext,
+)
+
+# ==============================
+# BudgetBreakdown
+# ==============================
+
+
+def test_budget_breakdown_rejects_out_of_range():
+    with pytest.raises(ValidationError):
+        BudgetBreakdown(lodging=-1, meal=30, activity=20, transit=51)
+    with pytest.raises(ValidationError):
+        BudgetBreakdown(lodging=101, meal=0, activity=0, transit=0)
+
+
+def test_budget_breakdown_accepts_valid():
+    b = BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10)
+    assert b.lodging + b.meal + b.activity + b.transit == 100
+
+
+def test_budget_breakdown_rejects_unknown_field():
+    with pytest.raises(ValidationError):
+        BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10, extra=99)  # type: ignore[call-arg]
+
+
+# ==============================
+# Evidence
+# ==============================
+
+
+def test_evidence_optional_fields_default_none():
+    ev = Evidence(sources=["Google Places"])
+    assert ev.opening_hours is None
+    assert ev.rating is None
+    assert ev.price_level is None
+    assert ev.verified_at is None
+
+
+def test_evidence_price_level_out_of_range_rejected():
+    with pytest.raises(ValidationError):
+        Evidence(sources=[], price_level=5)
+    with pytest.raises(ValidationError):
+        Evidence(sources=[], price_level=0)
+
+
+# ==============================
+# Plan / PlanItem
+# ==============================
+
+
+def _valid_budget() -> BudgetBreakdown:
+    return BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10)
+
+
+def _valid_plan_kwargs() -> dict:
+    return dict(
+        id="00000000-0000-0000-0000-000000000001",
+        session_id="00000000-0000-0000-0000-000000000002",
+        title="箱根温泉旅",
+        region="神奈川",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 2),
+        departure_point="新宿駅",
+        budget_per_person_jpy=30000,
+        budget_breakdown=_valid_budget(),
+        start_mode="auto",
+        mode_payload=None,
+        share_token=None,
+        created_at=datetime(2026, 5, 1, 12, 0, 0),
+        updated_at=datetime(2026, 5, 1, 12, 0, 0),
+    )
+
+
+def test_plan_accepts_valid():
+    plan = Plan(**_valid_plan_kwargs())
+    assert plan.title == "箱根温泉旅"
+    assert plan.start_mode == "auto"
+
+
+def test_plan_rejects_invalid_start_mode():
+    kwargs = _valid_plan_kwargs()
+    kwargs["start_mode"] = "cruise"
+    with pytest.raises(ValidationError):
+        Plan(**kwargs)
+
+
+def test_plan_json_roundtrip():
+    plan = Plan(**_valid_plan_kwargs())
+    data = plan.model_dump(mode="json")
+    restored = Plan.model_validate(data)
+    assert restored == plan
+
+
+def test_plan_item_nested_location_and_evidence():
+    item = PlanItem(
+        id="00000000-0000-0000-0000-000000000101",
+        plan_id="00000000-0000-0000-0000-000000000001",
+        order_index=0,
+        item_type="activity",
+        title="箱根神社参拝",
+        description=None,
+        start_time=datetime(2026, 6, 1, 10, 0),
+        end_time=datetime(2026, 6, 1, 11, 0),
+        location=Location(
+            place_id="abc123",
+            place_name="箱根神社",
+            lat=35.20,
+            lng=139.02,
+            address="神奈川県足柄下郡箱根町元箱根80-1",
+        ),
+        cost_jpy=0,
+        cost_confidence="verified",
+        evidence=Evidence(sources=["Google Places"]),
+        transit_to_next=TransitToNext(
+            mode="walk",
+            route="徒歩",
+            departure_time="11:10",
+            duration_min=15,
+            fare_jpy=0,
+            polyline=None,
+        ),
+        notes=None,
+        created_at=datetime(2026, 5, 1, 12, 0),
+        updated_at=datetime(2026, 5, 1, 12, 0),
+    )
+    assert item.item_type == "activity"
+    assert item.transit_to_next and item.transit_to_next.mode == "walk"
+
+
+# ==============================
+# GeneratePlanRequest
+# ==============================
+
+
+def test_generate_plan_request_accepts_multiple_participants():
+    req = GeneratePlanRequest(
+        title="箱根温泉旅",
+        region="神奈川",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 2),
+        departure_point="新宿駅",
+        budget_per_person_jpy=30000,
+        budget_breakdown=_valid_budget(),
+        start_mode="auto",
+        mode_payload=None,
+        participants=[
+            ParticipantInput(
+                display_name=f"メンバー{i}",
+                avatar_color="#D97757",
+                wishes_text="ゆったり過ごしたい",
+                tags=["温泉", "和食"],
+                order_index=i,
+            )
+            for i in range(3)
+        ],
+    )
+    assert len(req.participants) == 3
