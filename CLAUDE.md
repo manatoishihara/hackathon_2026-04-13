@@ -30,7 +30,7 @@ Next.js 15 / TypeScript / Tailwind v4 / shadcn/ui / Flask / Supabase (DB+匿名A
 1. 提案コミットメッセージ（複数コミットに分けるべきなら分割案も添える）
 2. 対象ファイル一覧（`git add` するパス）
 
-ブランチ戦略: `main`（本番、直接 push しない）/ `develop`（開発統合先）/ `feat/phase-X-Y-description`（タスク用、develop から生やす）。詳細は @docs/team-roles.md。
+ブランチ戦略: `main`（本番、直接 push しない）/ `develop`（開発統合先）/ `feat/<短い説明>` `fix/<説明>` `chore/<説明>`（タスク用、develop から生やす、kebab-case、Phase 番号は入れない）。詳細は @docs/team-roles.md。
 
 Codexレビューはデフォルトで実施しない。ユーザから依頼された時のみ `/codex-review` を走らせる。
 ただし、大きめの設計判断や不安がある実装に当たったときは「Codexに見てもらいますか？」と提案してよい（実行判断はユーザ）。

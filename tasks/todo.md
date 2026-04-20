@@ -8,13 +8,13 @@
 ## Phase 0 / プロジェクト基盤
 
 ### 0.1 モノレポ初期化
-- [ ] `pnpm init` でルート package.json
-- [ ] Turborepo 導入（turbo.json、pnpm-workspace.yaml）
-- [ ] `apps/web` に Next.js 15 + TypeScript + Tailwind v4 を作成
-- [ ] `apps/api` に Flask (Python 3.12) プロジェクトを作成
-- [ ] `packages/shared-types` で TS 型を共有する仕組みを作る
-- [ ] `pnpm dev` で両方起動することを確認
-- [ ] 検証: 手動動作確認（必要に応じて Codex レビューを依頼）
+- [x] `pnpm init` でルート package.json
+- [x] Turborepo 導入（turbo.json、pnpm-workspace.yaml）
+- [x] `apps/web` に Next.js 15 + TypeScript + Tailwind v4 を作成
+- [x] `apps/api` に Flask (Python 3.12) プロジェクトを作成
+- [x] `packages/shared-types` で TS 型を共有する仕組みを作る
+- [x] `pnpm dev` で両方起動することを確認
+- [x] 検証: 手動動作確認（必要に応じて Codex レビューを依頼）
 
 ### 0.2 Supabase 連携
 - [ ] Supabase プロジェクト作成、URL と anon key を取得

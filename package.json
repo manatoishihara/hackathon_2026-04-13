@@ -1,0 +1,21 @@
+{
+  "name": "routeful",
+  "version": "0.0.0",
+  "private": true,
+  "description": "対面で使う AI 旅行計画ツール。Evidence-based 生成で実在スポット・正確な交通・予算根拠を提示する。",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.29.3",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.4",
+    "typescript": "^5.9.2"
+  }
+}

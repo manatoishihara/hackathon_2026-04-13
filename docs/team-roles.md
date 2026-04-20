@@ -69,7 +69,7 @@ GET    /api/plans/shared/:token          共有閲覧（編集不可）
 
 - `main`: 本番デプロイ対象、直接 push 禁止
 - `develop`: 開発の統合ブランチ
-- `feat/phase-X-Y-description`: 各タスクのブランチ
+- `feat/<短い説明>` / `fix/<説明>` / `chore/<説明>` / `refactor/<説明>`: 各タスクのブランチ（kebab-case、Phase 番号は入れない。例: `feat/monorepo-init`, `feat/evidence-pack-builder`）
 - PR → コードレビュー（必要なら Codex レビューを依頼）→ develop へマージ
 
 ## コミュニケーション
