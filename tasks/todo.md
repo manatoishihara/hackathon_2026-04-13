@@ -25,12 +25,12 @@
 - [x] 検証: `pytest apps/api/tests/test_supabase.py` パス（4件）
 
 ### 0.3 外部 API キー取得と疎通
-- [ ] Google Cloud Console で Places / Routes / Geocoding API を有効化
-- [ ] OpenAI API キー取得
-- [ ] Mapbox トークン取得
+- [x] Google Cloud Console で Places / Routes / Geocoding API を有効化
+- [x] OpenAI API キー取得
+- [x] Mapbox トークン取得（`.env` に `NEXT_PUBLIC_MAPBOX_TOKEN` セット済、Phase 1.8 で実戦確認）
 - [ ] 楽天トラベル App ID 取得（Phase 2 用、早めに申請）
-- [ ] バック側に疎通テスト実装（各 API を最小リクエストで叩く）
-- [ ] 検証: 全 API のヘルスチェックテストがパス
+- [x] バック側に疎通テスト実装（`apps/api/src/external/health.py` に Google Places / Routes / Geocoding / OpenAI の4チェック）
+- [x] 検証: 全 API のヘルスチェックテストがパス（`pytest -m integration` で 4/4 PASS、5.66秒）
 
 ---
 
