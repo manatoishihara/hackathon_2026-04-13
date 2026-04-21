@@ -13,6 +13,8 @@ from __future__ import annotations
 from src.schemas import (
     BudgetBreakdown,
     Evidence,
+    EvidencePlacesPlaceSummary,
+    EvidencePlacesResponse,
     GeneratePlanRequest,
     GeneratePlanResponse,
     Location,
@@ -109,6 +111,8 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
     "GeneratePlanResponse": {"plan_id"},
     "RegenerateItemRequest": {"constraint"},
     "RegenerateItemResponse": {"item"},
+    "EvidencePlacesPlaceSummary": {"place_id", "name", "lat", "lng"},
+    "EvidencePlacesResponse": {"evidence_pack_id", "places"},
 }
 
 _MODELS = {
@@ -124,6 +128,8 @@ _MODELS = {
     "GeneratePlanResponse": GeneratePlanResponse,
     "RegenerateItemRequest": RegenerateItemRequest,
     "RegenerateItemResponse": RegenerateItemResponse,
+    "EvidencePlacesPlaceSummary": EvidencePlacesPlaceSummary,
+    "EvidencePlacesResponse": EvidencePlacesResponse,
 }
 
 
