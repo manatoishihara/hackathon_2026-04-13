@@ -6,10 +6,13 @@ packages/shared-types/src/index.ts と 1:1 対応。変更手順は同ファイ�
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_HHMM_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 # ==============================
 # 列挙型
@@ -173,6 +176,32 @@ class EvidencePlacesResponse(_StrictBase):
     places: list[EvidencePlacesPlaceSummary]
 
 
+class ClientTransitEdge(_StrictBase):
+    """フロント Maps JS SDK で取得した transit を `/api/plans/generate` に送る時の 1 要素（Phase 1.3b）。
+
+    `apps/api/src/evidence/pack.py` の `TransitEdge` と制約を揃える（有向エッジ、同じ
+    値域・文字長・HH:mm）。pack.TransitEdge とは重複定義だが API 境界と内部構造を
+    分離する目的でそれぞれ別クラスとして定義する。変更時は両方を同期する
+    （`.claude/rules/data-model-sync.md` の「計画節の扱い」の運用に準ずる）。
+    """
+
+    from_place_id: str = Field(min_length=1, max_length=255)
+    to_place_id: str = Field(min_length=1, max_length=255)
+    mode: TransitMode
+    route_summary: str = Field(min_length=1, max_length=120)
+    duration_min: int = Field(ge=0, le=1440)
+    fare_jpy: int | None = Field(default=None, ge=0, le=500_000)
+    candidate_departures: list[str] = Field(min_length=1, max_length=10)
+
+    @field_validator("candidate_departures")
+    @classmethod
+    def _validate_hhmm_list(cls, v: list[str]) -> list[str]:
+        for dep in v:
+            if not _HHMM_PATTERN.match(dep):
+                raise ValueError(f"candidate_departures の要素が HH:mm 形式ではない: {dep!r}")
+        return v
+
+
 __all__ = [
     # enums
     "StartMode",
@@ -187,9 +216,10 @@ __all__ = [
     "Evidence",
     "TransitToNext",
     "PlanItem",
-    # evidence places response
+    # evidence places response + client transit
     "EvidencePlacesPlaceSummary",
     "EvidencePlacesResponse",
+    "ClientTransitEdge",
     # api
     "ParticipantInput",
     "GeneratePlanRequest",

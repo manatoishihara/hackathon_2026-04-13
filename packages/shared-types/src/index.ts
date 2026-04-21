@@ -143,6 +143,20 @@ export type EvidencePlacesResponse = {
   places: EvidencePlacesPlaceSummary[];
 };
 
+// フロント Maps JS SDK の DirectionsService で取得した transit を
+// `/api/plans/generate`（Phase 1.3c）に送る際のエッジ表現（Phase 1.3b で追加）。
+// 有向エッジ: A→B と B→A は別レコード。サーバー側は Pydantic Field 制約で
+// 値域・文字長・HH:mm 形式を検証し、place_id 所属チェックは 1.3c で追加予定。
+export type ClientTransitEdge = {
+  from_place_id: string;
+  to_place_id: string;
+  mode: "train" | "bus" | "walk" | "car";
+  route_summary: string; // 1〜120 文字
+  duration_min: number; // 0〜1440
+  fare_jpy: number | null; // 0〜500000
+  candidate_departures: string[]; // HH:mm 形式、1〜10 要素
+};
+
 // ==============================
 // UI ヘルパー（Phase 1.7 の Evidence バッジ表示用）
 // ==============================

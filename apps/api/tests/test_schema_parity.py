@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from src.schemas import (
     BudgetBreakdown,
+    ClientTransitEdge,
     Evidence,
     EvidencePlacesPlaceSummary,
     EvidencePlacesResponse,
@@ -113,6 +114,15 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
     "RegenerateItemResponse": {"item"},
     "EvidencePlacesPlaceSummary": {"place_id", "name", "lat", "lng"},
     "EvidencePlacesResponse": {"evidence_pack_id", "places"},
+    "ClientTransitEdge": {
+        "from_place_id",
+        "to_place_id",
+        "mode",
+        "route_summary",
+        "duration_min",
+        "fare_jpy",
+        "candidate_departures",
+    },
 }
 
 _MODELS = {
@@ -130,12 +140,64 @@ _MODELS = {
     "RegenerateItemResponse": RegenerateItemResponse,
     "EvidencePlacesPlaceSummary": EvidencePlacesPlaceSummary,
     "EvidencePlacesResponse": EvidencePlacesResponse,
+    "ClientTransitEdge": ClientTransitEdge,
 }
 
 
 def test_expected_fields_cover_all_models():
     """EXPECTED_FIELDS と _MODELS のキー集合が一致する。モデル追加忘れ検出用。"""
     assert set(EXPECTED_FIELDS.keys()) == set(_MODELS.keys())
+
+
+def test_client_transit_edge_constraints_match_pack_transit_edge():
+    """schemas.ClientTransitEdge と evidence.pack.TransitEdge の Field 制約が同一。
+
+    両方が同じ無効入力セットで ValidationError を出すことを確認する。
+    フィールド名だけでなく **制約の同一性**（HH:mm / 値域 / 文字長）をドリフト検出する。
+    """
+    from pydantic import ValidationError
+
+    from src.evidence.pack import TransitEdge as PackTransitEdge
+    from src.schemas import ClientTransitEdge
+
+    valid_kwargs = dict(
+        from_place_id="A",
+        to_place_id="B",
+        mode="car",
+        route_summary="車で約30分",
+        duration_min=30,
+        fare_jpy=None,
+        candidate_departures=["09:00"],
+    )
+
+    # 両方とも正常入力は受理
+    PackTransitEdge(**valid_kwargs)
+    ClientTransitEdge(**valid_kwargs)
+
+    # 両方とも同じ違反で ValidationError
+    violations = [
+        {**valid_kwargs, "from_place_id": ""},            # min_length=1
+        {**valid_kwargs, "from_place_id": "x" * 256},     # max_length=255
+        {**valid_kwargs, "route_summary": ""},            # min_length=1
+        {**valid_kwargs, "route_summary": "あ" * 121},    # max_length=120
+        {**valid_kwargs, "duration_min": -1},             # ge=0
+        {**valid_kwargs, "duration_min": 1441},           # le=1440
+        {**valid_kwargs, "fare_jpy": -1},                 # ge=0
+        {**valid_kwargs, "fare_jpy": 500_001},            # le=500000
+        {**valid_kwargs, "candidate_departures": []},     # min_length=1
+        {**valid_kwargs, "candidate_departures": [f"{h:02d}:00" for h in range(11)]},  # max_length=10
+        {**valid_kwargs, "candidate_departures": ["24:00"]},  # HH:mm 範囲外
+        {**valid_kwargs, "candidate_departures": ["9:00"]},   # HH:mm 形式違反
+    ]
+    for bad in violations:
+        for Model in (PackTransitEdge, ClientTransitEdge):
+            try:
+                Model(**bad)
+            except ValidationError:
+                continue
+            raise AssertionError(
+                f"{Model.__name__} did not reject invalid input: {bad}"
+            )
 
 
 def test_pydantic_fields_match_contract():
