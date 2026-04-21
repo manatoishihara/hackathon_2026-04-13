@@ -263,3 +263,52 @@ export type RegenerateItemResponse = {
 ## Pydantic 対応（`apps/api/src/schemas/`）
 
 上記 TypeScript 型と一対一で対応する Pydantic v2 スキーマを配置せよ。フィールド名、nullability、enum を完全に一致させること。型が不整合だとフロントが壊れる。
+
+## Phase 1.3 で追加予定の型（API 分割に伴う）
+
+日本国内の transit は Google のサーバー API から取れないため、プラン生成を 2 段に
+分ける（詳細は `docs/evidence-pack.md` / `docs/architecture.md` / `tasks/lessons.md`）。
+
+**この「計画節」は 3 点同期の対象外**（`.claude/rules/data-model-sync.md` の「計画節の
+扱い」参照）。擬似コードで意図だけ示し、Phase 1.3 の実装着手時に shared-types /
+Pydantic / test_schema_parity への実コード追加 + 3 点同期を一括で行う。
+
+```typescript
+// POST /api/evidence/places リクエスト
+// → 現在の GeneratePlanRequest をそのまま流用する予定（フィールドは同一）
+
+// POST /api/evidence/places レスポンス
+export type EvidencePlacesResponse = {
+  evidence_pack_id: string;       // サーバー短期キャッシュへの参照（TTL 15 分想定）
+  places: Array<{
+    place_id: string;
+    name: string;
+    lat: number;
+    lng: number;
+  }>;
+  // 注: フロントは Maps JS DirectionsService 呼び出しに必要な最小サブセットのみ受け取る。
+  // 予算・時間制約・参加者情報などはサーバー側の短期キャッシュに保持する。
+};
+
+// POST /api/plans/generate リクエスト
+export type PlanGenerationPayload = {
+  evidence_pack_id: string;
+  transit_matrix: ClientTransitEdge[];
+};
+
+export type ClientTransitEdge = {
+  from_place_id: string;     // EvidencePack.places に含まれる ID に限る（サーバーで検証）
+  to_place_id: string;
+  mode: 'train' | 'bus' | 'walk' | 'car';
+  route_summary: string;     // 120 文字以内
+  duration_min: number;      // 0〜1440
+  fare_jpy: number | null;   // 0〜500000
+  candidate_departures: string[]; // HH:mm、1〜10 要素
+};
+
+// POST /api/plans/generate レスポンス
+// → 現在の GeneratePlanResponse ({ plan_id }) を流用
+```
+
+**未決事項**: `candidate_departures` の単数/複数化、`route_summary` のサーバー側 rewrite 要否、
+`evidence_pack_id` のストア（Supabase vs in-memory vs Redis）は Phase 1.3 着手時に確定させる。

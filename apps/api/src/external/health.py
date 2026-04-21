@@ -55,7 +55,12 @@ def check_google_places(api_key: str | None = None) -> HealthResult:
 
 
 def check_google_routes(api_key: str | None = None) -> HealthResult:
-    """Routes API computeRoutes に最小リクエストを投げる（東京駅→新宿駅、transit）。
+    """Routes API computeRoutes に最小リクエストを投げる（東京駅→新宿駅、DRIVE）。
+
+    TRANSIT モードは日本国内で ZERO_RESULTS を返すため疎通確認に使えない。
+    DRIVE モードなら日本でも動作するので、API キーの有効性確認はこちらで行う。
+    transit 情報はフロント側の Maps JS SDK DirectionsService から取得する
+    （Phase 1.3 以降、tasks/lessons.md 参照）。
 
     Reference: https://developers.google.com/maps/documentation/routes/compute_route_directions
     """
@@ -74,7 +79,7 @@ def check_google_routes(api_key: str | None = None) -> HealthResult:
             json={
                 "origin": {"location": {"latLng": {"latitude": 35.681236, "longitude": 139.767125}}},
                 "destination": {"location": {"latLng": {"latitude": 35.690921, "longitude": 139.700258}}},
-                "travelMode": "TRANSIT",
+                "travelMode": "DRIVE",
                 "languageCode": "ja",
             },
             timeout=REQUEST_TIMEOUT_SEC,
@@ -82,12 +87,42 @@ def check_google_routes(api_key: str | None = None) -> HealthResult:
     except requests.RequestException as e:
         return HealthResult("google_routes", ok=False, error=f"{type(e).__name__}: {e}")
 
-    return HealthResult(
-        "google_routes",
-        ok=res.ok,
-        status_code=res.status_code,
-        error=None if res.ok else res.text[:200],
-    )
+    if not res.ok:
+        return HealthResult(
+            "google_routes",
+            ok=False,
+            status_code=res.status_code,
+            error=res.text[:200],
+        )
+
+    # DRIVE モードなら routes 配列が必ず返る。空 body は疎通異常として扱う。
+    try:
+        data = res.json()
+    except ValueError as e:
+        return HealthResult(
+            "google_routes",
+            ok=False,
+            status_code=res.status_code,
+            error=f"invalid JSON body: {e}",
+        )
+    if not isinstance(data, dict):
+        return HealthResult(
+            "google_routes",
+            ok=False,
+            status_code=res.status_code,
+            error=f"expected JSON object, got {type(data).__name__}",
+        )
+    routes = data.get("routes")
+    # routes が list でない（None / 文字列 / dict 等）or 空なら異常扱い
+    if not isinstance(routes, list) or len(routes) == 0:
+        return HealthResult(
+            "google_routes",
+            ok=False,
+            status_code=res.status_code,
+            error="expected non-empty routes array (DRIVE mode should always return at least one)",
+        )
+
+    return HealthResult("google_routes", ok=True, status_code=res.status_code)
 
 
 def check_google_geocoding(api_key: str | None = None) -> HealthResult:
@@ -112,7 +147,22 @@ def check_google_geocoding(api_key: str | None = None) -> HealthResult:
         return HealthResult("google_geocoding", ok=False, status_code=res.status_code, error=res.text[:200])
 
     # Geocoding API は 200 でも body の status が ERROR の場合があるので両方チェック
-    body = res.json()
+    try:
+        body = res.json()
+    except ValueError as e:
+        return HealthResult(
+            "google_geocoding",
+            ok=False,
+            status_code=res.status_code,
+            error=f"invalid JSON body: {e}",
+        )
+    if not isinstance(body, dict):
+        return HealthResult(
+            "google_geocoding",
+            ok=False,
+            status_code=res.status_code,
+            error=f"expected JSON object, got {type(body).__name__}",
+        )
     api_status = body.get("status")
     return HealthResult(
         "google_geocoding",

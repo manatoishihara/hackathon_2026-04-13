@@ -49,7 +49,8 @@ Pydantic スキーマ（`apps/api/src/schemas/`）はこれと一対一対応。
 
 ```
 POST   /api/sessions                     セッション作成
-POST   /api/plans/generate               プラン生成（Evidence Pack 構築 → LLM）
+POST   /api/evidence/places              Evidence Pack の places のみ取得、evidence_pack_id 発行 (Phase 1.3)
+POST   /api/plans/generate               evidence_pack_id + フロント取得 transit_matrix を受けて LLM → Plan 生成 (Phase 1.3)
 GET    /api/plans/:id                    プラン取得
 PATCH  /api/plans/:id/items/:item_id     アイテム編集
 POST   /api/plans/:id/items/:item_id/regenerate  部分再生成 (Phase 2)
@@ -57,6 +58,10 @@ POST   /api/plans/:id/items/reorder      並び替え (Phase 2)
 POST   /api/plans/:id/share              共有トークン発行
 GET    /api/plans/shared/:token          共有閲覧（編集不可）
 ```
+
+※ `/api/plans/generate` が 2 段階になっている理由は `tasks/lessons.md` と
+  `docs/evidence-pack.md` 参照。日本国内の transit 情報が Google のサーバー API
+  から取れないため、フロント Maps JS SDK で transit を取得して送り返す構造。
 
 リクエスト/レスポンスの詳細型は `docs/data-model.md` の「API リクエスト/レスポンス」セクション参照。
 

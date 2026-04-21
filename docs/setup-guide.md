@@ -38,11 +38,17 @@ cd ../..
    - Places API (New)
    - Routes API
    - Geocoding API
-3. 認証情報 > API キーを作成
-4. API キーに制限をかける（HTTP referrer制限、使用する API のみに限定）
-5. **無料枠を使い切らないよう** 使用量アラートを設定
+   - **Maps JavaScript API**（フロントで DirectionsService を使って日本 transit を取るため必須、Phase 1.3 以降）
+3. 認証情報 > API キーを **2 つ**作成:
+   - **サーバーキー** (`GOOGLE_MAPS_API_KEY`): API 制限＝Places / Routes / Geocoding、本番運用では Application restriction = IP addresses（Render の outbound IP）
+   - **ブラウザキー** (`NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY`): API 制限＝Maps JavaScript API、本番運用では Application restriction = HTTP referrers（`https://<your-vercel>.vercel.app/*` と `http://localhost:3000/*`）
+   - ⚠️ **1 つのキーで referrer と IP の両方を絞ることはできない**（Google の仕様）。本番では必ず 2 つに分離
+4. 各キーに割り当て（Quotas）で日次上限を設定（Places 1000/day, Routes 500/day, Geocoding 500/day, Maps JS 10000 loads/day 程度が目安）
+5. **予算とアラート** で月 $10 の通知を設定
 
-月の無料枠（ハッカソン時点）: Places/Routes/Geocoding ともに 5,000〜10,000 リクエスト/月。
+月の無料枠（ハッカソン時点）: Places/Routes/Geocoding ともに 5,000〜10,000 リクエスト/月、Maps JS は 月 28,500 loads。
+
+⚠️ **JP transit の制約**: Google の Directions / Routes サーバー API は日本国内の公共交通データを返さない。電車便名・発車時刻・運賃はフロントの Maps JS SDK DirectionsService 経由で取得する（`tasks/lessons.md` 参照）。
 
 ### 2.3 Mapbox トークン
 

@@ -42,16 +42,21 @@
 - [x] 実装: Pydantic v2 のスキーマを `apps/api/src/schemas/__init__.py` に同期（手動ミラー、`_StrictBase` で未知フィールド拒否）
 - [x] 検証: フロント型とバック型が同じ構造（`apps/api/tests/test_schema_parity.py` でフィールド名セットの一致をアサート、12モデル × 26フィールドで 2件 PASS）
 
-### 1.2 Evidence Pack Builder（コア機能）
-- [ ] テスト: Places API で「箱根湯本駅」を検索 → 結果に place_id と営業時間が含まれる
-- [ ] テスト: Routes API で「新宿駅 → 箱根湯本駅」transit → 運賃と所要時間が返る
-- [ ] 実装: `apps/api/src/evidence/places.py` に検索 + 詳細取得関数
-- [ ] 実装: `apps/api/src/evidence/routes.py` に transit 経路取得関数
-- [ ] 実装: `apps/api/src/evidence/builder.py` で Evidence Pack を構築
-- [ ] 検証: 架空のスポット名を渡すと検索失敗を適切にハンドリング
-- [ ] 検証: docs/evidence-pack.md の仕様通りの JSON を出力する
+### 1.2 Evidence Pack Builder（コア機能、サーバー側 places のみ）
+- [x] テスト: Places API で「箱根湯本駅」を検索 → place_id と関連情報が返る
+- [x] 実装: `apps/api/src/evidence/places.py` に検索関数
+- [x] 実装: `apps/api/src/evidence/routes.py` に DRIVE モード経路関数（Phase 2 recalc 用、JP transit は Routes/Directions サーバー API 不可のため）
+- [x] 実装: `apps/api/src/evidence/builder.py` で places-only の EvidencePack を構築
+- [x] 実装: `apps/api/src/evidence/pack.py` に Pydantic モデル（`TransitEdge` は Field 制約強化済み、有向エッジ明文化）
+- [x] 検証: 架空のスポット名を渡すと空リストが返る（例外にならない）
+- [x] 検証: Places / Routes (DRIVE) の integration テスト PASS
+- [ ] transit 取得は Phase 1.3 でフロントに移動（`apps/web/src/lib/transit.ts`）
 
-### 1.3 LLM プラン生成（コア機能）
+### 1.3 LLM プラン生成 + フロント transit 取得（コア機能）
+- [ ] 実装: `apps/web/src/lib/transit.ts` で Maps JS SDK DirectionsService ラッパー（参加者の start_date + 09:00 で近接ペアの transit を並列取得、上限あり）
+- [ ] 実装: API 2 分割 — `POST /api/evidence/places`（base_pack + evidence_pack_id）/ `POST /api/plans/generate`（evidence_pack_id + transit_matrix を受け取って validate → LLM）
+- [ ] 実装: サーバー側 Transit Validator（値域 / HH:mm / place_id 所属 / 件数上限）
+- [ ] 実装: evidence_pack_id のサーバーキャッシュ（Supabase or in-mem、TTL 15 分）
 - [ ] テスト: Evidence Pack + 希望入力を渡して OpenAI から構造化 JSON が返る
 - [ ] テスト: LLM の出力 place_id が必ず Evidence Pack に含まれる（ハルシネーション検出）
 - [ ] 実装: `apps/api/src/llm/prompt.py` に system prompt と user prompt builder
