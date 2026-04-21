@@ -297,6 +297,20 @@ export type EvidencePlacesResponse = {
   evidence_pack_id: string;
   places: EvidencePlacesPlaceSummary[];
 };
+
+// フロント Maps JS SDK で取得した transit を Phase 1.3c の
+// /api/plans/generate に送る際の 1 要素（Phase 1.3b で昇格）。
+// 有向エッジ: A→B と B→A は別レコード。サーバー側は Pydantic Field 制約と
+// place_id 所属検証（Phase 1.3c）でバリデートする。
+export type ClientTransitEdge = {
+  from_place_id: string;     // EvidencePack.places に含まれる ID に限る（サーバーで検証）
+  to_place_id: string;
+  mode: 'train' | 'bus' | 'walk' | 'car';
+  route_summary: string;     // 1〜120 文字
+  duration_min: number;      // 0〜1440
+  fare_jpy: number | null;   // 0〜500000
+  candidate_departures: string[]; // HH:mm 形式、1〜10 要素
+};
 ```
 
 ## Pydantic 対応（`apps/api/src/schemas/`）
@@ -317,19 +331,11 @@ Pydantic / test_schema_parity への実コード追加 + 3 点同期を一括で
 // セクションの EvidencePlacesResponse / EvidencePlacesPlaceSummary を参照。
 
 // POST /api/plans/generate リクエスト
+// ClientTransitEdge は Phase 1.3b で実コード化済み。上の「API リクエスト/レスポンス」
+// セクションを参照。
 export type PlanGenerationPayload = {
   evidence_pack_id: string;
   transit_matrix: ClientTransitEdge[];
-};
-
-export type ClientTransitEdge = {
-  from_place_id: string;     // EvidencePack.places に含まれる ID に限る（サーバーで検証）
-  to_place_id: string;
-  mode: 'train' | 'bus' | 'walk' | 'car';
-  route_summary: string;     // 120 文字以内
-  duration_min: number;      // 0〜1440
-  fare_jpy: number | null;   // 0〜500000
-  candidate_departures: string[]; // HH:mm、1〜10 要素
 };
 
 // POST /api/plans/generate レスポンス
