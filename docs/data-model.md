@@ -109,12 +109,34 @@ CREATE INDEX idx_plan_items_plan_id ON plan_items(plan_id);
 CREATE INDEX idx_plan_items_order ON plan_items(plan_id, order_index);
 
 -- ==============================
+-- EvidencePackSessions（/api/evidence/places の短期キャッシュ、Phase 1.3a）
+-- ==============================
+-- フロントが /api/evidence/places で取得した evidence_pack_id を
+-- /api/plans/generate へ送るまでの間 Pack 本体を保持する。
+-- owner_session_id でバインドし、他人の pack_id を再利用できないようにする。
+-- 期限切れレコードは store_pack の opportunistic cleanup で都度削除。
+CREATE TABLE evidence_pack_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_session_id UUID NOT NULL,
+  pack JSONB NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '15 minutes'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_evidence_pack_sessions_expires_at
+  ON evidence_pack_sessions(expires_at);
+CREATE INDEX idx_evidence_pack_sessions_owner
+  ON evidence_pack_sessions(owner_session_id);
+
+-- ==============================
 -- Row Level Security
 -- ==============================
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE participants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE plan_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE evidence_pack_sessions ENABLE ROW LEVEL SECURITY;
+-- evidence_pack_sessions はポリシー無し = anon 完全遮断、service_role のみ操作可
 
 -- 自分のセッションのみアクセス可
 CREATE POLICY "Own session only" ON sessions
@@ -258,6 +280,23 @@ export type RegenerateItemRequest = {
 export type RegenerateItemResponse = {
   item: PlanItem;
 };
+
+// POST /api/evidence/places レスポンス (Phase 1.3a)
+// リクエストは GeneratePlanRequest をそのまま使う。レスポンスは
+// Maps JS DirectionsService を呼ぶのに必要な最小サブセットのみ返す。
+// 予算・時間制約・参加者情報はサーバー短期キャッシュに格納し、
+// /api/plans/generate 呼び出し時に evidence_pack_id でサーバーが取り出す。
+export type EvidencePlacesPlaceSummary = {
+  place_id: string;
+  name: string;
+  lat: number;
+  lng: number;
+};
+
+export type EvidencePlacesResponse = {
+  evidence_pack_id: string;
+  places: EvidencePlacesPlaceSummary[];
+};
 ```
 
 ## Pydantic 対応（`apps/api/src/schemas/`）
@@ -274,21 +313,8 @@ export type RegenerateItemResponse = {
 Pydantic / test_schema_parity への実コード追加 + 3 点同期を一括で行う。
 
 ```typescript
-// POST /api/evidence/places リクエスト
-// → 現在の GeneratePlanRequest をそのまま流用する予定（フィールドは同一）
-
-// POST /api/evidence/places レスポンス
-export type EvidencePlacesResponse = {
-  evidence_pack_id: string;       // サーバー短期キャッシュへの参照（TTL 15 分想定）
-  places: Array<{
-    place_id: string;
-    name: string;
-    lat: number;
-    lng: number;
-  }>;
-  // 注: フロントは Maps JS DirectionsService 呼び出しに必要な最小サブセットのみ受け取る。
-  // 予算・時間制約・参加者情報などはサーバー側の短期キャッシュに保持する。
-};
+// POST /api/evidence/places は Phase 1.3a で実装済み。上の「API リクエスト/レスポンス」
+// セクションの EvidencePlacesResponse / EvidencePlacesPlaceSummary を参照。
 
 // POST /api/plans/generate リクエスト
 export type PlanGenerationPayload = {

@@ -153,6 +153,26 @@ class RegenerateItemResponse(_StrictBase):
     item: PlanItem
 
 
+class EvidencePlacesPlaceSummary(_StrictBase):
+    """`/api/evidence/places` レスポンスの places 要素。DirectionsService 呼び出しに必要な最小セット。"""
+
+    place_id: str
+    name: str
+    lat: float
+    lng: float
+
+
+class EvidencePlacesResponse(_StrictBase):
+    """`/api/evidence/places` レスポンス全体（Phase 1.3a）。
+
+    evidence_pack_id はサーバー短期キャッシュ (evidence_pack_sessions) の参照。
+    フロントはこの id を `/api/plans/generate` で渡すことで本体を参照させる。
+    """
+
+    evidence_pack_id: str
+    places: list[EvidencePlacesPlaceSummary]
+
+
 __all__ = [
     # enums
     "StartMode",
@@ -167,6 +187,9 @@ __all__ = [
     "Evidence",
     "TransitToNext",
     "PlanItem",
+    # evidence places response
+    "EvidencePlacesPlaceSummary",
+    "EvidencePlacesResponse",
     # api
     "ParticipantInput",
     "GeneratePlanRequest",

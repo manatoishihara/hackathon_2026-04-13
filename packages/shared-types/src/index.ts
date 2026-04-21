@@ -128,6 +128,21 @@ export type RegenerateItemResponse = {
   item: PlanItem;
 };
 
+// POST /api/evidence/places レスポンス（Phase 1.3a）。
+// DirectionsService 呼び出しに必要な最小サブセットのみ返す。
+// Evidence Pack 本体はサーバー短期キャッシュ（evidence_pack_sessions テーブル）。
+export type EvidencePlacesPlaceSummary = {
+  place_id: string;
+  name: string;
+  lat: number;
+  lng: number;
+};
+
+export type EvidencePlacesResponse = {
+  evidence_pack_id: string;
+  places: EvidencePlacesPlaceSummary[];
+};
+
 // ==============================
 // UI ヘルパー（Phase 1.7 の Evidence バッジ表示用）
 // ==============================
