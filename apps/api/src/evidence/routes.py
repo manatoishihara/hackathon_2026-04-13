@@ -71,6 +71,10 @@ def compute_drive_estimate(
         "origin": {"placeId": origin_place_id},
         "destination": {"placeId": destination_place_id},
         "travelMode": "DRIVE",
+        # departureTime を指定する場合は routingPreference を TRAFFIC_AWARE 以上に
+        # しないと Routes API は 400 "Timestamp cannot be set for TRAFFIC_UNAWARE
+        # routing mode" を返す。交通状況込みの推定を得たいので TRAFFIC_AWARE を使う
+        "routingPreference": "TRAFFIC_AWARE",
         "departureTime": departure_iso,
         "languageCode": language,
     }

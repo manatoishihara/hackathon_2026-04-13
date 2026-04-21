@@ -67,6 +67,8 @@ def test_builds_request_with_place_ids_and_drive_mode(mock_post):
     assert body["origin"] == {"placeId": "origin_id"}
     assert body["destination"] == {"placeId": "dest_id"}
     assert body["travelMode"] == "DRIVE"  # TRANSIT ではなく DRIVE
+    # departureTime を付けるなら routingPreference が必須
+    assert body["routingPreference"] == "TRAFFIC_AWARE"
     # JST 09:00 -> UTC 00:00
     assert body["departureTime"].endswith("T00:00:00Z")
 
