@@ -61,12 +61,64 @@ def test_google_places_failure(mock_post):
 
 @patch("src.external.health.requests.post")
 def test_google_routes_success(mock_post):
-    mock_post.return_value = MagicMock(ok=True, status_code=200)
+    mock_response = MagicMock(ok=True, status_code=200)
+    mock_response.json.return_value = {"routes": [{"duration": "600s", "distanceMeters": 5000}]}
+    mock_post.return_value = mock_response
+
     r = check_google_routes(api_key="fake-key")
     assert r.ok is True
     args, kwargs = mock_post.call_args
     assert args[0] == "https://routes.googleapis.com/directions/v2:computeRoutes"
-    assert kwargs["json"]["travelMode"] == "TRANSIT"
+    # JP では TRANSIT が機能しないため DRIVE で疎通確認する
+    assert kwargs["json"]["travelMode"] == "DRIVE"
+
+
+@patch("src.external.health.requests.post")
+def test_google_routes_empty_routes_is_not_ok(mock_post):
+    """HTTP 200 でも routes 配列が空なら ok=False（DRIVE は必ず経路を返すべき）。"""
+    mock_response = MagicMock(ok=True, status_code=200)
+    mock_response.json.return_value = {"routes": []}
+    mock_post.return_value = mock_response
+
+    r = check_google_routes(api_key="fake-key")
+    assert r.ok is False
+    assert r.error is not None and "routes array" in r.error
+
+
+@patch("src.external.health.requests.post")
+def test_google_routes_non_list_routes_is_not_ok(mock_post):
+    """routes が list 以外（truthy な文字列・dict 等）なら ok=False を返す。"""
+    for non_list in ("unexpected", {"0": "nope"}, 42):
+        mock_response = MagicMock(ok=True, status_code=200)
+        mock_response.json.return_value = {"routes": non_list}
+        mock_post.return_value = mock_response
+
+        r = check_google_routes(api_key="fake-key")
+        assert r.ok is False, f"should reject non-list routes: {non_list!r}"
+
+
+@patch("src.external.health.requests.post")
+def test_google_routes_invalid_json_body_is_not_ok(mock_post):
+    """HTTP 200 で JSON でない body（HTML 等）が返っても raise せず ok=False を返す。"""
+    mock_response = MagicMock(ok=True, status_code=200)
+    mock_response.json.side_effect = ValueError("not json")
+    mock_post.return_value = mock_response
+
+    r = check_google_routes(api_key="fake-key")
+    assert r.ok is False
+    assert r.error is not None and "invalid JSON" in r.error
+
+
+@patch("src.external.health.requests.post")
+def test_google_routes_non_object_json_is_not_ok(mock_post):
+    """HTTP 200 で list など dict 以外の JSON が来ても AttributeError を raise しない。"""
+    mock_response = MagicMock(ok=True, status_code=200)
+    mock_response.json.return_value = ["unexpected", "list", "body"]
+    mock_post.return_value = mock_response
+
+    r = check_google_routes(api_key="fake-key")
+    assert r.ok is False
+    assert r.error is not None and "expected JSON object" in r.error
 
 
 @patch("src.external.health.requests.get")
@@ -87,6 +139,26 @@ def test_google_geocoding_api_status_error(mock_get):
     r = check_google_geocoding(api_key="fake-key")
     assert r.ok is False
     assert r.error is not None and "REQUEST_DENIED" in r.error
+
+
+@patch("src.external.health.requests.get")
+def test_google_geocoding_invalid_json_body_is_not_ok(mock_get):
+    mock_response = MagicMock(ok=True, status_code=200)
+    mock_response.json.side_effect = ValueError("not json")
+    mock_get.return_value = mock_response
+    r = check_google_geocoding(api_key="fake-key")
+    assert r.ok is False
+    assert r.error is not None and "invalid JSON" in r.error
+
+
+@patch("src.external.health.requests.get")
+def test_google_geocoding_non_object_json_is_not_ok(mock_get):
+    mock_response = MagicMock(ok=True, status_code=200)
+    mock_response.json.return_value = "oops"
+    mock_get.return_value = mock_response
+    r = check_google_geocoding(api_key="fake-key")
+    assert r.ok is False
+    assert r.error is not None and "expected JSON object" in r.error
 
 
 @patch("src.external.health.requests.post")

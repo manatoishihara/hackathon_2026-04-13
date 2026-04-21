@@ -92,24 +92,47 @@ type TemporalConstraints = {
 
 ## Pack 構築フロー
 
+Evidence Pack は **サーバーとフロントの 2 段構築**になる。日本の transit 情報は
+Google の Directions / Routes サーバー API から取れないため、ブラウザの Maps JS
+SDK DirectionsService で取得して API に戻す（`tasks/lessons.md` 参照）。
+
 ```
-1. QueryContext から候補キーワードを生成（LLM でも決定論でも可）
+[サーバー] POST /api/evidence/places
+1. QueryContext から候補キーワードを生成（Phase 1.2 は決定論、Phase 1.3+ で LLM 化検討）
    例: "箱根 温泉" "箱根 和食" "箱根 観光"
-
 2. 各キーワードで Places API text search（並列、各 top 10）
-3. 重複を place_id で dedupe
-4. 各 place について Place Details を取得（営業時間、評価）
-5. 参加者の wishes_text と tags に対する関連度をスコアリングし、relevance_tags 付与
+3. 重複を place_id で dedupe、上位 15 件に cap
+4. （Phase 1.2 スキップ）各 place について Place Details を取得、参加者希望とのマッチを
+   relevance_tags 付与 — Phase 1.3 で実装
+5. 予算と時間の制約を展開
+6. base_pack（transit_matrix は空）と evidence_pack_id（TTL 15 分程度）を返す
 
-6. place ペアのうち「直線距離 10km 以内」のみ Routes API で transit を取得（並列）
-   → これが transit_matrix
+[フロント] ブラウザ上で Maps JS SDK DirectionsService
+7. places のうち「直線距離 10km 以内」のペアで transit を取得
+   - 最大ペア数: 20（places 15 件なら理論上 105 ペアだが、距離 10km フィルタで大幅削減）
+   - 並列呼び出し: 最大 5（DirectionsService のクォータ破裂防止）
+   - 各呼び出しタイムアウト: 2 秒（全体を 10 秒以内に収める）
+   - 上記の具体数値は Phase 1.3 実装時に実測から調整する
+   → TransitEdge[] を組み立てる
+   → 各 TransitEdge は有向（A→B と B→A は別レコード）、from/to_place_id は places に含まれる ID
 
-7. 宿泊候補がある場合、楽天トラベルAPIで検索（Phase 2）
-
-8. budget_breakdown を金額に展開
-
-9. 全部束ねて EvidencePack として LLM へ
+[サーバー] POST /api/plans/generate
+8. evidence_pack_id + transit_matrix を受信
+9. **Transit Validator**（Phase 1.3 で実装、現状は未実装）:
+   - Pydantic Field 制約: 値域 / 文字長 / HH:mm / 件数上限（pack.py で既に防衛）
+   - place_id が Evidence Pack.places に含まれること
+   - 有向エッジの重複排除
+10. サーバー短期キャッシュから取り出した Evidence Pack と validate 済み transit_matrix を
+    マージして最終 Evidence Pack を再構成
+    （クライアント送信データは validate 済み値のみを使う、生データは LLM に渡さない）
+11. 宿泊候補がある場合、楽天トラベルAPIで検索（Phase 2）
+12. 最終 Evidence Pack を LLM プロンプトに注入
 ```
+
+**⚠️ Phase 1.2 の状態**: Transit Validator はまだ実装されておらず、`/api/evidence/places`
+と `/api/plans/generate` のエンドポイント自体もまだ存在しない。`build_evidence_pack()` は
+`transit_matrix=[]` を返すので、現時点では攻撃面は表に出ていない。Phase 1.3 でこれらを
+同時に実装する。
 
 ## LLM プロンプト設計
 

@@ -14,6 +14,18 @@ Routeful のデータモデルは **docs/data-model.md / packages/shared-types /
 
 `docs/data-model.md` が唯一の正典。コード側（TS / Python）はどちらもここのミラー。
 
+## 計画節の扱い（同期対象外）
+
+`docs/data-model.md` に「**Phase X.Y で追加予定の型**」や「Planned Types」見出しで
+記載された型は、**該当 Phase の実装着手時まで 3 点同期の対象外**。以下のルールで運用する:
+
+- 計画節は TS 擬似コードやコメントで「意図」を示すだけで、実コードは未実装
+- 計画節の内容を実コードに落とすタイミング（= 該当 Phase の実装ブランチ）で、
+  通常の 3 点同期フローに従って shared-types / Pydantic / test_schema_parity を追加
+- 計画節そのものを更新しただけでは 3 点同期を走らせない（dead code 回避のため）
+- ただし「計画節に書いたが該当 Phase の実装時に追加し忘れる」リスクがあるので、
+  実装時には計画節のチェックリストを先に確認すること
+
 ## 変更フロー（省略不可）
 
 ```

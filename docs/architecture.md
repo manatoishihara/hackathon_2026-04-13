@@ -7,13 +7,15 @@
 │  Next.js on Vercel (apps/web)                                │
 │  - Server Components + Client Components                     │
 │  - Mapbox GL JS で地図描画                                    │
+│  - Maps JS SDK DirectionsService で日本 transit 取得          │
 │  - Supabase client で DB 直接読み取り（RLS で保護）           │
 └──────────┬───────────────────────────────────────────────────┘
            │ HTTPS (JSON)
            ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  Flask on Render (apps/api)                                  │
-│  - Evidence Pack Builder                                     │
+│  - Evidence Pack Builder (places のみ)                       │
+│  - Transit Validator (フロントが送る transit_matrix を検証)   │
 │  - LLM Plan Generator                                        │
 │  - Partial Regeneration                                      │
 └─────┬────────────────┬──────────────────┬────────────────────┘
@@ -23,9 +25,13 @@
 │ OpenAI  │   │ Google Maps     │   │ 楽天トラベル       │
 │ GPT-4o  │   │ Platform        │   │ API (Phase 2)     │
 │         │   │ - Places        │   │                   │
-│         │   │ - Routes        │   │                   │
+│         │   │ - Routes (DRIVE)│   │                   │
 │         │   │ - Geocoding     │   │                   │
 └─────────┘   └─────────────────┘   └───────────────────┘
+
+※ Google Maps Platform の Directions / Routes サーバー API は日本国内の
+  transit データを返さない（tasks/lessons.md 参照）。JP 向け transit は
+  ブラウザの Maps JS SDK DirectionsService 経由で取得する。
 
 ┌──────────────────────────────────────────────────────────────┐
 │  Supabase                                                    │
@@ -40,24 +46,44 @@
 ```
 1. [Web] ユーザーが希望入力を完了し「プランを生成」ボタンを押す
    ↓
-2. [Web → API] POST /api/plans/generate に希望データを送信
+2. [Web → API] POST /api/evidence/places
+   ├─ 希望データ / 予算 / 日程 / 参加者を送信
+   ├─ API が Places API で候補スポット検索（並列、dedupe）
+   ├─ 予算・時間制約を展開
+   ├─ Evidence Pack 本体（places + 予算 + 時間制約、transit_matrix は空）を
+   │   サーバー短期キャッシュに格納
+   └─ Web にはフロントが transit 取得に使う最小サブセットのみ返す:
+       { evidence_pack_id, places: [{ place_id, name, lat, lng }] }
    ↓
-3. [API] Evidence Pack Builder:
-   ├─ Places API で候補スポット検索（並列）
-   ├─ Geocoding で座標確定
-   └─ Routes API で候補経路の時刻・運賃を取得（並列）
+3. [Web] Maps JS SDK DirectionsService:
+   ├─ 距離 10km 以内のスポットペアに絞って transit 取得（最大 20 ペア、並列 5、
+   │   各 2 秒タイムアウト — 具体上限は Phase 1.3 実装時に確定）
+   └─ TransitEdge 配列を組み立てる（有向、A→B と B→A は別レコード）
    ↓
-4. [API] LLM Plan Generator:
+4. [Web → API] POST /api/plans/generate
+   ├─ evidence_pack_id + transit_matrix を送信
+   ├─ API が short-lived cache から Evidence Pack を取り出す
+   ├─ Transit Validator で厳密検証:
+   │   - Pydantic Field 制約（値域 / 文字長 / HH:mm、pack.py）
+   │   - place_id が Evidence Pack.places に含まれること（Phase 1.3）
+   │   - 件数上限 / 重複排除（Phase 1.3）
+   └─ LLM にはサーバー再構成済み Evidence Pack のみ渡す
+   ↓
+5. [API] LLM Plan Generator:
    ├─ Evidence Pack + 希望 + 予算配分 を prompt に注入
    ├─ OpenAI GPT-4o を JSON Schema 指定で呼び出し
    └─ 出力を validator で検証（ハルシネーション検出）
    ↓
-5. [API → DB] 結果を Supabase plan_items テーブルに保存
+6. [API → DB] 結果を Supabase plan_items テーブルに保存
    ↓
-6. [API → Web] plan_id を返す
+7. [API → Web] plan_id を返す
    ↓
-7. [Web] /plan/[id] に遷移、Supabase から plan_items を直接読み取り描画
+8. [Web] /plan/[id] に遷移、Supabase から plan_items を直接読み取り描画
 ```
+
+※ base_pack のキャッシュには Supabase の一時テーブル（`evidence_pack_sessions`、
+  TTL で自動掃除）を使う。単一インスタンスならメモリでもよいが Render の
+  再起動で消えるのでサーバー間で共有できるストアの方が安定する。
 
 ## データフロー（部分再生成、Phase 2）
 
