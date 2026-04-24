@@ -100,6 +100,8 @@ export default function GeneratingPage() {
 
         if (serverPlanId) {
           // 1.3d 完成後: サーバーが plan_id を返す（Zustand と同じ UUID が返る前提）
+          // 成功したので session を必ずクリア（戻る操作・再マウントでの重複 generate 防止）
+          clearSession();
           setStep("done");
           router.replace(`/plan/${serverPlanId}`);
           return;
@@ -108,18 +110,25 @@ export default function GeneratingPage() {
         // 1.3c 時点: plan_id=null
         if (useMocks) {
           // モックモード: Zustand の plan_id で遷移（デザイン確認）
+          clearSession();
           setStep("done");
           router.replace(`/plan/${session.plan_id}`);
           return;
         }
         // 実運用: 1.3d 未完成の間は待機表示
+        // session は保持したまま（LLM 接続完了後に再チャレンジする導線を残すため）。
+        // 重複 generate の懸念は startedRef による 1 回ガード + React Query 側の整合で緩和。
         setStep("ready-mock");
       } catch (err) {
         const message = err instanceof Error ? err.message : "生成に失敗しました";
         setError(message);
         setStep("error");
-        // status を failed に（fire-and-forget）
-        void updatePlanStatus(urlPlanId, "failed").catch(() => {});
+        // status を failed に更新（失敗時も session は保持せず破棄、再入力からやり直させる）
+        clearSession();
+        // fire-and-forget だが失敗ログは残して追跡可能にする
+        void updatePlanStatus(urlPlanId, "failed").catch((e) => {
+          console.warn("updatePlanStatus(failed) failed", e);
+        });
       }
     };
 

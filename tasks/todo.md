@@ -109,31 +109,31 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 詳細計画は @tasks/plans/2026-04-21-frontend-skeleton.md、
 引き継ぎ資料は @tasks/handoff-frontend.md 参照。
 
-#### 1.4〜1.9 骨組み（Claude/Manato 担当、6 ブランチに分割して実装）
+#### 1.4〜1.9 骨組み（Claude/Manato 担当、6 ブランチに分割して実装） ✅ 完了
 
-**Branch 0** `feat/plan-generation-plan-id`（**1.3c マージ後**）
-- [ ] Task 0: `PlanGenerationPayload` に `plan_id` 追加 + `plans.status` カラム追加（3 点同期、DDL 追記）
+**Branch 0** `feat/plan-generation-plan-id` ✅ (develop: `807fca8`)
+- [x] Task 0: `PlanGenerationPayload` に `plan_id` 追加 + `plans.status` カラム追加（3 点同期、DDL 追記）
 
-**Branch 1** `feat/frontend-foundation`（Branch 0 と並列可）
-- [ ] Task 1: 依存パッケージ導入（shadcn/ui、React Query + Devtools、Zustand、react-hook-form、zod、Phosphor Icons、Mapbox、react-qr-code、Framer Motion）+ Providers 配線
-- [ ] Task 2: API クライアント (`lib/api.ts`) + `generationSessionStore` + zod スキーマ + モック fixtures（`queryFn` 分岐で `initialData` 不使用）
-- [ ] Task 3: 共通コンポーネント骨組み（EvidenceBadge / PlanTimeline / PlanItem / BudgetSummary / BudgetBreakdownSlider / ParticipantTabs / ParticipantForm）
+**Branch 1** `feat/frontend-foundation` ✅ (develop: `369127b`)
+- [x] Task 1: 依存パッケージ導入（shadcn/ui、React Query + Devtools、Zustand、react-hook-form、zod、Phosphor Icons、Mapbox、react-qr-code、Framer Motion）+ Providers 配線
+- [x] Task 2: API クライアント (`lib/api.ts`) + `generationSessionStore` + zod スキーマ + モック fixtures（`queryFn` 分岐で `initialData` 不使用）
+- [x] Task 3: 共通コンポーネント骨組み（EvidenceBadge / PlanTimeline / PlanItem / BudgetSummary / BudgetBreakdownSlider / ParticipantTabs / ParticipantForm）
 
-**Branch 2** `feat/frontend-core-flow`（**Branch 0 + 1 マージ後**）
-- [ ] Task 4: 1.4 ランディングページ骨組み（CTA + 3 軸カード）
-- [ ] Task 5: 1.5 希望入力画面骨組み（フォーム配線 + plan_id 発行 + plans INSERT + `/api/evidence/places` + Zustand stash）
-- [ ] Task 6: 1.6 プラン生成中画面骨組み（Zustand 取得 + transit 取得 + `/api/plans/generate` kick）
+**Branch 2** `feat/frontend-core-flow` ✅ (develop: `909bec6`)
+- [x] Task 4: 1.4 ランディングページ骨組み（CTA + 3 軸カード）
+- [x] Task 5: 1.5 希望入力画面骨組み（フォーム配線 + plan_id 発行 + plans INSERT + `/api/evidence/places` + Zustand stash + status 遷移）
+- [x] Task 6: 1.6 プラン生成中画面骨組み（Zustand 取得 + transit 取得 + `/api/plans/generate` kick + 成功/失敗時 clearSession で重複 generate 防止）
 
-**Branch 3** `feat/frontend-plan-view`（**Branch 2 マージ後**）
-- [ ] Task 7: 1.7 プラン閲覧画面骨組み（3 カラム: タイムライン / 予算 / マップ、`USE_MOCKS` 分岐は `lib/api.ts` 内）
+**Branch 3** `feat/frontend-plan-view` ✅ (develop: `4f649aa`)
+- [x] Task 7: 1.7 プラン閲覧画面骨組み（3 カラム: タイムライン / 予算 / マップ、`USE_MOCKS` 分岐は `lib/api.ts` 内）
 
-**Branch 4** `feat/frontend-extra-pages`（**Branch 3 マージ後**）
-- [ ] Task 8: 1.8 地図ビュー骨組み（Mapbox 初期化 + マーカー + 1.7 への差し込み）
-- [ ] Task 9: 1.9 プラン共有画面骨組み（QR + 共有 URL、API 未接続で 1.9 本実装待ち）
+**Branch 4** `feat/frontend-extra-pages` ✅ (develop: `d46fe2a`)
+- [x] Task 8: 1.8 地図ビュー骨組み（Mapbox 初期化 + マーカー + 1.7 への差し込み）
+- [x] Task 9: 1.9 プラン共有画面骨組み（QR + 共有 URL、API 未接続で 1.9 本実装待ち）
 
-**Branch 5** `feat/frontend-handoff`（全 Branch マージ後）
-- [ ] Task 10: ハンドオフ資料 + todo.md + architecture.md 最終化
-- [ ] 検証: `pnpm --filter web test` 全 PASS、`NEXT_PUBLIC_USE_MOCKS=1 pnpm dev` で全ページ描画確認
+**Branch 5** `feat/frontend-handoff`
+- [x] Task 10: ハンドオフ資料 + todo.md + architecture.md 最終化 + Codex レビュー Must-fix 反映（API URL 環境変数名を `NEXT_PUBLIC_API_BASE_URL` に統一、1.6 成功/失敗時の clearSession 追加、handoff 状態を完成ずみに更新、TabsTrigger ネスト button を外出し、getActiveSession で TTL 切れ時に autoclear、updatePlanStatus failed のログ明示化）
+- [x] 検証: `pnpm --filter web test` 61 件 PASS、`pnpm --filter web exec tsc --noEmit` PASS
 
 #### 1.4〜1.9 デザイン着地（メンバー C 担当、骨組みマージ後）
 - [ ] 1.4 ランディングページの見た目仕上げ（ヒーロー / CTA / 3 軸カード、AI 感のない表現）

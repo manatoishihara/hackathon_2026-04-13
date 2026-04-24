@@ -34,10 +34,17 @@ export const useGenerationSessionStore = create<State>((set) => ({
 /**
  * 15 分以内の生きたセッションがあれば返し、無ければ null。
  * 1.6 の mount 時に呼んで、null なら 1.5 にリダイレクトする。
+ *
+ * TTL 切れ時は残骸を自動 clear して、次回以降の `useGenerationSessionStore` 購読者が
+ * 期限切れデータを誤って掴まないようにする。
  */
 export function getActiveSession(): GenerationSession | null {
-  const session = useGenerationSessionStore.getState().session;
+  const state = useGenerationSessionStore.getState();
+  const session = state.session;
   if (!session) return null;
-  if (Date.now() - session.createdAt > SESSION_TTL_MS) return null;
+  if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+    state.clearSession();
+    return null;
+  }
   return session;
 }

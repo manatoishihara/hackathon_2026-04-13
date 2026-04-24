@@ -42,7 +42,7 @@ export function ParticipantTabs({
       onValueChange={(v) => onActiveChange(Number(v))}
       className="w-full"
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <TabsList className="flex-wrap">
           {participants.map((p, i) => (
             <TabsTrigger key={p.order_index} value={String(i)} className="gap-1">
@@ -52,22 +52,22 @@ export function ParticipantTabs({
                 aria-hidden="true"
               />
               {p.display_name || `参加者 ${i + 1}`}
-              {canRemove ? (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemoveParticipant(i);
-                  }}
-                  className="ml-1 rounded-full hover:opacity-70"
-                  aria-label={`${p.display_name || `参加者 ${i + 1}`} を削除`}
-                >
-                  <X size={12} weight="bold" />
-                </button>
-              ) : null}
             </TabsTrigger>
           ))}
         </TabsList>
+        {/* 削除ボタンは TabsTrigger の外に出す（button のネストはアクセシビリティ違反）。
+           選択中の参加者だけ削除ボタンを出し、最低人数 (MIN_PARTICIPANTS) に達していれば隠す。 */}
+        {canRemove ? (
+          <button
+            type="button"
+            onClick={() => onRemoveParticipant(activeIndex)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[color:var(--color-text-secondary)] hover:bg-[color:var(--color-danger)]/10 hover:text-[color:var(--color-danger)]"
+            aria-label={`${participants[activeIndex]?.display_name || `参加者 ${activeIndex + 1}`} を削除`}
+          >
+            <X size={12} weight="bold" />
+            この参加者を削除
+          </button>
+        ) : null}
         {canAdd ? (
           <button
             type="button"
