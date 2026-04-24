@@ -18,13 +18,20 @@ def create_app() -> Flask:
     """
     app = Flask(__name__)
 
+    # 巨大ペイロード DoS の一次防衛。Flask 既定値は None なので直接代入で確実にかける
+    # （setdefault では既定値 None を上書きしない）。transit_matrix 最大 200 件 +
+    # overhead を余裕をもってカバーする 256KB。
+    app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
+
     @app.get("/healthz")
     def healthz():
         return {"status": "ok", "service": "routeful-api"}
 
     # Blueprints
     from .routes.evidence_routes import bp as evidence_bp
+    from .routes.plan_routes import bp as plan_bp
     app.register_blueprint(evidence_bp)
+    app.register_blueprint(plan_bp)
 
     # HTTPException（404 / 405 / 413 など）は Flask 標準のステータス・メッセージを維持。
     # これを先に分岐しないと下の Exception ハンドラが全部 500 に潰してしまう。
