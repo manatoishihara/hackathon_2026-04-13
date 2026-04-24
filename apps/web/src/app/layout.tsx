@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Noto_Sans_JP, Zen_Kaku_Gothic_New } from "next/font/google";
 import "./globals.css";
+import { Providers } from "./providers";
 
 const notoSansJP = Noto_Sans_JP({
   variable: "--font-noto-sans-jp",
@@ -30,7 +31,7 @@ export default function RootLayout({
       <body
         className={`${notoSansJP.variable} ${zenKakuGothic.variable} antialiased`}
       >
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

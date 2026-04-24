@@ -1,11 +1,16 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
 
 /*
- * Design tokens — .claude/rules/frontend-design.md を正典とする。
+ * Routeful Design Tokens — .claude/rules/frontend-design.md を正典とする。
  * 色・フォント・スペーシングの調整はここで行い、コンポーネント側は必ずこのトークンを参照する。
+ * shadcn/ui は `:root` の CSS 変数経由で Routeful トークンを参照する（下の block）。
  */
 @theme {
-  /* Colors */
+  /* Colors（Routeful ブランド） */
   --color-primary: #d97757;
   --color-secondary: #2c5f5d;
   --color-background: #faf7f2;
@@ -43,19 +48,124 @@
   --font-mono: "DM Sans", "JetBrains Mono", monospace;
 }
 
-body {
-  background: var(--color-background);
-  color: var(--color-text-primary);
-  font-family: var(--font-body);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/*
+ * shadcn/ui 向けの @theme inline マッピング。
+ * shadcn のコンポーネントは `--primary` / `--background` / `--radius` などの CSS 変数を参照する。
+ * `:root` でこれらを Routeful Design Tokens の値に書き換えることで「デフォルトテーマ禁止」ルールを守る。
+ */
+@theme inline {
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
 }
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  font-family: var(--font-heading);
+/*
+ * Routeful Design Tokens を shadcn の CSS 変数にマッピング。
+ * ここを書き換えれば shadcn のデフォルト（ニュートラルグレー）から Routeful のテラコッタ系に切り替わる。
+ */
+:root {
+  --background: #faf7f2;                         /* color-background */
+  --foreground: #1a1a1a;                         /* color-text-primary */
+  --card: #ffffff;                               /* color-surface */
+  --card-foreground: #1a1a1a;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+  --primary: #d97757;                            /* color-primary terracotta */
+  --primary-foreground: #ffffff;
+  --secondary: #2c5f5d;                          /* color-secondary deep teal */
+  --secondary-foreground: #ffffff;
+  --muted: #f0ede7;                              /* background を少し暗く */
+  --muted-foreground: #6b6b6b;                   /* color-text-secondary */
+  --accent: #f0ede7;
+  --accent-foreground: #1a1a1a;
+  --destructive: #c54b4b;                        /* color-danger */
+  --border: rgba(0, 0, 0, 0.08);                 /* color-border */
+  --input: rgba(0, 0, 0, 0.08);
+  --ring: #d97757;                               /* focus ring は primary */
+  --chart-1: #d97757;
+  --chart-2: #2c5f5d;
+  --chart-3: #3a7d44;
+  --chart-4: #e8a951;
+  --chart-5: #9b9b9b;
+  --radius: 0.5rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #1a1a1a;
+  --sidebar-primary: #d97757;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f0ede7;
+  --sidebar-accent-foreground: #1a1a1a;
+  --sidebar-border: rgba(0, 0, 0, 0.08);
+  --sidebar-ring: #d97757;
+}
+
+/*
+ * ダークモード（Phase 1 では未使用だが将来のためにトークンだけ定義）。
+ */
+.dark {
+  --background: #1a1a1a;
+  --foreground: #faf7f2;
+  --card: #2a2a2a;
+  --card-foreground: #faf7f2;
+  --popover: #2a2a2a;
+  --popover-foreground: #faf7f2;
+  --primary: #e8a472;
+  --primary-foreground: #1a1a1a;
+  --secondary: #4a8783;
+  --secondary-foreground: #faf7f2;
+  --muted: #333333;
+  --muted-foreground: #9b9b9b;
+  --accent: #333333;
+  --accent-foreground: #faf7f2;
+  --destructive: #d97575;
+  --border: rgba(255, 255, 255, 0.12);
+  --input: rgba(255, 255, 255, 0.15);
+  --ring: #e8a472;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    background: var(--color-background);
+    color: var(--color-text-primary);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+  }
 }
