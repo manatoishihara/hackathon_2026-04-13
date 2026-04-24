@@ -1,7 +1,9 @@
 # DB / バックエンド 整理タスク — メンバー B 向け
 
 **前提**: Phase 1.3c（サーバー側 Transit Validator + `/api/plans/generate` 骨組み）までで、Supabase 連携と evidence_pack_sessions キャッシュは動作している。
-この資料は、**DB 運用の整理** と **Phase 1.9 共有機能の前倒し** を中心に、1.3d（LLM 接続）と並行して進められるタスクを列挙する。
+この資料は、**1.3d（LLM 接続）と完全に独立して進められる** DB / API 整理タスクと、**Phase 1.9 共有機能の前倒し**を列挙する。
+
+**1.3d と噛み合うタスク（DB-2 RLS E2E、DB-3 pg_cron クリーンアップ）は Manato が 1.3d 実装と一緒に対応する**ので、本資料からは除外した。メンバー B は下記タスクだけに集中してよい。
 
 ## 担当範囲
 
@@ -10,9 +12,17 @@
 
 型や Evidence Pack 仕様を変えたくなったら Manato に相談。
 
+## 分業の前提（2026-04-24 整理）
+
+| 担当 | タスク |
+|---|---|
+| Manato（1.3d と合流） | Phase 1.3d 本体 / DB-2 RLS E2E テスト / DB-3 pg_cron クリーンアップ |
+| **メンバー B（本資料）** | **DB-1 migrations / DB-4〜6 共有 API / DB-7 楽天 App ID / DB-8 Supabase ログ** |
+| メンバー C | フロント 1.4〜1.9 の見た目仕上げ（`tasks/handoff-frontend.md`） |
+
 ## 優先度付きタスク一覧
 
-### 🔴 優先度 高: DB の整理（スキーマ運用の土台）
+### 🔴 優先度 高: DB 運用の土台
 
 #### DB-1: Migrations ディレクトリ化
 
@@ -20,59 +30,33 @@
 
 **やること**:
 - `supabase/migrations/` ディレクトリを作成
-- 既存の DDL を `supabase/migrations/20260401_00_init.sql`, `20260419_01_evidence_pack_sessions.sql` のようにファイル分割（日付 + 連番）
+- 既存の DDL を `supabase/migrations/20260401_00_init.sql`, `20260419_01_evidence_pack_sessions.sql`, `20260424_02_plans_status.sql` のようにファイル分割（日付 + 連番）
+- 既存適用済み DDL（2026-04-24 時点の accumulated changes）:
+  - sessions / plans / participants / plan_items テーブル（初期）
+  - evidence_pack_sessions テーブル（1.3a で追加）
+  - plans.status カラム（1.3c+ で追加、`NEXT_PUBLIC_API_BASE_URL` 後に適用）
 - 今後の ALTER は新しいファイルで追加していく運用に
 - `docs/data-model.md` には「DDL の正典は `supabase/migrations/` 配下、ドキュメントは概念モデルのみ」と明記
 - （オプション）Supabase CLI (`supabase db push`) 導入を検討
 
 **完了条件**: 既存の本番スキーマを新規 Supabase プロジェクトに「migrations フォルダから順に実行」で再現できる
 
-#### DB-2: RLS の E2E テスト
-
-**現状の課題**: DDL に RLS ポリシーは書いてあるが、「他セッションから自分のプランにアクセスできない」動作確認テストがない。
-
-**やること**:
-- `apps/api/tests/test_rls.py` を新規作成
-- 2 人の匿名ユーザ（user A / user B）を作成
-- user A が plan / participants / plan_items を作成
-- user B のトークンで A のプランにアクセス → 0 件 or 403 を期待
-- `evidence_pack_sessions` についても同様（B が A の pack_id を知っても load_pack で None が返る、という 1.3c の挙動を live で確認）
-- `pytest -m integration` で動くようにマーキング
-
-**完了条件**: 他セッションからのアクセス遮断が自動テストで担保される
-
-#### DB-3: evidence_pack_sessions の定期クリーンアップ + 失敗 plans 清掃
-
-**現状の課題**:
-1. `store_pack` で opportunistic cleanup しているが、1 日に 1 回も書き込みがないとゴミが溜まり続ける可能性
-2. 1.5 で plan_id 発行 + plans INSERT したが、その後のフローで失敗（`/api/evidence/places` 失敗、ユーザがリロードで放棄、LLM 生成失敗等）すると `status = 'draft'` or `'failed'` で `plan_items = 0` のゴミ plan が残る
-
-**やること**:
-- Supabase の pg_cron でも Edge Function の scheduled でも可
-- 1 時間毎: `DELETE FROM evidence_pack_sessions WHERE expires_at < now()`
-- 1 時間毎: `DELETE FROM plans WHERE status = 'generating' AND updated_at < now() - INTERVAL '1 hour'`（生成中のまま中断・放置された plan、LLM は 60 秒以内完了前提なので 1 時間は十分長いマージン）
-- 1 日毎: `DELETE FROM plans WHERE status IN ('draft', 'failed') AND created_at < now() - INTERVAL '24 hours'`（plan_items / participants は CASCADE DELETE される前提）
-- **`succeeded` は削除しない**（ユーザの成果物、保全）
-- 実装場所は `supabase/functions/cleanup_expired_sessions/` or `supabase/migrations/` の cron 設定
-
-**完了条件**: pg_cron 設定が migrations に入り、手動なしでゴミが消える
-
 ### 🟡 優先度 中: Phase 1.9 プラン共有の前倒し
 
-#### DB-4: `share_token` 生成と保存
+**スコープ**: フロント骨組みは完成済み（`apps/web/src/app/plan/[id]/share/page.tsx`）で、API 待ちの状態。以下 3 つを揃えれば共有機能が完成する。
+
+#### DB-4: `share_token` 生成 API
 
 - `plans` テーブルに `share_token TEXT UNIQUE` は既にある
 - バックエンドで `POST /api/plans/:id/share` を実装:
-  - 認証必須、`plan_id` の owner 検証
+  - 認証必須（`require_session`）、`plan_id` の owner 検証（`plans.session_id = g.owner_session_id`）
   - `secrets.token_urlsafe(16)` で 22 文字程度の共有トークン生成
   - `UPDATE plans SET share_token = ... WHERE id = :id AND session_id = :owner`
   - 既に token があれば既存を返す（再生成は別エンドポイント `DELETE` 想定、今回スコープ外）
 - レスポンス: `{ share_token: string, share_url: string }`
 - **`packages/shared-types` に `ShareResponse` 型を追加する必要あり** → **Manato に相談**（型変更は Manato 管轄ルール）
 
-#### DB-5: 共有閲覧 API — **認可方針: Flask + service role 経由に確定（v2）**
-
-Codex re-review Must-fix #7 対応で、先に認可戦略を固定する。
+#### DB-5: 共有閲覧 API — 認可方針: Flask + service role 経由に確定
 
 **方針**: **Flask サーバーを必ず経由する。Flask は service role で RLS を跨いで読むが、Flask のクエリ条件で `share_token IS NOT NULL` を強制することで保護する**（service role を使う理由は、共有用の特別 RLS ポリシーを書かなくていい簡素さを優先。代わりにアクセス制御を Flask のコードロジックに閉じ込める）。
 
@@ -93,18 +77,20 @@ Codex re-review Must-fix #7 対応で、先に認可戦略を固定する。
 - `POST /api/plans/:id/share`（DB-4）と同じ blueprint でよい
 - Pydantic レスポンス `SharedPlanResponse = { plan, participants, plan_items }` を `shared-types` と 3 点同期
 
-#### DB-6: 共有用 RLS ポリシー監査 — **RLS 追加不要の方針で確定（v2）**
+#### DB-6: 共有用 RLS ポリシー監査 — RLS 追加不要の方針で確定
 
 DB-5 を Flask + service role に固定したため、共有専用 RLS ポリシーは不要。既存の `plans.session_id = auth.uid()` を維持するだけ。
 
-代わりに以下を監査:
+代わりに以下を監査（Manato の DB-2 テストと重複しないよう、共有固有の動作確認に絞る）:
 - Supabase anon key で直接 `SELECT * FROM plans WHERE share_token = ...` しても結果が返らないこと（RLS が働いている確認）
 - Flask service role 経由でのみ `share_token` ベース取得が通ること
-- 監査テスト: `apps/api/tests/test_rls.py` に追加（DB-2 と合流してよい）
+- Flask 経由でも `share_token IS NULL` の Plan は読めないこと（404 を返す）
 
 ### 🟢 優先度 低: 将来タスクの先行準備
 
 #### DB-7: 楽天トラベル API App ID 取得（Phase 2 用、申請に時間がかかる）
+
+**今すぐ依頼したい**: 審査・承認で数日〜数週かかる可能性があるので、手が空いているうちに申請だけ投げる。
 
 - 楽天ウェブサービスに新規登録、Affiliate ID も取得
 - 取得後、`.env` と Render の環境変数に登録（値は Manato に共有）
@@ -112,7 +98,7 @@ DB-5 を Flask + service role に固定したため、共有専用 RLS ポリシ
 
 #### DB-8: Supabase の Row-Level Logging
 
-- LLM 生成後に `plans` と `plan_items` に書き込む Phase 1.3d を迎える前に、DB の insert/update を Supabase のログで追える状態にしておく
+- Manato が Phase 1.3d で `plans` / `plan_items` に書き込みを本格化させる前に、DB の insert/update を Supabase のログで追える状態にしておく
 - Supabase ダッシュボードの Logs から postgres ログのサンプリングを確認、必要なら `pg_stat_statements` を有効化
 
 ## 完了確認チェックリスト
@@ -132,10 +118,10 @@ DB-5 を Flask + service role に固定したため、共有専用 RLS ポリシ
 - 認証フロー: `apps/api/src/auth.py`（JWT 検証 + `g.owner_session_id` セット）
 - キャッシュパターン: `apps/api/src/evidence/cache.py`（opportunistic cleanup + retry の実装例）
 
-## 現状の Supabase テーブル一覧（2026-04-21 時点）
+## 現状の Supabase テーブル一覧（2026-04-24 時点）
 
 - `sessions`（匿名セッション）
-- `plans`（旅行プラン）
+- `plans`（旅行プラン、`status` カラム追加済み）
 - `participants`（2〜5 人）
 - `plan_items`（時系列アイテム）
 - `evidence_pack_sessions`（Evidence Pack 短期キャッシュ、TTL 15 分）
