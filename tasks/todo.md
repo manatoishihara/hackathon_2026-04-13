@@ -53,15 +53,53 @@
 - [ ] transit 取得は Phase 1.3 でフロントに移動（`apps/web/src/lib/transit.ts`）
 
 ### 1.3 LLM プラン生成 + フロント transit 取得（コア機能）
-- [ ] 実装: `apps/web/src/lib/transit.ts` で Maps JS SDK DirectionsService ラッパー（参加者の start_date + 09:00 で近接ペアの transit を並列取得、上限あり）
-- [ ] 実装: API 2 分割 — `POST /api/evidence/places`（base_pack + evidence_pack_id）/ `POST /api/plans/generate`（evidence_pack_id + transit_matrix を受け取って validate → LLM）
-- [ ] 実装: サーバー側 Transit Validator（値域 / HH:mm / place_id 所属 / 件数上限）
-- [ ] 実装: evidence_pack_id のサーバーキャッシュ（Supabase or in-mem、TTL 15 分）
-- [ ] テスト: Evidence Pack + 希望入力を渡して OpenAI から構造化 JSON が返る
-- [ ] テスト: LLM の出力 place_id が必ず Evidence Pack に含まれる（ハルシネーション検出）
-- [ ] 実装: `apps/api/src/llm/prompt.py` に system prompt と user prompt builder
-- [ ] 実装: `apps/api/src/llm/generator.py` で OpenAI 呼び出し + JSON Schema 検証
-- [ ] 実装: 失敗時のリトライ（最大2回、指数バックオフ）
+
+Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の順。
+
+#### 1.3a: `/api/evidence/places` エンドポイント + キャッシュ ✅ 完了（develop: `0cab182`）
+- [x] Supabase `evidence_pack_sessions` テーブル DDL（data-model.md 正典に追加、ユーザ適用済）
+- [x] 認証ミドルウェア `apps/api/src/auth.py`（JWT 検証で `g.owner_session_id` セット）
+- [x] キャッシュモジュール `apps/api/src/evidence/cache.py`（opportunistic cleanup + retry 2 回）
+- [x] Flask blueprint `POST /api/evidence/places`（入力 validate → build_evidence_pack → store_pack → evidence_pack_id + places 最小サブセットを返却）
+- [x] `EvidencePlacesResponse` を 3 点同期（docs / shared-types / Pydantic）
+- [x] ライブ integration テスト（匿名サインイン → end-to-end 200 OK、Supabase ラウンドトリップ、cleanup 検証）
+
+#### 1.3b: フロント Maps JS SDK DirectionsService ラッパー ✅ 完了（develop: `dd1b9b9`）
+- [x] `@googlemaps/js-api-loader` v2 の `setOptions` + `importLibrary("routes")` で dynamic ロード
+- [x] `apps/web/src/lib/transit.ts` — `fetchTransitMatrix(places, departureTime, options)` で `{edges, stats}` 返却
+- [x] 有向エッジ（A→B と B→A を両方呼ぶ）、近接 10km フィルタ、各 place 被覆保証、並列 5、per-call 2s timeout、グローバル締切 10s（SDK ロード含む）
+- [x] JST 固定 HH:mm フォーマット（`Intl.DateTimeFormat` で TZ 依存解消）
+- [x] SSR ガード / API キー未設定エラー / Loader 失敗後の singleton クリアで再試行可能
+- [x] `ClientTransitEdge` を 3 点同期（pack.TransitEdge と同一 Field 制約、同一性テスト付き）
+- [x] Vitest 25 件 PASS（pure helpers + mocked SDK + parallelism / deadline / fail-soft / JST / 再試行）
+
+#### 1.3c: サーバー側 Transit Validator + `/api/plans/generate` 骨組み ✅ 完了（develop へのマージ待ち）
+- [x] `apps/api/src/evidence/validator.py` 新規: `validate_client_transit_matrix(edges, evidence_pack) -> list[TransitEdge]`
+  - Pydantic 層で値域・文字長・HH:mm は既にガード済（`ClientTransitEdge`）
+  - 追加: `from/to_place_id` が Evidence Pack.places に含まれるか
+  - 追加: 自己ループ（from == to）を reject
+  - 追加: 距離上限 `MAX_EDGE_DISTANCE_KM=15.0`（フロント 10km フィルタ + 浮動小数点誤差マージン）
+  - 追加: `(from, to, mode)` 3-tuple 重複は「完全一致 drop / 矛盾 reject」で隠蔽防止
+  - 追加: 件数上限 `min(HARD_CAP=200, N*(N-1))` を正規化後件数で判定
+- [x] `apps/api/src/routes/plan_routes.py` 新規: `POST /api/plans/generate` 骨組み
+  - 認証必須（`require_session`）
+  - 入力 `PlanGenerationPayload = { evidence_pack_id: UUID, transit_matrix }` を Pydantic validate（`max_length=200` 静的 hard cap）
+  - `load_pack(evidence_pack_id, owner_session_id)` で取り出し、None（期限切れ/未知/所有者不一致）は 404
+  - Transit Validator で検証、失敗は 400。404 ログは owner を sha256 8 文字・pack_id prefix 8 文字のみ（PII 対策）
+  - 検証済み transit_matrix を base_pack に merge（`model_copy(update=...)`、フロント改ざんデータは LLM に届かない）
+  - 通常レスポンス: `{ plan_id: null }`。`?debug=1` の時のみ `{ plan_id: null, evidence_pack: merged }` 追加
+  - `MAX_CONTENT_LENGTH=256KB` で巨大ペイロード DoS を一次防御
+- [x] `PlanGenerationPayload` を 3 点同期（計画節から実型へ昇格、docs 先行 → shared-types → Pydantic → parity）
+- [x] Unit テスト: validator 18 件 + `/api/plans/generate` 16 件（認証 / 入力 / UUID / hard cap / 期限 / 所有者 / DB 障害 500 / 検証失敗 / 成功パス / debug / 413）
+- [x] Integration テスト: `/api/evidence/places` → `/api/plans/generate?debug=1` のラウンドトリップ（live Supabase、14km 以内ペア能動選定）
+- [x] 検証: pnpm --filter api test 135 件 PASS（unit）、integration 1 件 PASS（箱根 live Places + Supabase）
+
+#### 1.3d: LLM プロンプト / 生成 / ハルシネーション検出
+- [ ] `apps/api/src/llm/prompt.py` に system prompt と user prompt builder（`docs/evidence-pack.md` の仕様通り）
+- [ ] `apps/api/src/llm/generator.py` で OpenAI 呼び出し + JSON Schema 検証（structured output）
+- [ ] `apps/api/src/llm/validator.py` で LLM 出力の place_id 実在 / 時刻 / opening_hours / 予算 / 時系列を検証
+- [ ] 失敗時のリトライ（最大 2 回、指数バックオフ）、`gpt-4o` → `gpt-4o-mini` フォールバック
+- [ ] `/api/plans/generate` の最終応答を `{ plan_id }` に戻し、plan_items を Supabase に保存
 - [ ] 検証: 10 回生成して架空スポット出力率 0%（ハルシネーション対策の効果測定）
 
 ### 1.4 ランディングページ (01)

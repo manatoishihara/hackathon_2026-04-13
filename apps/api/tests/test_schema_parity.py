@@ -22,6 +22,7 @@ from src.schemas import (
     ParticipantInput,
     Participant,
     Plan,
+    PlanGenerationPayload,
     PlanItem,
     RegenerateItemRequest,
     RegenerateItemResponse,
@@ -123,6 +124,7 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
         "fare_jpy",
         "candidate_departures",
     },
+    "PlanGenerationPayload": {"evidence_pack_id", "transit_matrix"},
 }
 
 _MODELS = {
@@ -141,6 +143,7 @@ _MODELS = {
     "EvidencePlacesPlaceSummary": EvidencePlacesPlaceSummary,
     "EvidencePlacesResponse": EvidencePlacesResponse,
     "ClientTransitEdge": ClientTransitEdge,
+    "PlanGenerationPayload": PlanGenerationPayload,
 }
 
 
