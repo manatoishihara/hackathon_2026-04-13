@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -202,6 +203,21 @@ class ClientTransitEdge(_StrictBase):
         return v
 
 
+class PlanGenerationPayload(_StrictBase):
+    """POST /api/plans/generate リクエスト（Phase 1.3c で実型化）。
+
+    - evidence_pack_id: evidence_pack_sessions.id の UUID。str ではなく UUID 型で
+      先パース段階で形式違反を弾く（DoS + 改ざん対策）。`model_dump(mode="json")` で
+      文字列にシリアライズされるので TS 側の `string` 契約と整合する。
+    - transit_matrix: required（default なし）。max_length=200 の静的 hard cap で
+      巨大ペイロードを先パース段階で弾く。文脈依存の検証（place_id 所属 /
+      自己ループ / 距離 / 矛盾重複）は evidence.validator.validate_client_transit_matrix で。
+    """
+
+    evidence_pack_id: UUID
+    transit_matrix: list[ClientTransitEdge] = Field(max_length=200)
+
+
 __all__ = [
     # enums
     "StartMode",
@@ -220,6 +236,7 @@ __all__ = [
     "EvidencePlacesPlaceSummary",
     "EvidencePlacesResponse",
     "ClientTransitEdge",
+    "PlanGenerationPayload",
     # api
     "ParticipantInput",
     "GeneratePlanRequest",
