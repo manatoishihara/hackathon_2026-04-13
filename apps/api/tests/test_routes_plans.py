@@ -1,7 +1,7 @@
-"""POST /api/plans/generate のユニットテスト（mocked auth + cache + validator）。
+"""POST /api/plans/generate のユニットテスト（mocked auth + cache + validator + LLM + storage）。
 
-Phase 1.3c では LLM 未接続。通常レスポンスは `{ plan_id: null }`。
-`?debug=1` のときのみ `{ plan_id: null, evidence_pack: {...} }` を返す。
+Phase 1.3d で最終化: lock 取得 / LLM 生成 / finalize_plan RPC を Mock で検証する。
+実 OpenAI / 実 Supabase は integration テスト（下段）で 1 本だけ確認する。
 """
 
 from __future__ import annotations
@@ -278,43 +278,341 @@ def test_unknown_place_id_in_transit_returns_400(mock_auth_factory, mock_load, c
 # ==============================
 
 
+# ==============================
+# Lock 取得
+# ==============================
+
+
+def _dummy_llm_plan():
+    from src.llm.schema import LlmGeneratedPlan, LlmPlanItem
+
+    return LlmGeneratedPlan(
+        items=[
+            LlmPlanItem(
+                order_index=0,
+                item_type="activity",
+                title="観光",
+                description=None,
+                start_time="2026-06-01T10:00:00+09:00",
+                end_time="2026-06-01T12:00:00+09:00",
+                place_id="A",
+                cost_jpy=1000,
+                cost_confidence="verified",
+                transit_ref=None,
+            )
+        ]
+    )
+
+
+@patch("src.routes.plan_routes.call_finalize_plan")
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
 @patch("src.routes.plan_routes.load_pack")
 @patch("src.auth.get_supabase_client")
-def test_happy_path_default_returns_only_plan_id_null(
-    mock_auth_factory, mock_load, client
+def test_happy_path_returns_plan_id(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_mark_failed,
+    mock_finalize, client
 ):
+    """LLM 成功 → finalize_plan RPC → { plan_id: UUID } 返却。"""
     mock_auth_factory.return_value = _mock_auth()
     mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    mock_llm.return_value = _dummy_llm_plan()
+
+    plan_id = str(uuid4())
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(plan_id=plan_id),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 200
+    assert res.get_json() == {"plan_id": plan_id}
+    # 保存 RPC が呼ばれた
+    mock_finalize.assert_called_once()
+    # status=failed は呼ばれない
+    mock_mark_failed.assert_not_called()
+
+
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_lock_not_found_returns_404(mock_auth_factory, mock_load, mock_lock, client):
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "not_found"
+
     res = client.post(
         "/api/plans/generate",
         json=_valid_body(),
         headers={"Authorization": "Bearer ok"},
     )
-    assert res.status_code == 200
-    body = res.get_json()
-    assert body == {"plan_id": None}
+    assert res.status_code == 404
 
 
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
 @patch("src.routes.plan_routes.load_pack")
 @patch("src.auth.get_supabase_client")
-def test_happy_path_debug_mode_returns_merged_pack(
-    mock_auth_factory, mock_load, client
+def test_lock_already_generating_returns_409(
+    mock_auth_factory, mock_load, mock_lock, client
 ):
     mock_auth_factory.return_value = _mock_auth()
     mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "already_generating"
+
     res = client.post(
-        "/api/plans/generate?debug=1",
-        json=_valid_body(edges=[_edge("A", "B"), _edge("B", "A")]),
+        "/api/plans/generate",
+        json=_valid_body(),
         headers={"Authorization": "Bearer ok"},
     )
-    assert res.status_code == 200
-    payload = res.get_json()
-    assert payload["plan_id"] is None
-    pack = payload["evidence_pack"]
-    assert len(pack["transit_matrix"]) == 2
-    keys = {(e["from_place_id"], e["to_place_id"]) for e in pack["transit_matrix"]}
-    assert keys == {("A", "B"), ("B", "A")}
-    assert {p["place_id"] for p in pack["places"]} == {"A", "B"}
+    assert res.status_code == 409
+
+
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_lock_already_succeeded_returns_409(
+    mock_auth_factory, mock_load, mock_lock, client
+):
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "already_succeeded"
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 409
+
+
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_lock_transport_error_returns_504(
+    mock_auth_factory, mock_load, mock_lock, client
+):
+    from src.plans.storage import RpcTransportError
+
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.side_effect = RpcTransportError("lock transport failed")
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 504
+
+
+# ==============================
+# LLM 生成
+# ==============================
+
+
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_llm_generation_error_returns_422(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_mark_failed, client
+):
+    from src.llm.generator import LlmGenerationError
+
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    mock_llm.side_effect = LlmGenerationError(issues=[], attempts=4)
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 422
+    mock_mark_failed.assert_called_once()
+
+
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_llm_transport_error_returns_502(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_mark_failed, client
+):
+    from src.llm.generator import LlmTransportError
+
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    mock_llm.side_effect = LlmTransportError(TimeoutError("t"), attempts=4)
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 502
+    mock_mark_failed.assert_called_once()
+
+
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_llm_refusal_returns_422(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_mark_failed, client
+):
+    from src.llm.generator import LlmRefusalError
+
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    mock_llm.side_effect = LlmRefusalError("safety")
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 422
+    mock_mark_failed.assert_called_once()
+
+
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_llm_deadline_exceeded_returns_504(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_mark_failed, client
+):
+    from src.llm.generator import DeadlineExceededError
+
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    mock_llm.side_effect = DeadlineExceededError("timeout")
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 504
+    mock_mark_failed.assert_called_once()
+
+
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_llm_bad_request_returns_500(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_mark_failed, client
+):
+    """LlmBadRequestError（schema 不整合など、実装バグ）→ 500 + status=failed。"""
+    from src.llm.generator import LlmBadRequestError
+
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    mock_llm.side_effect = LlmBadRequestError(RuntimeError("schema mismatch"))
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 500
+    mock_mark_failed.assert_called_once()
+
+
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_unexpected_exception_after_lock_marks_failed_and_returns_500(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_mark_failed, client
+):
+    """lock 取得後の想定外例外（LLM 例外階層外）も status=failed に倒して stuck 防止。"""
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    # LLM 例外階層でない RuntimeError を raise
+    mock_llm.side_effect = RuntimeError("unexpected bug")
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 500
+    mock_mark_failed.assert_called_once()
+
+
+# ==============================
+# finalize_plan 保存
+# ==============================
+
+
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes.call_finalize_plan")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_finalize_transport_error_returns_504_without_marking_failed(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_finalize,
+    mock_mark_failed, client
+):
+    """RpcTransportError: commit 済か未実行か不明なので mark_failed しない（DB-3 cleanup に委任）。"""
+    from src.plans.storage import RpcTransportError
+
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    mock_llm.return_value = _dummy_llm_plan()
+    mock_finalize.side_effect = RpcTransportError("network blip")
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 504
+    mock_mark_failed.assert_not_called()
+
+
+@patch("src.routes.plan_routes.mark_plan_failed")
+@patch("src.routes.plan_routes.call_finalize_plan")
+@patch("src.routes.plan_routes._generate_plan_llm")
+@patch("src.routes.plan_routes.try_lock_plan_for_generation")
+@patch("src.routes.plan_routes.load_pack")
+@patch("src.auth.get_supabase_client")
+def test_finalize_generic_error_returns_500_and_marks_failed(
+    mock_auth_factory, mock_load, mock_lock, mock_llm, mock_finalize,
+    mock_mark_failed, client
+):
+    """RPC 内で明示的例外 → status を failed にして 500。"""
+    mock_auth_factory.return_value = _mock_auth()
+    mock_load.return_value = _pack(["A", "B"])
+    mock_lock.return_value = "acquired"
+    mock_llm.return_value = _dummy_llm_plan()
+    mock_finalize.side_effect = RuntimeError("owner mismatch")
+
+    res = client.post(
+        "/api/plans/generate",
+        json=_valid_body(),
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 500
+    mock_mark_failed.assert_called_once()
 
 
 # ==============================
@@ -392,15 +690,28 @@ def _places_request_body() -> dict:
     }
 
 
-@pytest.mark.integration
-@pytest.mark.skipif(not _has_full_stack(), reason="full stack env keys not set")
-def test_integration_evidence_to_generate_round_trip(client):
-    """1.3a で取得した evidence_pack_id に対して 1.3c (?debug=1) を叩き、merged pack が返ることを確認。
+def _has_full_stack_with_openai() -> bool:
+    return _has_full_stack() and bool(os.environ.get("OPENAI_API_KEY"))
 
-    transit_matrix はフロント SDK を使わず、1.3a の places から手動で 14km 以内のペアを
-    選んで 2 件組む（skip で距離以外の不具合を隠さないため、見つからない場合は assert fail）。
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not _has_full_stack_with_openai(),
+    reason="full stack env keys (incl. OPENAI_API_KEY) not set",
+)
+def test_integration_end_to_end_plan_generation(client):
+    """/api/evidence/places → plans INSERT → /api/plans/generate でプラン生成完了 → DB に plan_items 保存。
+
+    前提条件:
+      - Supabase Extensions で pg_cron 有効化済
+      - `supabase/migrations/20260424_04_plan_generation_rpcs.sql` を適用済
+      - OPENAI_API_KEY が設定されていて課金可能な状態（1 回の呼び出しは $0.10-0.30）
+
+    transit_matrix はフロント SDK を使わず、1.3a の places から 14km 以内のペアを手動選定。
+    14km 以内のペアが見つからない場合は assert fail（距離以外の不具合を skip で隠さない）。
     """
     from math import asin, cos, radians, sin, sqrt
+    from uuid import uuid4
 
     from supabase import create_client
 
@@ -412,17 +723,44 @@ def test_integration_evidence_to_generate_round_trip(client):
     jwt_token = sign_in.session.access_token
     user_id = sign_in.user.id
 
+    # フロント発行の plan_id
+    plan_id = str(uuid4())
+
     try:
+        # 1. anon client で plans + participants を INSERT（フロント 1.5 の挙動を再現）
+        _ = anon_client.postgrest.auth(jwt_token)  # anon client に JWT を設定
+        req_body = _places_request_body()
+        plan_row_resp = anon_client.from_("plans").insert({
+            "id": plan_id,
+            "session_id": user_id,
+            "title": req_body["title"],
+            "region": req_body["region"],
+            "start_date": req_body["start_date"],
+            "end_date": req_body["end_date"],
+            "departure_point": req_body["departure_point"],
+            "budget_per_person_jpy": req_body["budget_per_person_jpy"],
+            "budget_breakdown": req_body["budget_breakdown"],
+            "start_mode": req_body["start_mode"],
+            "mode_payload": req_body["mode_payload"],
+            "status": "draft",
+        }).execute()
+        assert plan_row_resp.data, "plan INSERT failed"
+        anon_client.from_("participants").insert([
+            {"plan_id": plan_id, **p} for p in req_body["participants"]
+        ]).execute()
+
+        # 2. /api/evidence/places
         res = client.post(
             "/api/evidence/places",
-            json=_places_request_body(),
+            json=req_body,
             headers={"Authorization": f"Bearer {jwt_token}"},
         )
         assert res.status_code == 200, res.get_data(as_text=True)
         places_body = res.get_json()
-        pack_id = places_body["evidence_pack_id"]
+        evidence_pack_id = places_body["evidence_pack_id"]
         assert len(places_body["places"]) >= 2
 
+        # 3. 14km 以内のペアを能動選定
         def _km(p: dict, q: dict) -> float:
             R = 6371.0
             dlat = radians(q["lat"] - p["lat"])
@@ -438,41 +776,164 @@ def test_integration_evidence_to_generate_round_trip(client):
         chosen_pair = None
         for i, p in enumerate(places_body["places"]):
             for q in places_body["places"][i + 1 :]:
-                if _km(p, q) <= 14.0:  # 15km 上限の内側にマージン
+                if _km(p, q) <= 14.0:
                     chosen_pair = (p, q)
                     break
             if chosen_pair:
                 break
         assert chosen_pair is not None, (
-            "Integration test requires at least one pair within 14km in 箱根 area; "
-            "Places search returned only distant spots."
+            "Integration test requires at least one pair within 14km in 箱根 area"
         )
         a = chosen_pair[0]["place_id"]
         b = chosen_pair[1]["place_id"]
 
+        # 4. /api/plans/generate（実 OpenAI 呼び出し）
         body = {
-            "evidence_pack_id": pack_id,
+            "plan_id": plan_id,
+            "evidence_pack_id": evidence_pack_id,
             "transit_matrix": [_edge(a, b), _edge(b, a)],
         }
         res2 = client.post(
-            "/api/plans/generate?debug=1",
+            "/api/plans/generate",
             json=body,
             headers={"Authorization": f"Bearer {jwt_token}"},
         )
         assert res2.status_code == 200, res2.get_data(as_text=True)
         payload = res2.get_json()
-        assert payload["plan_id"] is None
-        assert len(payload["evidence_pack"]["transit_matrix"]) == 2
-        keys = {
-            (e["from_place_id"], e["to_place_id"])
-            for e in payload["evidence_pack"]["transit_matrix"]
-        }
-        assert keys == {(a, b), (b, a)}
+        assert payload["plan_id"] == plan_id
+
+        # 5. plan_items が保存されていること
+        items_resp = anon_client.from_("plan_items").select("*").eq("plan_id", plan_id).execute()
+        assert len(items_resp.data) > 0, "plan_items must be inserted after successful generation"
+
+        # 6. plans.status が 'succeeded' に遷移
+        plan_after = anon_client.from_("plans").select("status").eq("id", plan_id).single().execute()
+        assert plan_after.data["status"] == "succeeded"
     finally:
         from src.supabase_client import get_supabase_client
 
         admin_client = get_supabase_client()
         try:
             admin_client.auth.admin.delete_user(user_id)
+        except Exception:
+            pass
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _has_full_stack(), reason="full stack env keys not set")
+def test_integration_lock_conflict_returns_409(client):
+    """既に status='generating' の plan に対して再 generate すると 409（OpenAI 不要、
+    lock 経路のみを live Supabase で確認）。"""
+    from uuid import uuid4
+    from supabase import create_client
+
+    anon_client = create_client(
+        os.environ["NEXT_PUBLIC_SUPABASE_URL"],
+        os.environ["NEXT_PUBLIC_SUPABASE_ANON_KEY"],
+    )
+    sign_in = anon_client.auth.sign_in_anonymously()
+    jwt_token = sign_in.session.access_token
+    user_id = sign_in.user.id
+    anon_client.postgrest.auth(jwt_token)
+
+    plan_id = str(uuid4())
+    try:
+        # 事前に plan を status='generating' で INSERT
+        req_body = _places_request_body()
+        anon_client.from_("plans").insert({
+            "id": plan_id,
+            "session_id": user_id,
+            "title": req_body["title"],
+            "region": req_body["region"],
+            "start_date": req_body["start_date"],
+            "end_date": req_body["end_date"],
+            "departure_point": req_body["departure_point"],
+            "budget_per_person_jpy": req_body["budget_per_person_jpy"],
+            "budget_breakdown": req_body["budget_breakdown"],
+            "start_mode": req_body["start_mode"],
+            "mode_payload": req_body["mode_payload"],
+            "status": "generating",
+        }).execute()
+
+        # /api/evidence/places でキャッシュ作成
+        res = client.post(
+            "/api/evidence/places",
+            json=req_body,
+            headers={"Authorization": f"Bearer {jwt_token}"},
+        )
+        assert res.status_code == 200
+        evidence_pack_id = res.get_json()["evidence_pack_id"]
+
+        # generate → lock already_generating で 409
+        res2 = client.post(
+            "/api/plans/generate",
+            json={
+                "plan_id": plan_id,
+                "evidence_pack_id": evidence_pack_id,
+                "transit_matrix": [],
+            },
+            headers={"Authorization": f"Bearer {jwt_token}"},
+        )
+        assert res2.status_code == 409, res2.get_data(as_text=True)
+    finally:
+        from src.supabase_client import get_supabase_client
+
+        try:
+            get_supabase_client().auth.admin.delete_user(user_id)
+        except Exception:
+            pass
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _has_full_stack(), reason="full stack env keys not set")
+def test_integration_invalid_transit_returns_400(client):
+    """transit_matrix に pack 外の place_id → validator が 400、LLM 呼ばれない（OpenAI 不要）。"""
+    from uuid import uuid4
+    from supabase import create_client
+
+    anon_client = create_client(
+        os.environ["NEXT_PUBLIC_SUPABASE_URL"],
+        os.environ["NEXT_PUBLIC_SUPABASE_ANON_KEY"],
+    )
+    sign_in = anon_client.auth.sign_in_anonymously()
+    jwt_token = sign_in.session.access_token
+    user_id = sign_in.user.id
+
+    plan_id = str(uuid4())
+    try:
+        res = client.post(
+            "/api/evidence/places",
+            json=_places_request_body(),
+            headers={"Authorization": f"Bearer {jwt_token}"},
+        )
+        assert res.status_code == 200
+        evidence_pack_id = res.get_json()["evidence_pack_id"]
+
+        # transit_matrix に pack に無い place_id を仕込む
+        res2 = client.post(
+            "/api/plans/generate",
+            json={
+                "plan_id": plan_id,
+                "evidence_pack_id": evidence_pack_id,
+                "transit_matrix": [
+                    {
+                        "from_place_id": "NOT_IN_PACK",
+                        "to_place_id": "ALSO_NOT_IN_PACK",
+                        "mode": "train",
+                        "route_summary": "JR",
+                        "duration_min": 30,
+                        "fare_jpy": 500,
+                        "candidate_departures": ["09:00"],
+                    }
+                ],
+            },
+            headers={"Authorization": f"Bearer {jwt_token}"},
+        )
+        assert res2.status_code == 400, res2.get_data(as_text=True)
+    finally:
+        from src.supabase_client import get_supabase_client
+
+        try:
+            get_supabase_client().auth.admin.delete_user(user_id)
         except Exception:
             pass
