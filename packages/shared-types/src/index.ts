@@ -16,6 +16,7 @@ export type StartMode = "auto" | "anchor" | "theme";
 export type ItemType = "activity" | "meal" | "transit" | "lodging";
 export type CostConfidence = "verified" | "estimated" | "unknown";
 export type TransitMode = "train" | "bus" | "walk" | "car";
+export type PlanStatus = "draft" | "generating" | "succeeded" | "failed";
 
 // ==============================
 // 構造体（entities）
@@ -40,6 +41,7 @@ export type Plan = {
   budget_breakdown: BudgetBreakdown;
   start_mode: StartMode;
   mode_payload: Record<string, unknown> | null;
+  status: PlanStatus;
   share_token: string | null;
   created_at: string; // ISO datetime
   updated_at: string;
@@ -158,11 +160,14 @@ export type ClientTransitEdge = {
   candidate_departures: string[]; // HH:mm 形式、1〜10 要素
 };
 
-// POST /api/plans/generate リクエスト（Phase 1.3c で実型化）。
+// POST /api/plans/generate リクエスト（Phase 1.3c で実型化、1.3c+ で plan_id 追加）。
+// plan_id はフロント（/plan/new submit 時）が crypto.randomUUID() で発行、
+// 同時に plans テーブルに INSERT 済みの UUID。1.3d で owner 検証と plan_items 保存に使う。
 // evidence_pack_id はサーバー短期キャッシュ (evidence_pack_sessions.id) の UUID。
 // transit_matrix の要素制約は ClientTransitEdge（Phase 1.3b）。サーバー側は
 // 件数最大 200、距離 15km 以内、place_id 所属、矛盾重複禁止で検証する。
 export type PlanGenerationPayload = {
+  plan_id: string;
   evidence_pack_id: string;
   transit_matrix: ClientTransitEdge[];
 };

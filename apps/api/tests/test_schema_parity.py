@@ -44,6 +44,7 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
         "budget_breakdown",
         "start_mode",
         "mode_payload",
+        "status",
         "share_token",
         "created_at",
         "updated_at",
@@ -124,7 +125,7 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
         "fare_jpy",
         "candidate_departures",
     },
-    "PlanGenerationPayload": {"evidence_pack_id", "transit_matrix"},
+    "PlanGenerationPayload": {"plan_id", "evidence_pack_id", "transit_matrix"},
 }
 
 _MODELS = {
