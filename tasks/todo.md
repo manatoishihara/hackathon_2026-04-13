@@ -5,6 +5,24 @@
 
 ---
 
+## 🏁 進捗サマリ（2026-04-24 更新）
+
+**Phase 0**: ✅ 完了
+**Phase 1.1〜1.3d**: ✅ 完了（バック: データモデル、Evidence Pack Builder、Transit Validator、LLM 生成 + ハルシネーション検出 + plan_items 保存、RLS E2E、pg_cron）
+**Phase 1.4〜1.9 骨組み**: ✅ 完了（フロントの配線層、デザイナーへ引き渡し済み）
+
+**次にやるべきタスク（ブロッカーなし、並列可能）:**
+- [ ] **Manato 次タスク候補**:
+  - (A) Phase 1.3d 残検証: rate limit リセット後 `pytest -m integration` で RLS 8 件 + /api/plans/generate integration 3 件を完走させる
+  - (B) Phase 1.3d 残検証: 10 回生成して架空スポット出力率 0%（ハルシネーション対策の効果測定、コスト $1-3）
+  - (C) Phase 1.10 デプロイ準備（Vercel + Render）
+- [ ] **メンバー B**: DB-1 migrations ディレクトリ化 / DB-4〜6 共有 API / DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
+- [ ] **メンバー C**: 1.4〜1.9 の見た目仕上げ（@tasks/handoff-frontend.md）
+
+詳細は下の各セクション参照。
+
+---
+
 ## Phase 0 / プロジェクト基盤
 
 ### 0.1 モノレポ初期化
@@ -94,13 +112,35 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [x] Integration テスト: `/api/evidence/places` → `/api/plans/generate?debug=1` のラウンドトリップ（live Supabase、14km 以内ペア能動選定）
 - [x] 検証: pnpm --filter api test 135 件 PASS（unit）、integration 1 件 PASS（箱根 live Places + Supabase）
 
-#### 1.3d: LLM プロンプト / 生成 / ハルシネーション検出
-- [ ] `apps/api/src/llm/prompt.py` に system prompt と user prompt builder（`docs/evidence-pack.md` の仕様通り）
-- [ ] `apps/api/src/llm/generator.py` で OpenAI 呼び出し + JSON Schema 検証（structured output）
-- [ ] `apps/api/src/llm/validator.py` で LLM 出力の place_id 実在 / 時刻 / opening_hours / 予算 / 時系列を検証
-- [ ] 失敗時のリトライ（最大 2 回、指数バックオフ）、`gpt-4o` → `gpt-4o-mini` フォールバック
-- [ ] `/api/plans/generate` の最終応答を `{ plan_id }` に戻し、plan_items を Supabase に保存
-- [ ] 検証: 10 回生成して架空スポット出力率 0%（ハルシネーション対策の効果測定）
+#### 1.3d: LLM プロンプト / 生成 / ハルシネーション検出 ✅ 完了（develop: Branch 0/A/B/C/D 全マージ済み）
+
+詳細計画は @tasks/plans/2026-04-24-llm-plan-generation.md（v3、Codex GO 済）。5 ブランチに分割して実装、各ブランチで Codex GO 取得。
+
+**Branch 0** `feat/opening-hours-normalization` ✅
+- [x] `OpeningHoursSlot` 追加、PlacePoint.opening_hours を構造化、日本語 weekdayDescriptions パーサ
+
+**Branch A** `feat/llm-prompt-and-validator` ✅
+- [x] `apps/api/src/llm/prompt.py` に system prompt（v1.0.0）と user prompt builder
+- [x] `apps/api/src/llm/schema.py` LlmGeneratedPlan / LlmPlanItem / LlmTransitRef（OpenAI strict 対応）
+- [x] `apps/api/src/llm/validator.py` で LLM 出力検証 13 項目（place_id / 時刻 / opening_hours / transit 整合 / 予算 / 時系列 / tz）
+
+**Branch B** `feat/llm-generator-atomic` ✅
+- [x] `apps/api/src/llm/generator.py` OpenAI Structured Output + retry×3 + gpt-4o-mini fallback、deadline 150s clamp
+- [x] `supabase/migrations/20260424_04_plan_generation_rpcs.sql`: acquire_plan_generation_lock / mark_plan_failed / finalize_plan（compare-and-set + SELECT FOR UPDATE）
+- [x] `apps/api/src/plans/storage.py` 3 RPC ラッパ（httpx 例外を RpcTransportError に wrap）
+
+**Branch C** `feat/plans-generate-route` ✅
+- [x] `/api/plans/generate` 最終配線: lock → LLM → finalize_plan RPC
+- [x] debug mode `?debug=1` 廃止、最終応答を `{ plan_id: <UUID> }` に
+- [x] 失敗分類: 422（ハルシネーション/refuse）/ 502（OpenAI transport）/ 504（deadline / finalize RPC transport）/ 500（bad_request / 想定外例外で stuck 防止の保険）
+- [x] `_serialize_plan_item` が pack.places から place_name/lat/lng/address を埋める（1.7 MapView 対応）
+- [x] `docs/setup-guide.md` 追記: pg_cron 有効化手順 / RPC 適用手順 / Render HTTP timeout 180s / PROMPT_VERSION
+
+**Branch D** `feat/db-integrity-sweep` ✅
+- [x] DB-2: RLS E2E integration テスト（`apps/api/tests/test_rls.py`、他セッション遮断 / service_role バイパス / evidence_pack_sessions 完全遮断）
+- [x] DB-3: pg_cron クリーンアップ（`supabase/migrations/20260424_03_cleanup_cron.sql`、evidence_pack_sessions / stuck generating / abandoned draft+failed、succeeded は保全）
+
+**検証**: `pytest -m "not integration"` 234 件 PASS。integration は rate limit リセット後に `pytest -m integration` で再確認推奨。
 
 ### 1.4〜1.9: **フロント骨組み + デザイン引き渡し**（並列 3 トラック運用）
 
@@ -155,9 +195,9 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 
 詳細は @tasks/handoff-db.md 参照。2026-04-24 整理で **Manato（1.3d と合流）** と **メンバー B（独立）** に分業。
 
-#### Manato 担当（1.3d と合流して対応）
-- [ ] DB-2: RLS の E2E テスト（`apps/api/tests/test_rls.py`、他セッションからのアクセス遮断検証）— 1.3d で plan_items 書き込みを始める前に必須
-- [ ] DB-3: 定期クリーンアップ（pg_cron）: (a) `evidence_pack_sessions` の期限切れ、(b) `plans WHERE status='generating' AND updated_at < now() - INTERVAL '1 hour'`（stuck 中断対策）、(c) `plans WHERE status IN ('draft','failed') AND created_at < now() - INTERVAL '24 hours'`。`succeeded` は保全
+#### Manato 担当（1.3d と合流して対応） ✅ 完了（Branch D で実装済み）
+- [x] DB-2: RLS の E2E テスト（`apps/api/tests/test_rls.py`、他セッションからのアクセス遮断検証）
+- [x] DB-3: 定期クリーンアップ（pg_cron）: (a) `evidence_pack_sessions` の期限切れ、(b) `plans WHERE status='generating' AND updated_at < now() - INTERVAL '1 hour'`、(c) `plans WHERE status IN ('draft','failed') AND created_at < now() - INTERVAL '24 hours'`。`succeeded` は保全
 
 #### メンバー B 担当（1.3d と完全独立、並行可）
 - [ ] DB-1: `supabase/migrations/` ディレクトリ化（DDL 分割 + 連番管理）
