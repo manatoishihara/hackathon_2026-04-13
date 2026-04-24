@@ -102,12 +102,73 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] `/api/plans/generate` の最終応答を `{ plan_id }` に戻し、plan_items を Supabase に保存
 - [ ] 検証: 10 回生成して架空スポット出力率 0%（ハルシネーション対策の効果測定）
 
-### 1.4 ランディングページ (01)
+### 1.4〜1.9: **フロント骨組み + デザイン引き渡し**（並列 3 トラック運用）
+
+1.3c マージ後、Manato/Claude がフロントの「骨組み」を `feat/frontend-skeleton` で一括実装し、
+その後デザイナー（メンバー C）に「見た目」をお任せする運用に切替。
+詳細計画は @tasks/plans/2026-04-21-frontend-skeleton.md、
+引き継ぎ資料は @tasks/handoff-frontend.md 参照。
+
+#### 1.4〜1.9 骨組み（Claude/Manato 担当、6 ブランチに分割して実装）
+
+**Branch 0** `feat/plan-generation-plan-id`（**1.3c マージ後**）
+- [ ] Task 0: `PlanGenerationPayload` に `plan_id` 追加 + `plans.status` カラム追加（3 点同期、DDL 追記）
+
+**Branch 1** `feat/frontend-foundation`（Branch 0 と並列可）
+- [ ] Task 1: 依存パッケージ導入（shadcn/ui、React Query + Devtools、Zustand、react-hook-form、zod、Phosphor Icons、Mapbox、react-qr-code、Framer Motion）+ Providers 配線
+- [ ] Task 2: API クライアント (`lib/api.ts`) + `generationSessionStore` + zod スキーマ + モック fixtures（`queryFn` 分岐で `initialData` 不使用）
+- [ ] Task 3: 共通コンポーネント骨組み（EvidenceBadge / PlanTimeline / PlanItem / BudgetSummary / BudgetBreakdownSlider / ParticipantTabs / ParticipantForm）
+
+**Branch 2** `feat/frontend-core-flow`（**Branch 0 + 1 マージ後**）
+- [ ] Task 4: 1.4 ランディングページ骨組み（CTA + 3 軸カード）
+- [ ] Task 5: 1.5 希望入力画面骨組み（フォーム配線 + plan_id 発行 + plans INSERT + `/api/evidence/places` + Zustand stash）
+- [ ] Task 6: 1.6 プラン生成中画面骨組み（Zustand 取得 + transit 取得 + `/api/plans/generate` kick）
+
+**Branch 3** `feat/frontend-plan-view`（**Branch 2 マージ後**）
+- [ ] Task 7: 1.7 プラン閲覧画面骨組み（3 カラム: タイムライン / 予算 / マップ、`USE_MOCKS` 分岐は `lib/api.ts` 内）
+
+**Branch 4** `feat/frontend-extra-pages`（**Branch 3 マージ後**）
+- [ ] Task 8: 1.8 地図ビュー骨組み（Mapbox 初期化 + マーカー + 1.7 への差し込み）
+- [ ] Task 9: 1.9 プラン共有画面骨組み（QR + 共有 URL、API 未接続で 1.9 本実装待ち）
+
+**Branch 5** `feat/frontend-handoff`（全 Branch マージ後）
+- [ ] Task 10: ハンドオフ資料 + todo.md + architecture.md 最終化
+- [ ] 検証: `pnpm --filter web test` 全 PASS、`NEXT_PUBLIC_USE_MOCKS=1 pnpm dev` で全ページ描画確認
+
+#### 1.4〜1.9 デザイン着地（メンバー C 担当、骨組みマージ後）
+- [ ] 1.4 ランディングページの見た目仕上げ（ヒーロー / CTA / 3 軸カード、AI 感のない表現）
+- [ ] 1.5 希望入力画面の見た目仕上げ（参加者タブ、予算スライダー、日本語 15 文字以上で崩れない）
+- [ ] 1.6 プラン生成中画面のアニメーション実装（5 ステップのプログレス、Framer Motion）
+- [ ] 1.7 プラン閲覧画面の見た目仕上げ（タイムラインを主役に、予算サマリ / マップは脇役）
+- [ ] 1.8 地図ビューの見た目仕上げ（マーカークリック → PlanItem スクロール、ミニタイムラインストリップ）
+- [ ] 1.9 プラン共有画面の見た目仕上げ（QR + 共有 URL、印刷可能なレイアウト）
+- [ ] UI 耐久性チェック: 長文スポット名 / 0 件 / ローディング / エラー / 参加者数 2〜5 で全画面崩れないこと
+- [ ] Design Tokens の最終調整（`globals.css` + `.claude/rules/frontend-design.md` 更新）
+
+#### 1.9 共有 API 実装（メンバー B 担当、@tasks/handoff-db.md の DB-4/5/6）
+- [ ] `POST /api/plans/:id/share`（share_token 生成）
+- [ ] `GET /api/plans/shared/:token`（read-only、RLS バイパス経路）
+- [ ] 共有用 RLS ポリシー監査
+- [ ] 型 `ShareResponse` を shared-types/Pydantic に追加（Manato と調整）
+
+### 1.x: **DB 整理タスク**（メンバー B 担当、1.3d と並行可、詳細は @tasks/handoff-db.md）
+- [ ] DB-1: `supabase/migrations/` ディレクトリ化（DDL 分割 + 連番管理）
+- [ ] DB-2: RLS の E2E テスト（`apps/api/tests/test_rls.py`、他セッションからのアクセス遮断検証）
+- [ ] DB-3: 定期クリーンアップ（pg_cron）: (a) `evidence_pack_sessions` の期限切れ、(b) `plans WHERE status='generating' AND updated_at < now() - INTERVAL '1 hour'`（stuck 中断対策）、(c) `plans WHERE status IN ('draft','failed') AND created_at < now() - INTERVAL '24 hours'`。`succeeded` は保全
+- [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備）
+
+<details>
+<summary>（旧）1.4 ランディングページ (01) — 骨組みタスクへ吸収済み</summary>
+
 - [ ] テスト: ヒーロー、3軸カード、CTA が描画される
 - [ ] 実装: `apps/web/src/app/page.tsx`
 - [ ] UI 耐久性: 画面の主役が「旅を計画する」CTA になっている
 - [ ] UI 耐久性: 長文テキスト（説明文 60文字以上）で崩れない
 - [ ] 検証: 手動動作確認（必要に応じて Codex レビューを依頼）
+</details>
+
+<details>
+<summary>（旧）1.5〜1.7 希望入力画面 / プラン生成中 / プラン閲覧 — 骨組みタスクへ吸収済み</summary>
 
 ### 1.5 希望入力画面 (04)
 - [ ] テスト: 参加者を 2〜5 人で追加・削除できる
@@ -117,7 +178,6 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] 実装: Zustand で希望入力ステートを管理
 - [ ] UI 耐久性: 参加者名が日本語 15文字以上でも崩れない
 - [ ] UI 耐久性: タブの人数が 5 人になっても横スクロールなしで収まる
-- [ ] 検証: 手動動作確認（必要に応じて Codex レビューを依頼）
 
 ### 1.6 プラン生成中画面 (05)
 - [ ] テスト: 5 ステップの状態変化がアニメーションする
@@ -125,7 +185,6 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] 実装: バックからの SSE（Server-Sent Events）で進行状況を受信
 - [ ] 実装: エラー時の復帰導線（「もう一度試す」ボタン）
 - [ ] UI 耐久性: 生成に 60 秒以上かかってもタイムアウトしない（バック側の許容時間を確認）
-- [ ] 検証: 手動動作確認（必要に応じて Codex レビューを依頼）
 
 ### 1.7 プラン閲覧画面 (06)
 - [ ] テスト: タイムライン、予算サマリ、ミニマップの3カラムが描画
@@ -136,7 +195,6 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] UI 耐久性: 長文スポット名（30文字超）で崩れない
 - [ ] UI 耐久性: PlanItem が0件（空状態）でも画面が成立
 - [ ] UI 耐久性: ローディング状態・エラー状態を定義
-- [ ] 検証: 手動動作確認（必要に応じて Codex レビューを依頼）
 
 ### 1.8 地図ビュー (07)
 - [ ] テスト: Mapbox 地図が描画、全スポットのマーカーが配置
@@ -146,7 +204,6 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] 実装: 下部にミニタイムラインストリップ（横スクロール）
 - [ ] UI 耐久性: スポット数 0 でも地図が成立
 - [ ] UI 耐久性: Mapbox トークン未設定時に適切なエラーメッセージ
-- [ ] 検証: 手動動作確認（必要に応じて Codex レビューを依頼）
 
 ### 1.9 プラン共有 (08)
 - [ ] テスト: 共有 URL でプランが読み取り専用表示される
@@ -155,6 +212,8 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] 実装: `react-qr-code` で QR 表示
 - [ ] 実装: PDF 生成はバック側で ReportLab or WeasyPrint
 - [ ] 検証: URL 共有 → 別端末で閲覧可能
+
+</details>
 
 ### 1.10 デプロイと初回公開
 - [ ] フロント: Vercel に `apps/web` をデプロイ（環境変数設定）
