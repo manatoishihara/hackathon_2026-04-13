@@ -11,6 +11,7 @@ from typing import Any
 
 import requests
 
+from .opening_hours import parse_weekday_descriptions
 from .pack import PlacePoint
 
 PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
@@ -96,6 +97,9 @@ def _to_place_point(raw: dict[str, Any]) -> PlacePoint:
     opening = raw.get("regularOpeningHours") or {}
     price_level_str = raw.get("priceLevel")
 
+    weekday_descriptions = list(opening.get("weekdayDescriptions", []))
+    parsed_hours = parse_weekday_descriptions(weekday_descriptions)
+
     return PlacePoint(
         place_id=raw["id"],
         name=display_name.get("text", ""),
@@ -103,7 +107,8 @@ def _to_place_point(raw: dict[str, Any]) -> PlacePoint:
         lat=float(location.get("latitude", 0.0)),
         lng=float(location.get("longitude", 0.0)),
         address=raw.get("formattedAddress", ""),
-        opening_hours=list(opening.get("weekdayDescriptions", [])),
+        opening_hours=parsed_hours.slots,
+        opening_hours_unknown_days=parsed_hours.unknown_days,
         price_level=_PRICE_LEVEL_MAP.get(price_level_str) if price_level_str else None,
         rating=raw.get("rating"),
         user_ratings_total=raw.get("userRatingCount"),
