@@ -6,6 +6,7 @@ import { Calendar, MapPin, Users, Wallet } from "@phosphor-icons/react/dist/ssr"
 
 import { getParticipants, getPlan, getPlanItems } from "@/lib/api";
 import { BudgetSummary } from "@/components/BudgetSummary";
+import { MapView } from "@/components/MapView";
 import { PlanTimeline } from "@/components/PlanTimeline";
 import { LoadingState } from "@/components/ui/states/LoadingState";
 import { ErrorState } from "@/components/ui/states/ErrorState";
@@ -106,7 +107,7 @@ export default function PlanPage() {
             <PlanTimeline items={items} />
           </TabsContent>
           <TabsContent value="map" className="m-0">
-            <MapViewPlaceholder />
+            <MapView items={items} />
           </TabsContent>
           <TabsContent value="budget" className="m-0 lg:hidden">
             <BudgetSummary plan={plan} items={items} />
@@ -188,10 +189,3 @@ function ParticipantList({
   );
 }
 
-function MapViewPlaceholder() {
-  return (
-    <div className="flex min-h-[480px] items-center justify-center rounded-lg border border-dashed border-[color:var(--color-border)] bg-[color:var(--color-surface)]/50 text-sm text-[color:var(--color-text-tertiary)]">
-      マップビューは Phase 1.8（Branch 4）で差し込まれます。
-    </div>
-  );
-}

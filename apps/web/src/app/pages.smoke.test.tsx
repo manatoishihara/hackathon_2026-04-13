@@ -13,6 +13,7 @@ import Home from "./page";
 import NewPlanPage from "./plan/new/page";
 import GeneratingPage from "./plan/[id]/generating/page";
 import PlanPage from "./plan/[id]/page";
+import SharePage from "./plan/[id]/share/page";
 import { mockPlan } from "@/lib/mocks/plan";
 import { mockPlanItems } from "@/lib/mocks/planItems";
 import { mockParticipants } from "@/lib/mocks/participants";
@@ -86,5 +87,15 @@ describe("PlanPage (1.7)", () => {
     expect(screen.getByRole("tab", { name: /タイムライン/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /マップ/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /予算/ })).toBeInTheDocument();
+  });
+});
+
+describe("SharePage (1.9)", () => {
+  it("share_token が null なら「共有を有効化（準備中）」ボタンを出す", async () => {
+    renderWithQuery(<SharePage />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /共有を有効化/ })).toBeInTheDocument();
+    });
+    expect(screen.getByText(/まだ共有されていません/)).toBeInTheDocument();
   });
 });
