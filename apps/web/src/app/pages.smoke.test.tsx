@@ -4,12 +4,18 @@
  * ルーティング / API / Supabase は全てモックして、純粋に JSX が壊れないことだけ見る。
  * 機能テストはコンポーネント単位（EvidenceBadge.test.tsx 等）でカバーする方針。
  */
-import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 
 import Home from "./page";
 import NewPlanPage from "./plan/new/page";
 import GeneratingPage from "./plan/[id]/generating/page";
+import PlanPage from "./plan/[id]/page";
+import { mockPlan } from "@/lib/mocks/plan";
+import { mockPlanItems } from "@/lib/mocks/planItems";
+import { mockParticipants } from "@/lib/mocks/participants";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -28,11 +34,21 @@ vi.mock("@/lib/api", () => ({
   postPlanGenerate: vi.fn(),
   createPlanAndParticipants: vi.fn(),
   updatePlanStatus: vi.fn(),
+  getPlan: vi.fn(async () => mockPlan),
+  getPlanItems: vi.fn(async () => mockPlanItems),
+  getParticipants: vi.fn(async () => mockParticipants),
 }));
 
 vi.mock("@/lib/transit", () => ({
   fetchTransitMatrix: vi.fn(async () => ({ edges: [], stats: {} })),
 }));
+
+function renderWithQuery(node: ReactNode) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
+}
 
 describe("Home (landing)", () => {
   it("crash せず描画、CTA「旅を計画する」を含む", () => {
@@ -56,5 +72,19 @@ describe("GeneratingPage (1.6)", () => {
     expect(
       screen.getByRole("heading", { name: /プランを組み立てています|プラン生成に失敗/ }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("PlanPage (1.7)", () => {
+  it("モック plan / items / participants で描画、タイトルが表示される", async () => {
+    renderWithQuery(<PlanPage />);
+    // useQuery で非同期取得 → データが入ったらタイトルが出る
+    await waitFor(() => {
+      expect(screen.getByText(mockPlan.title)).toBeInTheDocument();
+    });
+    // タブが 3 つ（タイムライン / マップ / 予算）
+    expect(screen.getByRole("tab", { name: /タイムライン/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /マップ/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /予算/ })).toBeInTheDocument();
   });
 });
