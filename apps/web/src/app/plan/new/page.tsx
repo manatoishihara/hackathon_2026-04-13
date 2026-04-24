@@ -1,0 +1,311 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { useForm, Controller } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { ArrowRight, Spinner } from "@phosphor-icons/react/dist/ssr";
+
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  createPlanAndParticipants,
+  postEvidencePlaces,
+  updatePlanStatus,
+} from "@/lib/api";
+import { planFormSchema, type PlanFormValues } from "@/lib/schemas/planForm";
+import { ensureAnonymousSession, getCurrentUserId } from "@/lib/supabase";
+import { BudgetBreakdownSlider } from "@/components/BudgetBreakdownSlider";
+import { ParticipantTabs } from "@/components/ParticipantTabs";
+import { useGenerationSessionStore } from "@/stores/generationSessionStore";
+
+const PARTICIPANT_COLORS = ["#d97757", "#2c5f5d", "#3a7d44", "#e8a951", "#9b6fa8"];
+
+const DEFAULT_VALUES: PlanFormValues = {
+  title: "",
+  region: "",
+  start_date: "",
+  end_date: "",
+  departure_point: "",
+  budget_per_person_jpy: 30000,
+  budget_breakdown: { lodging: 40, meal: 30, activity: 20, transit: 10 },
+  start_mode: "auto",
+  mode_payload: null,
+  participants: [
+    {
+      display_name: "",
+      avatar_color: PARTICIPANT_COLORS[0],
+      wishes_text: "",
+      tags: [],
+      order_index: 0,
+    },
+    {
+      display_name: "",
+      avatar_color: PARTICIPANT_COLORS[1],
+      wishes_text: "",
+      tags: [],
+      order_index: 1,
+    },
+  ],
+};
+
+/**
+ * 1.5 希望入力画面 (04)。
+ *
+ * submit 時の流れ（計画書 v3「生成フロー契約」と 1 対 1 対応）:
+ *   1. 匿名サインイン → user.id を plan.session_id として使う
+ *   2. crypto.randomUUID() で plan_id 発行
+ *   3. plans + participants を INSERT（plan.status = 'draft'）
+ *   4. /api/evidence/places 呼び出し
+ *      - 成功時: plans.status = 'generating' に更新（fire-and-forget）
+ *      - 失敗時: plans.status = 'failed' に更新、エラー表示
+ *   5. generationSessionStore にセッションを stash
+ *   6. /plan/<plan_id>/generating に遷移
+ *
+ * デザイナーは className / 余白 / 入力 UX の調整をしてよい。
+ * ロジック（submit 手順・API 呼び出し順）は触らない。
+ */
+export default function NewPlanPage() {
+  const router = useRouter();
+  const setSession = useGenerationSessionStore((s) => s.setSession);
+  const [activeParticipantIndex, setActiveParticipantIndex] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const form = useForm<PlanFormValues>({
+    resolver: zodResolver(planFormSchema),
+    defaultValues: DEFAULT_VALUES,
+  });
+  const { control, register, handleSubmit, watch, setValue, formState } = form;
+  const participants = watch("participants");
+  const isSubmitting = formState.isSubmitting;
+
+  const handleAddParticipant = () => {
+    if (participants.length >= 5) return;
+    const nextIndex = participants.length;
+    const color = PARTICIPANT_COLORS[nextIndex % PARTICIPANT_COLORS.length];
+    setValue("participants", [
+      ...participants,
+      {
+        display_name: "",
+        avatar_color: color,
+        wishes_text: "",
+        tags: [],
+        order_index: nextIndex,
+      },
+    ]);
+    setActiveParticipantIndex(nextIndex);
+  };
+
+  const handleRemoveParticipant = (index: number) => {
+    if (participants.length <= 2) return;
+    const next = participants
+      .filter((_, i) => i !== index)
+      .map((p, i) => ({ ...p, order_index: i }));
+    setValue("participants", next);
+    setActiveParticipantIndex(Math.min(activeParticipantIndex, next.length - 1));
+  };
+
+  const onSubmit = async (values: PlanFormValues) => {
+    setSubmitError(null);
+    let planId: string | null = null;
+    try {
+      // 1. 匿名サインイン（session_id を確定）
+      await ensureAnonymousSession();
+      const sessionId = await getCurrentUserId();
+      if (!sessionId) {
+        throw new Error("Supabase セッションの取得に失敗しました。");
+      }
+
+      // 2. plan_id 発行
+      planId = crypto.randomUUID();
+
+      // 3. plans + participants を INSERT
+      await createPlanAndParticipants({
+        planId,
+        sessionId,
+        form: values,
+      });
+
+      // 4. /api/evidence/places
+      const evidenceResponse = await postEvidencePlaces(values);
+
+      // 成功: status を generating に（fire-and-forget、失敗しても UI ブロックしない）
+      void updatePlanStatus(planId, "generating").catch(() => {});
+
+      // 5. Zustand stash
+      setSession({
+        plan_id: planId,
+        evidence_pack_id: evidenceResponse.evidence_pack_id,
+        places: evidenceResponse.places,
+        createdAt: Date.now(),
+      });
+
+      // 6. 遷移
+      router.push(`/plan/${planId}/generating`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "プラン生成の開始に失敗しました。";
+      setSubmitError(message);
+      if (planId) {
+        void updatePlanStatus(planId, "failed").catch(() => {});
+      }
+    }
+  };
+
+  return (
+    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-12">
+      <header className="flex flex-col gap-2">
+        <p className="text-sm font-medium tracking-widest text-[color:var(--color-primary)]">
+          STEP 1 / 2
+        </p>
+        <h1 className="text-2xl font-bold text-[color:var(--color-text-primary)] sm:text-3xl">
+          どこへ、誰と、どんな旅にしますか？
+        </h1>
+        <p className="text-sm text-[color:var(--color-text-secondary)]">
+          参加者 2〜5 人の希望と予算配分を入力してください。LLM がその場で合意案を組み立てます。
+        </p>
+      </header>
+
+      <form className="flex flex-col gap-8" onSubmit={handleSubmit(onSubmit)}>
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-2 sm:col-span-2">
+            <Label htmlFor="title">プランのタイトル</Label>
+            <Input
+              id="title"
+              placeholder="箱根で温泉と自然を満喫する 2 日間"
+              maxLength={60}
+              {...register("title")}
+            />
+            {formState.errors.title ? (
+              <p className="text-xs text-[color:var(--color-danger)]">
+                {formState.errors.title.message}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="region">行き先エリア</Label>
+            <Input
+              id="region"
+              placeholder="箱根"
+              {...register("region")}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="departure_point">出発地</Label>
+            <Input
+              id="departure_point"
+              placeholder="新宿駅"
+              {...register("departure_point")}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="start_date">開始日</Label>
+            <Input id="start_date" type="date" {...register("start_date")} />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="end_date">終了日</Label>
+            <Input id="end_date" type="date" {...register("end_date")} />
+            {formState.errors.end_date ? (
+              <p className="text-xs text-[color:var(--color-danger)]">
+                {formState.errors.end_date.message}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-2 sm:col-span-2">
+            <Label htmlFor="budget_per_person_jpy">1 人あたり予算（円）</Label>
+            <Input
+              id="budget_per_person_jpy"
+              type="number"
+              min={1000}
+              max={1_000_000}
+              step={1000}
+              {...register("budget_per_person_jpy", { valueAsNumber: true })}
+            />
+          </div>
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-[color:var(--color-text-secondary)]">
+            予算配分（合計 100%）
+          </h2>
+          <Controller
+            control={control}
+            name="budget_breakdown"
+            render={({ field }) => (
+              <BudgetBreakdownSlider value={field.value} onChange={field.onChange} />
+            )}
+          />
+          {formState.errors.budget_breakdown ? (
+            <p className="text-xs text-[color:var(--color-danger)]">
+              {formState.errors.budget_breakdown.message ??
+                "配分が 100% になるように調整してください"}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-[color:var(--color-text-secondary)]">
+            参加者（2〜5 人）
+          </h2>
+          <Controller
+            control={control}
+            name="participants"
+            render={({ field }) => (
+              <ParticipantTabs
+                participants={field.value}
+                activeIndex={activeParticipantIndex}
+                onActiveChange={setActiveParticipantIndex}
+                onParticipantChange={(i, next) =>
+                  field.onChange(field.value.map((p, idx) => (idx === i ? next : p)))
+                }
+                onAddParticipant={handleAddParticipant}
+                onRemoveParticipant={handleRemoveParticipant}
+                onAddTag={(i, tag) =>
+                  field.onChange(
+                    field.value.map((p, idx) =>
+                      idx === i && !p.tags.includes(tag)
+                        ? { ...p, tags: [...p.tags, tag] }
+                        : p,
+                    ),
+                  )
+                }
+                onRemoveTag={(i, tag) =>
+                  field.onChange(
+                    field.value.map((p, idx) =>
+                      idx === i ? { ...p, tags: p.tags.filter((t) => t !== tag) } : p,
+                    ),
+                  )
+                }
+              />
+            )}
+          />
+        </section>
+
+        {submitError ? (
+          <div className="rounded-md border border-[color:var(--color-danger)]/30 bg-[color:var(--color-danger)]/5 p-3 text-sm text-[color:var(--color-danger)]">
+            {submitError}
+          </div>
+        ) : null}
+
+        <div className="flex items-center justify-end gap-3">
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="inline-flex items-center gap-2 rounded-md bg-[color:var(--color-primary)] px-6 py-3 text-base font-medium text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSubmitting ? (
+              <>
+                <Spinner size={18} weight="bold" className="animate-spin" />
+                生成を開始中...
+              </>
+            ) : (
+              <>
+                プランを生成
+                <ArrowRight size={18} weight="bold" />
+              </>
+            )}
+          </button>
+        </div>
+      </form>
+    </main>
+  );
+}
