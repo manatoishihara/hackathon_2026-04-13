@@ -87,6 +87,7 @@ def _valid_plan_kwargs() -> dict:
         budget_breakdown=_valid_budget(),
         start_mode="auto",
         mode_payload=None,
+        status="draft",
         share_token=None,
         created_at=datetime(2026, 5, 1, 12, 0, 0),
         updated_at=datetime(2026, 5, 1, 12, 0, 0),

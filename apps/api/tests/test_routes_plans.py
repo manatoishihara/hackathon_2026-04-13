@@ -92,8 +92,13 @@ def _edge(a: str, b: str, mode: str = "train") -> dict:
     }
 
 
-def _valid_body(pack_id: str | None = None, edges: list[dict] | None = None) -> dict:
+def _valid_body(
+    pack_id: str | None = None,
+    edges: list[dict] | None = None,
+    plan_id: str | None = None,
+) -> dict:
     return {
+        "plan_id": plan_id or str(uuid4()),
         "evidence_pack_id": pack_id or str(uuid4()),
         "transit_matrix": edges if edges is not None else [_edge("A", "B"), _edge("B", "A")],
     }
@@ -151,9 +156,21 @@ def test_non_object_json_body_returns_400(mock_auth_factory, client):
 
 
 @patch("src.auth.get_supabase_client")
-def test_invalid_uuid_returns_400(mock_auth_factory, client):
+def test_invalid_pack_uuid_returns_400(mock_auth_factory, client):
     mock_auth_factory.return_value = _mock_auth()
     body = _valid_body(pack_id="not-a-uuid")
+    res = client.post(
+        "/api/plans/generate",
+        json=body,
+        headers={"Authorization": "Bearer ok"},
+    )
+    assert res.status_code == 400
+
+
+@patch("src.auth.get_supabase_client")
+def test_invalid_plan_uuid_returns_400(mock_auth_factory, client):
+    mock_auth_factory.return_value = _mock_auth()
+    body = _valid_body(plan_id="not-a-uuid")
     res = client.post(
         "/api/plans/generate",
         json=body,

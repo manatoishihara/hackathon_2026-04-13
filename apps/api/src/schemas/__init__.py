@@ -23,6 +23,7 @@ StartMode = Literal["auto", "anchor", "theme"]
 ItemType = Literal["activity", "meal", "transit", "lodging"]
 CostConfidence = Literal["verified", "estimated", "unknown"]
 TransitMode = Literal["train", "bus", "walk", "car"]
+PlanStatus = Literal["draft", "generating", "succeeded", "failed"]
 
 
 class _StrictBase(BaseModel):
@@ -55,6 +56,7 @@ class Plan(_StrictBase):
     budget_breakdown: BudgetBreakdown
     start_mode: StartMode
     mode_payload: dict[str, Any] | None
+    status: PlanStatus
     share_token: str | None
     created_at: datetime
     updated_at: datetime
@@ -204,8 +206,11 @@ class ClientTransitEdge(_StrictBase):
 
 
 class PlanGenerationPayload(_StrictBase):
-    """POST /api/plans/generate リクエスト（Phase 1.3c で実型化）。
+    """POST /api/plans/generate リクエスト（Phase 1.3c で実型化、1.3c+ で plan_id 追加）。
 
+    - plan_id: フロント（/plan/new submit 時）が crypto.randomUUID() で発行し、
+      同時に plans テーブルに INSERT 済みの UUID。1.3d で owner 検証（plans.session_id
+      と g.owner_session_id の一致）と plan_items 保存先の特定に使う。
     - evidence_pack_id: evidence_pack_sessions.id の UUID。str ではなく UUID 型で
       先パース段階で形式違反を弾く（DoS + 改ざん対策）。`model_dump(mode="json")` で
       文字列にシリアライズされるので TS 側の `string` 契約と整合する。
@@ -214,6 +219,7 @@ class PlanGenerationPayload(_StrictBase):
       自己ループ / 距離 / 矛盾重複）は evidence.validator.validate_client_transit_matrix で。
     """
 
+    plan_id: UUID
     evidence_pack_id: UUID
     transit_matrix: list[ClientTransitEdge] = Field(max_length=200)
 

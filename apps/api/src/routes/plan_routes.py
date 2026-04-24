@@ -3,6 +3,7 @@
 設計:
 - JWT 認証必須（`require_session`）
 - 入力 `PlanGenerationPayload` を Pydantic validate
+  - plan_id: UUID 型（フロントが発行、1.3d で plans owner 検証 + plan_items 保存先に使う）
   - evidence_pack_id: UUID 型
   - transit_matrix: list[ClientTransitEdge]、max_length=200（静的 hard cap）
 - `load_pack(evidence_pack_id, owner_session_id=...)` で取り出し、None は 404
@@ -71,6 +72,11 @@ def generate_plan():
         return jsonify({"error": f"transit_matrix validation failed: {e}"}), 400
 
     merged = pack.model_copy(update={"transit_matrix": validated})
+
+    # TODO(phase-1.3d): payload.plan_id を使って Supabase の plans テーブルから
+    # owner 検証（plans.session_id == g.owner_session_id）を行い、LLM 生成 →
+    # plan_items INSERT → plans.status を 'succeeded' / 'failed' に更新する。
+    # 1.3c 時点では plan_id は Pydantic で validate するだけで使用しない。
 
     # 1.3c のレスポンスは debug 用途を除いて {"plan_id": null} のみ。
     # ?debug=1 の時だけ merged pack を追加で返す。1.3d で LLM を繋いだら

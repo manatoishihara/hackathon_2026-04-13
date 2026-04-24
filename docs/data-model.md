@@ -42,6 +42,7 @@ CREATE TABLE plans (
   budget_breakdown JSONB NOT NULL, -- {lodging: 40, meal: 30, activity: 20, transit: 10}
   start_mode TEXT NOT NULL CHECK (start_mode IN ('auto', 'anchor', 'theme')),
   mode_payload JSONB, -- anchor型なら ["place_id1", "place_id2"], theme型なら {"theme": "onsen"}
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'generating', 'succeeded', 'failed')),
   share_token TEXT UNIQUE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -49,6 +50,7 @@ CREATE TABLE plans (
 
 CREATE INDEX idx_plans_session_id ON plans(session_id);
 CREATE INDEX idx_plans_share_token ON plans(share_token);
+CREATE INDEX idx_plans_status ON plans(status);
 
 -- ==============================
 -- Participants（参加者 2〜5人）
@@ -179,6 +181,8 @@ export type ItemType = 'activity' | 'meal' | 'transit' | 'lodging';
 
 export type CostConfidence = 'verified' | 'estimated' | 'unknown';
 
+export type PlanStatus = 'draft' | 'generating' | 'succeeded' | 'failed';
+
 // ==============================
 // エンティティ
 // ==============================
@@ -194,6 +198,7 @@ export type Plan = {
   budget_breakdown: BudgetBreakdown;
   start_mode: StartMode;
   mode_payload: Record<string, unknown> | null;
+  status: PlanStatus;
   share_token: string | null;
   created_at: string;
   updated_at: string;
@@ -312,12 +317,15 @@ export type ClientTransitEdge = {
   candidate_departures: string[]; // HH:mm 形式、1〜10 要素
 };
 
-// POST /api/plans/generate リクエスト（Phase 1.3c で実型化）。
+// POST /api/plans/generate リクエスト（Phase 1.3c で実型化、1.3c+ で plan_id 追加）。
+// plan_id はフロントが発行して plans テーブルに INSERT 済みの UUID（1.5 submit 時に発行）。
 // evidence_pack_id はサーバー短期キャッシュ (evidence_pack_sessions.id) の UUID。
 // transit_matrix の要素制約は ClientTransitEdge（Phase 1.3b）。サーバー側は
 // 件数最大 200（hard cap、フロント実装は 40 前後）、距離 15km 以内、place_id 所属、
 // 矛盾重複禁止で検証する（`apps/api/src/evidence/validator.py`）。
+// 1.3d では plan_id の owner 検証 + plan_items INSERT に使う。
 export type PlanGenerationPayload = {
+  plan_id: string; // UUID 文字列（フロント発行、plans テーブルに存在済み）
   evidence_pack_id: string; // UUID 文字列
   transit_matrix: ClientTransitEdge[];
 };
