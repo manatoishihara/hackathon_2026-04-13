@@ -311,36 +311,36 @@ export type ClientTransitEdge = {
   fare_jpy: number | null;   // 0〜500000
   candidate_departures: string[]; // HH:mm 形式、1〜10 要素
 };
+
+// POST /api/plans/generate リクエスト（Phase 1.3c で実型化）。
+// evidence_pack_id はサーバー短期キャッシュ (evidence_pack_sessions.id) の UUID。
+// transit_matrix の要素制約は ClientTransitEdge（Phase 1.3b）。サーバー側は
+// 件数最大 200（hard cap、フロント実装は 40 前後）、距離 15km 以内、place_id 所属、
+// 矛盾重複禁止で検証する（`apps/api/src/evidence/validator.py`）。
+export type PlanGenerationPayload = {
+  evidence_pack_id: string; // UUID 文字列
+  transit_matrix: ClientTransitEdge[];
+};
 ```
 
 ## Pydantic 対応（`apps/api/src/schemas/`）
 
 上記 TypeScript 型と一対一で対応する Pydantic v2 スキーマを配置せよ。フィールド名、nullability、enum を完全に一致させること。型が不整合だとフロントが壊れる。
 
-## Phase 1.3 で追加予定の型（API 分割に伴う）
+## Phase 1.3 関連の実コード化履歴
 
 日本国内の transit は Google のサーバー API から取れないため、プラン生成を 2 段に
-分ける（詳細は `docs/evidence-pack.md` / `docs/architecture.md` / `tasks/lessons.md`）。
+分けた（詳細は `docs/evidence-pack.md` / `docs/architecture.md` / `tasks/lessons.md`）。
 
-**この「計画節」は 3 点同期の対象外**（`.claude/rules/data-model-sync.md` の「計画節の
-扱い」参照）。擬似コードで意図だけ示し、Phase 1.3 の実装着手時に shared-types /
-Pydantic / test_schema_parity への実コード追加 + 3 点同期を一括で行う。
+以下の型は Phase 1.3 で順次実コード化され、全て「API リクエスト/レスポンス」セクション
+に統合済み:
 
-```typescript
-// POST /api/evidence/places は Phase 1.3a で実装済み。上の「API リクエスト/レスポンス」
-// セクションの EvidencePlacesResponse / EvidencePlacesPlaceSummary を参照。
+- `EvidencePlacesPlaceSummary` / `EvidencePlacesResponse` — Phase 1.3a
+- `ClientTransitEdge` — Phase 1.3b
+- `PlanGenerationPayload` — Phase 1.3c
 
-// POST /api/plans/generate リクエスト
-// ClientTransitEdge は Phase 1.3b で実コード化済み。上の「API リクエスト/レスポンス」
-// セクションを参照。
-export type PlanGenerationPayload = {
-  evidence_pack_id: string;
-  transit_matrix: ClientTransitEdge[];
-};
-
-// POST /api/plans/generate レスポンス
-// → 現在の GeneratePlanResponse ({ plan_id }) を流用
-```
-
-**未決事項**: `candidate_departures` の単数/複数化、`route_summary` のサーバー側 rewrite 要否、
-`evidence_pack_id` のストア（Supabase vs in-memory vs Redis）は Phase 1.3 着手時に確定させる。
+**未決事項の解消メモ（Phase 1.3c 時点）**:
+- `candidate_departures`: 1〜10 要素の配列で継続（複数化対応済み、フロントは 1 要素固定）
+- `route_summary`: サーバー側 rewrite は不要と判断（フロントが Google の vehicle.line 名を
+  直接採用し、Pydantic の max_length=120 でカット）
+- `evidence_pack_id` のストア: Supabase の `evidence_pack_sessions` テーブル（TTL 15 分）で確定

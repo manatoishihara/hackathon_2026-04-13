@@ -146,7 +146,8 @@ export type EvidencePlacesResponse = {
 // フロント Maps JS SDK の DirectionsService で取得した transit を
 // `/api/plans/generate`（Phase 1.3c）に送る際のエッジ表現（Phase 1.3b で追加）。
 // 有向エッジ: A→B と B→A は別レコード。サーバー側は Pydantic Field 制約で
-// 値域・文字長・HH:mm 形式を検証し、place_id 所属チェックは 1.3c で追加予定。
+// 値域・文字長・HH:mm 形式を検証し、place_id 所属 / 自己ループ / 距離 15km /
+// dedupe は evidence/validator.py で実施する（Phase 1.3c）。
 export type ClientTransitEdge = {
   from_place_id: string;
   to_place_id: string;
@@ -155,6 +156,15 @@ export type ClientTransitEdge = {
   duration_min: number; // 0〜1440
   fare_jpy: number | null; // 0〜500000
   candidate_departures: string[]; // HH:mm 形式、1〜10 要素
+};
+
+// POST /api/plans/generate リクエスト（Phase 1.3c で実型化）。
+// evidence_pack_id はサーバー短期キャッシュ (evidence_pack_sessions.id) の UUID。
+// transit_matrix の要素制約は ClientTransitEdge（Phase 1.3b）。サーバー側は
+// 件数最大 200、距離 15km 以内、place_id 所属、矛盾重複禁止で検証する。
+export type PlanGenerationPayload = {
+  evidence_pack_id: string;
+  transit_matrix: ClientTransitEdge[];
 };
 
 // ==============================
