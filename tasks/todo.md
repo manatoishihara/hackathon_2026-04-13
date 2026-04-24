@@ -151,11 +151,19 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] 共有用 RLS ポリシー監査
 - [ ] 型 `ShareResponse` を shared-types/Pydantic に追加（Manato と調整）
 
-### 1.x: **DB 整理タスク**（メンバー B 担当、1.3d と並行可、詳細は @tasks/handoff-db.md）
-- [ ] DB-1: `supabase/migrations/` ディレクトリ化（DDL 分割 + 連番管理）
-- [ ] DB-2: RLS の E2E テスト（`apps/api/tests/test_rls.py`、他セッションからのアクセス遮断検証）
+### 1.x: **DB 整理タスク**
+
+詳細は @tasks/handoff-db.md 参照。2026-04-24 整理で **Manato（1.3d と合流）** と **メンバー B（独立）** に分業。
+
+#### Manato 担当（1.3d と合流して対応）
+- [ ] DB-2: RLS の E2E テスト（`apps/api/tests/test_rls.py`、他セッションからのアクセス遮断検証）— 1.3d で plan_items 書き込みを始める前に必須
 - [ ] DB-3: 定期クリーンアップ（pg_cron）: (a) `evidence_pack_sessions` の期限切れ、(b) `plans WHERE status='generating' AND updated_at < now() - INTERVAL '1 hour'`（stuck 中断対策）、(c) `plans WHERE status IN ('draft','failed') AND created_at < now() - INTERVAL '24 hours'`。`succeeded` は保全
-- [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備）
+
+#### メンバー B 担当（1.3d と完全独立、並行可）
+- [ ] DB-1: `supabase/migrations/` ディレクトリ化（DDL 分割 + 連番管理）
+- [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備、申請に時間がかかるので今すぐ）
+- [ ] DB-8: Supabase Row-Level Logging（1.3d 着手前に整備、pg_stat_statements など）
+- [ ] （1.9 共有 API は上の「1.9 共有 API 実装」セクションで DB-4/5/6 として別管理）
 
 <details>
 <summary>（旧）1.4 ランディングページ (01) — 骨組みタスクへ吸収済み</summary>
