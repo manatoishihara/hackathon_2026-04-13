@@ -84,6 +84,19 @@ cp .env.example .env.local
 `docs/data-model.md` の「PostgreSQL DDL」セクションをまるごと Supabase SQL Editor に貼り付けて Run。
 テーブルとポリシーが作成されたことを確認。
 
+### 4.1 Phase 1.3d 追加マイグレーション（必須）
+
+以下の順で `supabase/migrations/` 配下の SQL を **Supabase ダッシュボードの SQL Editor で手動適用**する:
+
+1. **Extensions で `pg_cron` を有効化**（Database > Extensions タブ）
+   → DB-3 の cron ジョブが動作するための前提
+2. `supabase/migrations/20260424_04_plan_generation_rpcs.sql`
+   → `acquire_plan_generation_lock` / `mark_plan_failed` / `finalize_plan` の 3 RPC + enum を作成
+3. （Branch D 完成後）`supabase/migrations/20260424_03_cleanup_cron.sql`
+   → 期限切れ / stuck / abandoned のクリーンアップ cron を登録
+
+各ファイルは冪等（DO ブロック / CREATE OR REPLACE）なので複数回実行しても安全。
+
 ## 5. Claude Code の初期設定
 
 ### 5.1 MCP サーバー接続
@@ -139,7 +152,16 @@ pnpm dev
 4. Build Command: `pip install -r requirements.txt`
 5. Start Command: `gunicorn 'src.app:create_app()' --bind 0.0.0.0:$PORT`
 6. Environment Variables に `.env.local` の非 `NEXT_PUBLIC_*` 系を設定
-7. Deploy
+7. **HTTP Request Timeout を 180 秒に引き上げる**（Settings → HTTP Timeout）
+   → Phase 1.3d の LLM 生成は最悪 150 秒かかる（per-call 35s × 4 attempts + overhead）。
+     Render のデフォルト 100 秒だと途中で切られる
+8. Deploy
+
+### 7.3 環境変数（追加）
+
+Phase 1.3d で以下の変数が利用可能（任意）:
+
+- `PROMPT_VERSION`（optional、デフォルト `v1.0.0`）: LLM プロンプトの切替。未設定なら `apps/api/src/llm/prompts/v1.0.0/` が使われる。将来 A/B テストする時に差し替え用
 
 ## トラブルシュート
 
