@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { GeneratePlanRequest, StartMode } from "shared-types";
+import type { GeneratePlanRequest } from "shared-types";
 
 /**
  * 1.5 希望入力画面のフォーム用 zod スキーマ。
@@ -30,8 +30,6 @@ export const budgetBreakdownSchema = z
     { message: "配分の合計が 100% になるように調整してください" },
   );
 
-const START_MODES: readonly StartMode[] = ["auto", "anchor", "theme"] as const;
-
 export const planFormSchema = z
   .object({
     title: z.string().min(1, "タイトルを入力してください").max(60),
@@ -45,7 +43,7 @@ export const planFormSchema = z
       .min(1000, "1人あたり 1,000 円以上で指定してください")
       .max(1_000_000, "1人あたり 1,000,000 円以下で指定してください"),
     budget_breakdown: budgetBreakdownSchema,
-    start_mode: z.enum(START_MODES),
+    start_mode: z.enum(["auto", "anchor", "theme"]),
     mode_payload: z.record(z.string(), z.unknown()).nullable(),
     participants: z
       .array(participantInputSchema)
