@@ -130,7 +130,9 @@ export default function NewPlanPage() {
       const evidenceResponse = await postEvidencePlaces(values);
 
       // 成功: status を generating に（fire-and-forget、失敗しても UI ブロックしない）
-      void updatePlanStatus(planId, "generating").catch(() => {});
+      void updatePlanStatus(planId, "generating").catch((e) => {
+        console.warn("updatePlanStatus(generating) failed", e);
+      });
 
       // 5. Zustand stash
       setSession({
@@ -146,7 +148,9 @@ export default function NewPlanPage() {
       const message = err instanceof Error ? err.message : "プラン生成の開始に失敗しました。";
       setSubmitError(message);
       if (planId) {
-        void updatePlanStatus(planId, "failed").catch(() => {});
+        void updatePlanStatus(planId, "failed").catch((e) => {
+          console.warn("updatePlanStatus(failed) failed", e);
+        });
       }
     }
   };

@@ -10,7 +10,7 @@ vi.mock("./supabase", () => ({
 
 // NEXT_PUBLIC_USE_MOCKS が "1" でない環境で fetch 経路を検証する
 vi.stubEnv("NEXT_PUBLIC_USE_MOCKS", "");
-vi.stubEnv("NEXT_PUBLIC_API_URL", "http://test.local");
+vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "http://test.local");
 
 const { ApiError, postEvidencePlaces, postPlanGenerate } = await import("./api");
 

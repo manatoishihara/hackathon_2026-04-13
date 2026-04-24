@@ -121,7 +121,7 @@ export async function getPlan(planId: string): Promise<Plan> {
   - `getPlanItems(planId: string): Promise<PlanItem[]>` ※ 同上
   - `getParticipants(planId: string): Promise<Participant[]>` ※ 同上
 - JWT は `lib/supabase.ts` の `getSession()` 相当から取得し、`Authorization: Bearer ...` を自動付与
-- Flask API のベース URL は `NEXT_PUBLIC_API_URL` 環境変数
+- Flask API のベース URL は `NEXT_PUBLIC_API_BASE_URL` 環境変数（`.env.example` 参照）
 
 ### Zustand ストア設計（v2 責務明確化: Codex Must-fix #5）
 
@@ -451,7 +451,7 @@ import type {
 } from "shared-types";
 import { getSupabaseAccessToken, supabase } from "./supabase";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000";
+const API_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:5000";
 
 async function authedFetch<T>(
   path: string,
