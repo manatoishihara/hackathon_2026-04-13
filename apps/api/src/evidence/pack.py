@@ -63,6 +63,19 @@ class QueryContext(_PackBase):
 # ==============================
 
 
+class OpeningHoursSlot(_PackBase):
+    """営業時間 1 枠（曜日 + 開店 / 閉店時刻）。Phase 1.3d で導入。
+
+    1 日に複数枠ある店（ランチ + ディナー）は同じ day_of_week で複数 slot を持つ。
+    day_of_week は Python の datetime.weekday() と互換: 月=0 〜 日=6。
+    24 時間営業は open_hhmm="00:00" + close_hhmm="23:59" で表現（日跨ぎを許容しない設計）。
+    """
+
+    day_of_week: Literal[0, 1, 2, 3, 4, 5, 6]
+    open_hhmm: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    close_hhmm: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
 class PlacePoint(_PackBase):
     place_id: str
     name: str
@@ -70,7 +83,12 @@ class PlacePoint(_PackBase):
     lat: float
     lng: float
     address: str
-    opening_hours: list[str]  # Google の weekdayDescriptions をそのまま保持
+    opening_hours: list[OpeningHoursSlot]
+    """正規化済みの営業時間枠。Google の weekdayDescriptions を `parse_weekday_descriptions` で
+    構造化したもの（Phase 1.3d で構造化、旧 list[str] から置換）。"""
+    opening_hours_unknown_days: list[int] = Field(default_factory=list)
+    """parse できなかった曜日（月=0〜日=6）。validator はここに含まれる曜日の営業時間検証を
+    スキップする。"11時〜店主の気分" 等の非定型フォーマットが typically 該当。"""
     price_level: Literal[1, 2, 3, 4] | None
     rating: float | None
     user_ratings_total: int | None
