@@ -3,4 +3,5 @@ python-dotenv>=1.0
 supabase>=2.9,<3.0
 requests>=2.32
 openai>=1.50,<2.0
+tiktoken>=0.7,<1.0
 pytest>=8.0
