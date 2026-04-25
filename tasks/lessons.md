@@ -246,6 +246,23 @@
   - CI で走らせる場合は IP 当たりの rate limit を気にせず済むよう **ローカル Supabase（`supabase start`）を用意**するか、テスト用の別プロジェクトを切る運用を検討
 - → 2 回目が来たら `.claude/rules/testing.md` の「integration テスト」節に昇格（今は 1 回目）
 
+## 2026-04-25: 「RLS 42501」の真因は実は `plans.session_id` の FK 違反 (23503) だった
+- 状況: Phase 1.10 Vercel 本番 E2E で `/plan/new` submit すると `POST /rest/v1/plans 409 Conflict` が返る。Network response header に `proxy-status: PostgREST; error=23503` (foreign_key_violation) が乗っており、**RLS ではなく FK 違反**だと確定
+- 真因: `plans.session_id UUID NOT NULL REFERENCES sessions(id)` という FK 制約があるが、Supabase の anon サインインは `auth.users` にしか行を作らず `public.sessions` には mirror されない。`session_id = auth.uid()` で INSERT すると参照先 row が存在せず FK 違反
+- これが Phase 1.3d 残課題「test_routes_plans.py の RLS 42501 解消」の真の正体:
+  - test では FK より先に RLS WITH CHECK が評価されるか、別経路で 42501 として観測されていた
+  - production では FK が先に弾く形で 23503 として観測（同じ問題の別の見え方）
+  - test_rls.py の `_ensure_session_row()` ヘルパが既に backfill 操作で対処していたが、本番側に同じ仕組みが無かった（test 設計上は気付いていたが production 移行時に漏れた）
+- 対処: `supabase/migrations/20260425_05_auth_user_sessions_mirror.sql` を新規追加:
+  - `auth.users` INSERT トリガで `public.sessions` に自動 mirror（`SECURITY DEFINER` でトリガ実行は SECURITY 委譲）
+  - 既存 anon user の backfill（`SELECT id FROM auth.users` を `INSERT ... ON CONFLICT DO NOTHING`）
+  - 全て冪等
+- ルール:
+  - **「RLS 42501」と「FK 23503」は production REST API では似た失敗に見えるが原因が異なる**。response body / proxy-status header の Postgres error code を必ず確認せよ
+  - **Supabase 匿名認証 (`signInAnonymously`) は `auth.users` にしか行を作らない**。custom テーブルとの FK で繋ぐ場合、必ず mirror トリガを設定する。これは「データモデル設計時に決めるべき事項」で、後追いで気付くと本番ブロッカーになる
+  - test 環境で「workaround」（_ensure_session_row のような helper）を入れる場合、**同じ workaround を production 側にも仕組みとして組み込んでいるか必ず照合せよ**。test だけ通す対症療法は production 移行時に必ず破綻する
+- → 2 回目が来たら `.claude/rules/data-model-sync.md` の「Supabase 匿名認証で custom テーブル FK を繋ぐなら mirror トリガ必須」節に昇格（今は 1 回目）
+
 ## 2026-04-25: pnpm strict isolation + 依存先 package の peer 宣言漏れで Next.js build が `Module not found: zod/v4/core` で失敗
 - 問題: Phase 1.10 Vercel deploy で `apps/web` の `next build --turbopack` が以下のエラーで失敗（ローカル `pnpm --filter web build` でも再現）:
   ```

@@ -63,7 +63,8 @@
 
 **次にやるべきタスク:**
 - [x] **Manato**: Phase 1.3e すべて完遂（hallucination 0% / success 100%、run 27 ベースライン）
-- [ ] **Manato（保留中、Supabase SQL Editor アクセス可能になったら再開）**: `test_routes_plans.py::test_integration_end_to_end_plan_generation` と `::test_integration_lock_conflict_returns_409` の RLS violation (42501) 解消。
+- [ ] **Manato（真因判明、SQL 適用待ち）**: 「RLS 42501」は実は `plans.session_id` の **FK 違反 (23503)**。本番 E2E で `proxy-status: PostgREST; error=23503` を確認。anon サインインが `public.sessions` に mirror 行を作らないのが根本原因。**`supabase/migrations/20260425_05_auth_user_sessions_mirror.sql` を Supabase SQL Editor で実行**すれば解消（トリガ + backfill、冪等）。詳細は @tasks/lessons.md 「RLS 42501 の真因は FK 違反」エントリ参照
+- [ ] **旧 (参考、SQL 適用後に閉じる)**: `test_routes_plans.py::test_integration_end_to_end_plan_generation` と `::test_integration_lock_conflict_returns_409` の RLS violation (42501) 解消。
   - 2026-04-25 セッションでコード側の調査は完了。`test_rls.py` のコメントに「実 DB の RLS 設定上は挙動が docs/data-model.md 通りになっていない」と既に明記済み = production drift 確定
   - migrations 側は `FOR ALL USING (session_id = auth.uid())` のみで `WITH CHECK` 暗黙、PostgreSQL default で USING と同じになるはず → production policy は何かしら drift している
   - 再開時の手順:
