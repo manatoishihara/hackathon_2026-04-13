@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { GeneratePlanRequest } from "shared-types";
+import { THEME_KEYS, type GeneratePlanRequest } from "shared-types";
 
 /**
  * 1.5 希望入力画面のフォーム用 zod スキーマ。
@@ -8,7 +8,29 @@ import type { GeneratePlanRequest } from "shared-types";
  * shared-types は正典、ここは RHF 向けの実行時バリデーション。フィールド追加・削除は
  * `docs/data-model.md` 更新 → shared-types 更新 → ここの同期、という順で行う
  * （zod と shared-types の手動同期、Codex 指摘の Nice-to-have ドリフト検出は将来課題）。
+ *
+ * Phase 2.1: 出発モード切替で start_mode と mode_payload を discriminated union 化。
+ * バックエンド `GeneratePlanRequest._validate_mode_payload_against_start_mode` と
+ * 同等の整合検証を form 層でも行う（user 入力ミスを送信前に拾う）。
  */
+
+// shared-types の THEME_KEYS を単一情報源として z.enum に流す（Codex Major 2 対応）。
+// theme 追加 / 改名は shared-types/src/index.ts と apps/api/src/themes.py の両方を更新する。
+export const themeKeySchema = z.enum(THEME_KEYS);
+export type ThemeKey = z.infer<typeof themeKeySchema>;
+
+export const anchorModePayloadSchema = z.object({
+  anchor_place_ids: z
+    .array(z.string().min(1, "place_id を入力").max(255, "place_id が長すぎます"))
+    .min(1, "アンカーは 1 件以上必要です")
+    .max(3, "アンカーは最大 3 件まで"),
+});
+export type AnchorModePayloadForm = z.infer<typeof anchorModePayloadSchema>;
+
+export const themeModePayloadSchema = z.object({
+  theme: themeKeySchema,
+});
+export type ThemeModePayloadForm = z.infer<typeof themeModePayloadSchema>;
 
 export const participantInputSchema = z.object({
   display_name: z.string().min(1, "名前を入力してください").max(30, "30 文字以内で入力してください"),
@@ -30,30 +52,64 @@ export const budgetBreakdownSchema = z
     { message: "配分の合計が 100% になるように調整してください" },
   );
 
-export const planFormSchema = z
+// 旅の基本情報 + 予算 + 参加者: 全 mode 共通の base fields
+const baseFormFields = {
+  title: z.string().min(1, "タイトルを入力してください").max(60),
+  region: z.string().min(1, "行き先エリアを入力してください"),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD 形式で入力"),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD 形式で入力"),
+  departure_point: z.string().min(1, "出発地を入力してください"),
+  budget_per_person_jpy: z
+    .number()
+    .int()
+    .min(1000, "1人あたり 1,000 円以上で指定してください")
+    .max(1_000_000, "1人あたり 1,000,000 円以下で指定してください"),
+  budget_breakdown: budgetBreakdownSchema,
+  participants: z
+    .array(participantInputSchema)
+    .min(2, "参加者は 2 人以上必要です")
+    .max(5, "参加者は 5 人までです"),
+};
+
+const dateOrderRefinement = (
+  d: { start_date: string; end_date: string },
+): boolean => d.start_date <= d.end_date;
+
+const dateOrderError = {
+  message: "開始日は終了日より前に指定してください",
+  path: ["end_date"],
+};
+
+// 各 mode variant: base fields + start_mode + mode_payload
+const autoVariant = z
   .object({
-    title: z.string().min(1, "タイトルを入力してください").max(60),
-    region: z.string().min(1, "行き先エリアを入力してください"),
-    start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD 形式で入力"),
-    end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD 形式で入力"),
-    departure_point: z.string().min(1, "出発地を入力してください"),
-    budget_per_person_jpy: z
-      .number()
-      .int()
-      .min(1000, "1人あたり 1,000 円以上で指定してください")
-      .max(1_000_000, "1人あたり 1,000,000 円以下で指定してください"),
-    budget_breakdown: budgetBreakdownSchema,
-    start_mode: z.enum(["auto", "anchor", "theme"]),
-    mode_payload: z.record(z.string(), z.unknown()).nullable(),
-    participants: z
-      .array(participantInputSchema)
-      .min(2, "参加者は 2 人以上必要です")
-      .max(5, "参加者は 5 人までです"),
+    ...baseFormFields,
+    start_mode: z.literal("auto"),
+    mode_payload: z.null(),
   })
-  .refine(
-    (d) => d.start_date <= d.end_date,
-    { message: "開始日は終了日より前に指定してください", path: ["end_date"] },
-  );
+  .refine(dateOrderRefinement, dateOrderError);
+
+const anchorVariant = z
+  .object({
+    ...baseFormFields,
+    start_mode: z.literal("anchor"),
+    mode_payload: anchorModePayloadSchema,
+  })
+  .refine(dateOrderRefinement, dateOrderError);
+
+const themeVariant = z
+  .object({
+    ...baseFormFields,
+    start_mode: z.literal("theme"),
+    mode_payload: themeModePayloadSchema,
+  })
+  .refine(dateOrderRefinement, dateOrderError);
+
+export const planFormSchema = z.discriminatedUnion("start_mode", [
+  autoVariant,
+  anchorVariant,
+  themeVariant,
+]);
 
 export type PlanFormValues = z.infer<typeof planFormSchema>;
 

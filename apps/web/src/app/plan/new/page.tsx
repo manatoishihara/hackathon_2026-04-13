@@ -6,6 +6,8 @@ import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, Spinner } from "@phosphor-icons/react/dist/ssr";
 
+import type { StartMode } from "shared-types";
+
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -14,10 +16,17 @@ import {
   updatePlanStatus,
 } from "@/lib/api";
 import { formatJpy } from "@/lib/format";
-import { planFormSchema, type PlanFormValues } from "@/lib/schemas/planForm";
+import {
+  planFormSchema,
+  type PlanFormValues,
+  type ThemeKey,
+} from "@/lib/schemas/planForm";
 import { ensureAnonymousSession, getCurrentUserId } from "@/lib/supabase";
+import { AnchorPicker } from "@/components/AnchorPicker";
 import { BudgetBreakdownSlider } from "@/components/BudgetBreakdownSlider";
+import { ModeSelector } from "@/components/ModeSelector";
 import { ParticipantTabs } from "@/components/ParticipantTabs";
+import { ThemePicker } from "@/components/ThemePicker";
 import { StepProgressRunway } from "@/components/plan-new/StepProgressRunway";
 import { useGenerationSessionStore } from "@/stores/generationSessionStore";
 
@@ -84,10 +93,68 @@ export default function NewPlanPage() {
     resolver: zodResolver(planFormSchema),
     defaultValues: DEFAULT_VALUES,
   });
-  const { control, register, handleSubmit, watch, setValue, formState } = form;
+  const { control, register, handleSubmit, watch, setValue, clearErrors, formState } = form;
   const participants = watch("participants");
   const watched = watch();
   const isSubmitting = formState.isSubmitting;
+  const startMode = watched.start_mode;
+
+  // Phase 2.1: mode 切替時に mode_payload も対応する形にリセットする。
+  // discriminated union なので start_mode と mode_payload は常にペアで一貫させる必要がある。
+  // 旧 mode で残った mode_payload エラーは clearErrors で即時除去（Codex Minor 3 対応）。
+  const handleModeChange = (next: StartMode) => {
+    setValue("start_mode", next, { shouldDirty: true });
+    if (next === "auto") {
+      setValue("mode_payload", null, { shouldDirty: true });
+    } else if (next === "anchor") {
+      setValue(
+        "mode_payload",
+        { anchor_place_ids: [] },
+        { shouldDirty: true },
+      );
+    } else if (next === "theme") {
+      setValue(
+        "mode_payload",
+        { theme: "onsen" },
+        { shouldDirty: true },
+      );
+    }
+    clearErrors("mode_payload");
+  };
+
+  const handleAnchorChange = (placeIds: string[]) => {
+    setValue(
+      "mode_payload",
+      { anchor_place_ids: placeIds },
+      { shouldDirty: true, shouldValidate: true },
+    );
+  };
+
+  const handleThemeChange = (theme: ThemeKey | null) => {
+    if (theme === null) {
+      // 選択解除 → auto モードに戻す（discriminated union を壊さない安全側）
+      handleModeChange("auto");
+      return;
+    }
+    setValue(
+      "mode_payload",
+      { theme },
+      { shouldDirty: true, shouldValidate: true },
+    );
+  };
+
+  const anchorIds =
+    startMode === "anchor" &&
+    watched.mode_payload &&
+    "anchor_place_ids" in watched.mode_payload
+      ? watched.mode_payload.anchor_place_ids
+      : [];
+  const currentTheme: ThemeKey | null =
+    startMode === "theme" &&
+    watched.mode_payload &&
+    "theme" in watched.mode_payload
+      ? watched.mode_payload.theme
+      : null;
 
   // 入力埋まり率（飛行機の進行に使う）
   const baseFields: Array<string | undefined> = [
@@ -304,6 +371,37 @@ export default function NewPlanPage() {
               {formState.errors.budget_breakdown.message ??
                 "配分が 100% になるように調整してください"}
             </p>
+          ) : null}
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <h2
+            id="start-mode-heading"
+            className="text-sm font-semibold text-[color:var(--color-text-secondary)]"
+          >
+            出発モード
+          </h2>
+          <ModeSelector
+            value={startMode}
+            onChange={handleModeChange}
+            ariaLabelledBy="start-mode-heading"
+          />
+
+          {startMode === "anchor" ? (
+            <div className="mt-2 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] p-4">
+              <AnchorPicker value={anchorIds} onChange={handleAnchorChange} />
+              {formState.errors.mode_payload ? (
+                <p className="mt-2 text-xs text-[color:var(--color-danger)]">
+                  {formState.errors.mode_payload.message ?? "アンカーを 1 件以上指定してください"}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {startMode === "theme" ? (
+            <div className="mt-2 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] p-4">
+              <ThemePicker value={currentTheme} onChange={handleThemeChange} />
+            </div>
           ) : null}
         </section>
 
