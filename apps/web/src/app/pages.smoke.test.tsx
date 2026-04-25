@@ -77,16 +77,15 @@ describe("GeneratingPage (1.6)", () => {
 });
 
 describe("PlanPage (1.7)", () => {
-  it("モック plan / items / participants で描画、タイトルが表示される", async () => {
+  it("モック plan / items / participants で描画、タイトルと DAY タブが表示される", async () => {
     renderWithQuery(<PlanPage />);
     // useQuery で非同期取得 → データが入ったらタイトルが出る
     await waitFor(() => {
       expect(screen.getByText(mockPlan.title)).toBeInTheDocument();
     });
-    // タブが 3 つ（タイムライン / マップ / 予算）
-    expect(screen.getByRole("tab", { name: /タイムライン/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /マップ/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /予算/ })).toBeInTheDocument();
+    // 1.7 リデザイン後: 機能タブ廃止 → DAY タブで日付切替（mock は 2 日分）
+    const dayTabs = screen.getAllByRole("tab", { name: /DAY/ });
+    expect(dayTabs.length).toBe(2);
   });
 });
 
