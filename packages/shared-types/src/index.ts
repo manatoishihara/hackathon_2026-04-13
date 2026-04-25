@@ -18,14 +18,29 @@ export type CostConfidence = "verified" | "estimated" | "unknown";
 export type TransitMode = "train" | "bus" | "walk" | "car";
 export type PlanStatus = "draft" | "generating" | "succeeded" | "failed";
 
-// Phase 2.1 出発モード切替: テーマ選択肢 6 種
-export type ThemeKey =
-  | "onsen"
-  | "art"
-  | "gourmet"
-  | "nature"
-  | "history"
-  | "experience";
+// Phase 2.1 出発モード切替: テーマ key の単一情報源（runtime + 型両方で参照可能）。
+// バックエンドの `apps/api/src/themes.py` の THEME_REGISTRY と同期して運用する
+// （ThemeKey 値の追加 / 改名は両方を必ず揃える）。
+export const THEME_KEYS = [
+  "onsen",
+  "art",
+  "gourmet",
+  "nature",
+  "history",
+  "experience",
+] as const;
+export type ThemeKey = (typeof THEME_KEYS)[number];
+
+// 日本語ラベル（UI 表示 + LLM プロンプトの `mode_context_md` で参照される）。
+// 値はバックエンド `themes.py` の THEME_REGISTRY[*].label と同期。
+export const THEME_LABELS_JP: Record<ThemeKey, string> = {
+  onsen: "温泉",
+  art: "アート",
+  gourmet: "グルメ",
+  nature: "自然",
+  history: "歴史",
+  experience: "体験",
+};
 
 // Phase 2.1: start_mode 別 mode_payload 内訳。
 // DB の plans.mode_payload は JSONB のまま（Plan 型は Record<string, unknown> | null
