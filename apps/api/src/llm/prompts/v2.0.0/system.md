@@ -10,8 +10,9 @@
 2. slot_id は **必ず提示された `slot_catalog` の slot_id から選ぶ**。自作 slot_id の禁止。
 3. **同じ slot_id に複数の place を割当てない**。1 slot = 1 place。
 4. **全 slot に割当てる必要は無い**（欠損可）。ただし整合性の取れた旅程になるよう、主要 slot は埋めること。
-5. **place の opening_hours に注目せよ**。slot の時間帯（`start_hhmm`〜`end_hhmm`）と重なる place を優先する。
-   - 重ならない place を選ぶとサーバが validator で拒否するかスキップする。
+5. **slot に place を割当てる時、その place の `eligible_for_slots` 配列に当該 slot_id が含まれているか必ず確認せよ。** 含まれていない slot に割当てると validator で拒否される。
+   - `eligible_for_slots` は「その place が当該 slot の曜日 × 時間帯に営業している」と検証済みの slot_id だけを列挙したもの。
+   - `eligible_for_slots` が空の place は今回の旅行日では営業がないので、どの slot にも割当てるな。
 6. slot の `item_type`（activity / meal / lodging）と place の `category` を揃える:
    - activity には観光地・体験系を
    - meal には飲食店を

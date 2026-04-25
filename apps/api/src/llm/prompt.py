@@ -56,7 +56,10 @@ def build_user_prompt(
     使わない（slot_catalog に包含）。format の未使用引数は無視されるので、常に全引数を渡す。
     """
     # assembly は v1 路でも利用（スロット情報は v1 LLM には見せないが、引数は無視される）
-    from .assembly import generate_slot_catalog
+    from .assembly import (
+        compute_eligible_slot_ids_for_place,
+        generate_slot_catalog,
+    )
 
     version = version or load_prompt_version()
     template_path = _PROMPTS_ROOT / version / "user_template.md"
@@ -65,7 +68,24 @@ def build_user_prompt(
 
     template = template_path.read_text(encoding="utf-8")
     ctx_json = _to_json(pack.query_context.model_dump(mode="json"))
-    places_json = _to_json([_place_for_llm(p) for p in pack.places])
+    catalog = generate_slot_catalog(pack.temporal_constraints.total_days)
+    if version.startswith("v2"):
+        # v2: 各 place に eligible_for_slots を付与（Phase 1.3e (iv) per-slot tailored）。
+        # LLM は eligible_for_slots に含まれる slot_id にのみ place を割当てるよう誘導。
+        base_date = pack.temporal_constraints.start_datetime.date()
+        places_json = _to_json(
+            [
+                {
+                    **_place_for_llm(p),
+                    "eligible_for_slots": compute_eligible_slot_ids_for_place(
+                        p, slot_catalog=catalog, base_date=base_date
+                    ),
+                }
+                for p in pack.places
+            ]
+        )
+    else:
+        places_json = _to_json([_place_for_llm(p) for p in pack.places])
     if version.startswith("v2"):
         # v2 (LCaMO 応用): LLM は transit_matrix を「到達可能ペア」としてしか使わない。
         # mode / route_summary / duration_min / fare_jpy / candidate_departures は
@@ -80,9 +100,7 @@ def build_user_prompt(
     budget_json = _to_json(pack.budget_constraints.model_dump(mode="json"))
     temporal_json = _to_json(pack.temporal_constraints.model_dump(mode="json"))
     issues_json = _to_json([_issue_to_dict(i) for i in (previous_issues or [])])
-    slot_catalog_json = _to_json(
-        generate_slot_catalog(pack.temporal_constraints.total_days)
-    )
+    slot_catalog_json = _to_json(catalog)
 
     return template.format(
         query_context_json=ctx_json,

@@ -76,7 +76,9 @@ def _build_request() -> GeneratePlanRequest:
         end_date=date(2026, 6, 2),
         departure_point="新宿駅",
         budget_per_person_jpy=35000,
-        budget_breakdown=BudgetBreakdown(lodging=45, meal=25, activity=20, transit=10),
+        # 旅行実態に即した配分（食事 25→30、宿 45→40 で旅行者の実比率に近づける）。
+        # 4 食 × 2,500 円が 8,750 円ベンチマークを超える問題を解消（@tasks/lessons.md 2026-04-25）
+        budget_breakdown=BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10),
         start_mode="auto",
         mode_payload=None,
         participants=[
@@ -138,7 +140,11 @@ def _build_transit_matrix(
         route_summary="箱根近隣 想定経路",
         duration_min=20,
         fare_jpy=380,
-        candidate_departures=["09:00", "12:00", "15:00"],
+        # β で v2 prompt から candidate_departures は除去済み（_edge_for_llm_v2）。
+        # ここの拡張は assembler の _pick_departure_time 用で、prompt token に影響なし。
+        # 5 候補で morning〜lodging 全 transit を覆う（Codex Major fix で過去時刻
+        # fallback 廃止に伴い、十分な candidate を提供する必要があるため）
+        candidate_departures=["09:00", "12:00", "15:00", "18:00", "21:00"],
     )
     seen: set[tuple[str, str]] = set()
     for a in places:
@@ -247,6 +253,12 @@ def run(runs: int) -> int:
                 f"{type(e).__name__}: {e}"
                 + (f" | issues: {detail}" if detail else "")
             )
+            # 詳細: 最終 attempt の各 issue の message も出して原因を特定可能に
+            if isinstance(e, LlmGenerationError) and e.issues:
+                for issue in e.issues:
+                    logger.warning(
+                        f"  └─ [{issue.kind.value}] item_index={issue.item_index}: {issue.message}"
+                    )
 
     print("\n==== Summary ====")
     print(f"Total runs: {runs}")

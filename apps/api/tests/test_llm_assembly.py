@@ -17,11 +17,14 @@ from src.evidence.pack import (
     TransitEdge,
 )
 from src.llm.assembly import (
+    IneligiblePlaceForSlotError,
     NoFeasibleTransitError,
     UnknownPlaceInSlotError,
     UnknownSlotIdError,
     assemble_plan,
+    compute_eligible_slot_ids_for_place,
     generate_slot_catalog,
+    is_place_eligible_for_slot,
 )
 from src.llm.schema import LlmGeneratedPlanV2, LlmSlotAssignment
 from src.schemas import BudgetBreakdown
@@ -85,7 +88,18 @@ def _place(
     )
 
 
-def _edge(a: str, b: str, *, duration: int = 20, fare: int | None = 400) -> TransitEdge:
+def _edge(
+    a: str,
+    b: str,
+    *,
+    duration: int = 20,
+    fare: int | None = 400,
+    candidate_departures: list[str] | None = None,
+) -> TransitEdge:
+    """test helper. デフォルトの candidate_departures は 2 日プランの全 transit（朝〜夕）を
+    覆うよう 5 点配置（Codex Major fix で `_pick_departure_time` が過去時刻 fallback を
+    廃止したため、morning〜lodging 全シフトを含む候補が必要）。
+    """
     return TransitEdge(
         from_place_id=a,
         to_place_id=b,
@@ -93,8 +107,115 @@ def _edge(a: str, b: str, *, duration: int = 20, fare: int | None = 400) -> Tran
         route_summary="箱根登山",
         duration_min=duration,
         fare_jpy=fare,
-        candidate_departures=["09:00"],
+        candidate_departures=candidate_departures
+        or ["09:00", "12:00", "15:00", "18:00", "21:00"],
     )
+
+
+# ==============================
+# per-slot tailored places (Phase 1.3e 改修(iv))
+# ==============================
+
+
+def test_is_place_eligible_for_slot_overlap_returns_true():
+    """月曜 10:00-20:00 営業 → 月曜 morning slot (09:00-11:30) と重なる → True"""
+    place = _place("P", opening=[(0, "10:00", "20:00")])
+    assert is_place_eligible_for_slot(
+        place, slot_start_hhmm="09:00", slot_end_hhmm="11:30", date_=date(2026, 6, 1)
+    ) is True
+
+
+def test_is_place_eligible_for_slot_closed_day_returns_false():
+    """月曜のみ営業 → 火曜の slot は False（定休日）"""
+    place = _place("P", opening=[(0, "09:00", "20:00")])
+    assert is_place_eligible_for_slot(
+        place, slot_start_hhmm="09:00", slot_end_hhmm="11:30", date_=date(2026, 6, 2)
+    ) is False
+
+
+def test_is_place_eligible_for_slot_no_time_overlap_returns_false():
+    """月曜ランチタイムのみ営業 (11:00-14:00) → morning slot (09:00-10:30) と重ならない → False"""
+    place = _place("P", opening=[(0, "11:00", "14:00")])
+    assert is_place_eligible_for_slot(
+        place, slot_start_hhmm="09:00", slot_end_hhmm="10:30", date_=date(2026, 6, 1)
+    ) is False
+
+
+def test_is_place_eligible_for_slot_empty_opening_hours_returns_true():
+    """opening_hours 空 → 検証スキップ → eligible 扱い"""
+    place = PlacePoint(
+        place_id="P",
+        name="X",
+        category=["restaurant"],
+        lat=0,
+        lng=0,
+        address="",
+        opening_hours=[],
+        opening_hours_unknown_days=[],
+        price_level=1,
+        rating=4.0,
+        user_ratings_total=10,
+        relevance_tags=[],
+    )
+    assert is_place_eligible_for_slot(
+        place, slot_start_hhmm="09:00", slot_end_hhmm="11:30", date_=date(2026, 6, 1)
+    ) is True
+
+
+def test_is_place_eligible_for_slot_unknown_day_returns_true():
+    """opening_hours_unknown_days に当該曜日が含まれる → 検証スキップ → eligible 扱い"""
+    place = PlacePoint(
+        place_id="P",
+        name="X",
+        category=["restaurant"],
+        lat=0,
+        lng=0,
+        address="",
+        opening_hours=[OpeningHoursSlot(day_of_week=0, open_hhmm="09:00", close_hhmm="20:00")],
+        opening_hours_unknown_days=[1],  # 火曜は不明
+        price_level=1,
+        rating=4.0,
+        user_ratings_total=10,
+        relevance_tags=[],
+    )
+    # 火曜の slot に対して unknown_day なので True
+    assert is_place_eligible_for_slot(
+        place, slot_start_hhmm="09:00", slot_end_hhmm="11:30", date_=date(2026, 6, 2)
+    ) is True
+
+
+def test_compute_eligible_slot_ids_for_place_filters_correctly():
+    """Phase 1.3e (iv): slot_catalog に対して place が eligible な slot_id 配列を返す。
+
+    LLM プロンプトの per-place `eligible_for_slots` フィールド構築用。
+    """
+    # 月曜 09:00-12:00 + 火曜 14:00-20:00 だけ営業
+    place = _place(
+        "P",
+        opening=[
+            (0, "09:00", "12:00"),  # Mon morning + lunch
+            (1, "14:00", "20:00"),  # Tue afternoon + dinner
+        ],
+    )
+    catalog = generate_slot_catalog(total_days=2)
+    eligible = compute_eligible_slot_ids_for_place(
+        place, slot_catalog=catalog, base_date=date(2026, 6, 1)  # 月始まり
+    )
+    # day1 (月) 09:00-12:00 営業 → morning (09:00-11:30) ✓ + lunch (12:00-13:30) は 12:00 ピッタリ ✗ (open < end かつ start < close 判定で 12:00 < 13:30 ∧ 09:00 < 12:00 → True)
+    # 注: 半開区間判定 [open, close) と [slot_start, slot_end) で重なりチェック
+    assert "day1_morning" in eligible
+    # day1 lunch slot 12:00-13:30 に対し place 営業 09:00-12:00 → close=12:00, start=12:00 → 重ならない
+    assert "day1_lunch" not in eligible
+    # day1 afternoon (14:00-16:30): place は 12:00 まで → 含まれない
+    assert "day1_afternoon" not in eligible
+    # day2 (火) 14:00-20:00: morning (09:00-11:30) は重ならない
+    assert "day2_morning" not in eligible
+    # day2 lunch (12:00-13:30): 重ならない
+    assert "day2_lunch" not in eligible
+    # day2 afternoon (14:00-16:30): 重なる ✓
+    assert "day2_afternoon" in eligible
+    # day2 dinner (18:00-19:30): 重なる ✓
+    assert "day2_dinner" in eligible
 
 
 # ==============================
@@ -194,6 +315,178 @@ def test_assemble_plan_unknown_place_id_raises():
                 slot_id="day1_morning",
                 place_id="P_does_not_exist",
                 rationale="test case for unknown place_id handling",
+            )
+        ]
+    )
+    with pytest.raises(UnknownPlaceInSlotError):
+        assemble_plan(plan_v2, pack)
+
+
+def test_assemble_plan_resolves_case_mismatched_place_id():
+    """Phase 1.3e run 7 救済: LLM (特に gpt-4o-mini fallback) が pack の place_id を
+    大文字小文字違いで生成するケースを救済する。
+
+    Google Places ID は本来 case-sensitive だが、LLM が `ChIJFc0R0G-...` を
+    `ChIJFC0R0G-...` のように生成するパターンが run 7 で観測された。
+    pack に case-insensitive で一致するなら canonical id へ正規化して受け入れる
+    （これは厳密一致を破る救済策、validator 的には UNKNOWN_PLACE_ID 回避目的）。
+    """
+    p_a = _place("ChIJFc0R0G-jGWARNMTt10zT2GY", name="HAKONE PICNIC")
+    pack = _make_pack(places=[p_a], edges=[])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_morning",
+                place_id="ChIJFC0R0G-jGWARNMTt10zT2GY",  # 大文字小文字違い
+                rationale="case mismatch from gpt-4o-mini fallback",
+            )
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    # 救済成功: エラーにならず、canonical id で結果に出る
+    activity = next(i for i in result.items if i.item_type == "activity")
+    assert activity.place_id == "ChIJFc0R0G-jGWARNMTt10zT2GY"
+
+
+def test_assemble_plan_rejects_truly_unknown_place_id_even_after_case_check():
+    """case-insensitive でも一致しない id は依然 UnknownPlaceInSlotError（hallucination 検出維持）。"""
+    pack = _make_pack(places=[_place("ChIJABC")], edges=[])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_morning",
+                place_id="ChIJXYZ",  # case を大文字小文字無視しても一致しない
+                rationale="genuinely hallucinated id",
+            )
+        ]
+    )
+    with pytest.raises(UnknownPlaceInSlotError):
+        assemble_plan(plan_v2, pack)
+
+
+def test_assemble_plan_swaps_ineligible_place_to_same_category_eligible():
+    """改修(iv) hard self-healing: LLM が opening_hours 不適合 place を選んでも
+    assembler が同カテゴリの eligible 代替に自動差し替え（retry 不要、validator 通過）。
+    """
+    # day1_morning は月曜 09:00-11:30
+    p_open = _place("P_open_mon", opening=[(0, "09:00", "20:00")], category=["restaurant"])
+    p_closed = _place(
+        "P_closed_mon", opening=[(1, "09:00", "20:00")], category=["restaurant"]
+    )  # 火曜のみ → 月曜定休
+    pack = _make_pack(places=[p_open, p_closed], edges=[])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_morning",
+                place_id="P_closed_mon",
+                rationale="LLM が誤って月曜定休 place を選んだケース",
+            )
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    activity = result.items[0]
+    assert activity.place_id == "P_open_mon"  # 自動差し替え
+
+
+def test_assemble_plan_swaps_ineligible_to_any_eligible_when_no_same_category():
+    """同カテゴリの eligible 代替が無ければ別カテゴリの eligible でもよい。"""
+    p_other = _place("P_other_cat", opening=[(0, "09:00", "20:00")], category=["museum"])
+    p_closed = _place(
+        "P_closed_mon", opening=[(1, "09:00", "20:00")], category=["restaurant"]
+    )
+    pack = _make_pack(places=[p_other, p_closed], edges=[])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_morning",
+                place_id="P_closed_mon",
+                rationale="月曜定休、同カテゴリ代替なし",
+            )
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    activity = result.items[0]
+    assert activity.place_id == "P_other_cat"
+
+
+def test_assemble_plan_raises_when_no_eligible_alternate_at_all():
+    """pack 全ての place が当該 slot に不適合なら IneligiblePlaceForSlotError で raise。"""
+    p_tue_only_a = _place("P1", opening=[(1, "09:00", "20:00")])  # 火曜のみ
+    p_tue_only_b = _place("P2", opening=[(1, "09:00", "20:00")])
+    pack = _make_pack(places=[p_tue_only_a, p_tue_only_b], edges=[])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_morning",
+                place_id="P1",
+                rationale="all closed Mon",
+            )
+        ]
+    )
+    with pytest.raises(IneligiblePlaceForSlotError):
+        assemble_plan(plan_v2, pack)
+
+
+def test_assemble_plan_raises_when_post_shift_start_outside_opening():
+    """Codex Critical fix: transit shift で start_dt が place の opening close を
+    超えた場合、assembler が `IneligiblePlaceForSlotError` を raise して retry に
+    委譲する（旧仕様は assembler が黙って通し、validator で OUTSIDE_OPENING_HOURS
+    を catch していた）。
+    """
+    # day1_morning は月曜 09:00-11:30
+    # P_prev: 月曜 09:00-22:00、prev_end_dt = 11:30
+    p_prev = _place("P_prev", opening=[(0, "09:00", "22:00")], category=["restaurant"])
+    # P_target: 月曜 11:00-12:30 のみ。lunch slot 12:00-13:30 と重なるが close=12:30 でタイト
+    p_target = _place("P_target", opening=[(0, "11:00", "12:30")], category=["restaurant"])
+    # 代替: 月曜 11:00-22:00 で post-shift も OK
+    p_alt = _place("P_alt", opening=[(0, "11:00", "22:00")], category=["restaurant"])
+    # 90 分の長距離 transit で start_dt=12:00 → 13:00 にシフト → P_target close=12:30 を過ぎる
+    edges = [
+        TransitEdge(
+            from_place_id="P_prev",
+            to_place_id="P_target",
+            mode="train",
+            route_summary="long",
+            duration_min=90,
+            fare_jpy=400,
+            candidate_departures=["09:00"],
+        ),
+        TransitEdge(
+            from_place_id="P_prev",
+            to_place_id="P_alt",
+            mode="train",
+            route_summary="long",
+            duration_min=90,
+            fare_jpy=400,
+            candidate_departures=["09:00"],
+        ),
+    ]
+    pack = _make_pack(places=[p_prev, p_target, p_alt], edges=edges)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_prev", rationale="post-shift test prev"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_target", rationale="post-shift breaks opening"),
+        ]
+    )
+    # post-shift で P_target は opening close 超え → raise
+    with pytest.raises(IneligiblePlaceForSlotError):
+        assemble_plan(plan_v2, pack)
+
+
+def test_assemble_plan_rejects_ambiguous_case_insensitive_match():
+    """Codex Major fix: pack 内に lower-case で衝突する id が複数ある場合、
+    case-insensitive 救済は誤った canonical 化のリスクがある。曖昧一致は安全のため
+    UnknownPlaceInSlotError で fail-fast させる（黙って先勝ちで上書きしない）。
+    """
+    p_a = _place("ChIJabc", name="A")
+    p_b = _place("CHIJABC", name="B")  # lower すると ChIJabc と衝突
+    pack = _make_pack(places=[p_a, p_b], edges=[])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_morning",
+                place_id="chijabc",  # 大文字小文字無視で 2 件一致 → ambiguous
+                rationale="ambiguous case match",
             )
         ]
     )
@@ -369,15 +662,18 @@ def test_assemble_plan_transit_departure_time_picks_from_candidate_departures():
     assert transit.transit_ref.departure_time == "12:00"
 
 
-def test_assemble_plan_transit_departure_time_fallbacks_to_max_when_all_earlier():
-    """全 candidate_departures が start_dt より前なら、validator に弾かせる想定で最遅を返す。"""
+def test_assemble_plan_transit_departure_raises_when_all_candidates_before_start():
+    """Codex Major fix: 全 candidate_departures が start_dt より前なら
+    `NoFeasibleTransitError` を raise（過去出発時刻を返す max() fallback は
+    意味的に誤った plan になるため廃止、retry 経路に委譲）。
+    """
     p_a = _place("P_A", category=["point_of_interest"])
     p_b = _place("P_B", category=["point_of_interest"])
     edge_ab = TransitEdge(
         from_place_id="P_A",
         to_place_id="P_B",
         mode="train",
-        route_summary="fallback テスト",
+        route_summary="fallback raise テスト",
         duration_min=20,
         fare_jpy=500,
         candidate_departures=["06:00", "07:00"],  # 全て morning 終了前
@@ -389,11 +685,8 @@ def test_assemble_plan_transit_departure_time_fallbacks_to_max_when_all_earlier(
             LlmSlotAssignment(slot_id="day1_lunch", place_id="P_B", rationale="departure fallback"),
         ]
     )
-    result = assemble_plan(plan_v2, pack)
-    transit = result.items[1]
-    assert transit.transit_ref is not None
-    # 全候補が prev_end_dt より前なので、最遅 "07:00" を採用（validator で時系列エラーになる想定）
-    assert transit.transit_ref.departure_time == "07:00"
+    with pytest.raises(NoFeasibleTransitError):
+        assemble_plan(plan_v2, pack)
 
 
 def test_assemble_plan_alternate_selection_avoids_self_loop():

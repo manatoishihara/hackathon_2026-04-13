@@ -10,6 +10,7 @@ transit_ref / cost_jpy / cost_confidence）をサーバ側で決定論的に埋�
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Iterator
@@ -19,6 +20,8 @@ from ..evidence.pack import EvidencePack, OpeningHoursSlot, PlacePoint, TransitE
 from .schema import LlmGeneratedPlan, LlmGeneratedPlanV2, LlmPlanItem, LlmTransitRef
 
 JST = ZoneInfo("Asia/Tokyo")
+
+logger = logging.getLogger(__name__)
 
 
 # ==============================
@@ -124,6 +127,11 @@ class NoFeasibleTransitError(AssemblyError):
     """2 slot 間の transit を transit_matrix から取得できず、代替選定も尽きた。"""
 
 
+class IneligiblePlaceForSlotError(AssemblyError):
+    """LLM が slot に割当てた place が opening_hours 不適合で、pack に eligible な代替も無い。
+    Phase 1.3e (iv) hard self-healing 用。validator の OUTSIDE_OPENING_HOURS にマップされる。"""
+
+
 # ==============================
 # 本体: assemble
 # ==============================
@@ -161,6 +169,17 @@ def assemble_plan(
     ordered.sort(key=lambda t: _slot_order_key(t[0]["slot_id"]))
 
     places_by_id = {p.place_id: p for p in pack.places}
+    # case-insensitive fallback 用（Phase 1.3e run 7 救済、gpt-4o-mini が
+    # 大文字小文字違いで place_id を出すケース対応）。
+    # 曖昧一致（lower で複数 place_id が衝突）は誤 canonical 化リスクなので
+    # ambiguous マークして救済から除外する（衝突 lower → None で記録）。
+    places_by_id_lower: dict[str, PlacePoint | None] = {}
+    for p in pack.places:
+        key = p.place_id.lower()
+        if key in places_by_id_lower:
+            places_by_id_lower[key] = None  # ambiguous → 救済禁止
+        else:
+            places_by_id_lower[key] = p
 
     items: list[LlmPlanItem] = []
     order_index = 0
@@ -169,13 +188,60 @@ def assemble_plan(
     prev_entry: dict | None = None
     for slot_meta, place_id, rationale in ordered:
         if place_id not in places_by_id:
-            raise UnknownPlaceInSlotError(
-                f"LLM assigned unknown place_id {place_id!r} to slot {slot_meta['slot_id']!r}"
-            )
+            # case-insensitive で **一意** に一致するなら canonical id に正規化（救済）。
+            # ambiguous（lower で複数衝突）は誤 canonical 化リスクなので raise
+            canonical = places_by_id_lower.get(place_id.lower())
+            if canonical is not None:
+                logger.warning(
+                    "LLM produced case-mismatched place_id %r; resolved to canonical %r (slot=%s)",
+                    place_id,
+                    canonical.place_id,
+                    slot_meta["slot_id"],
+                )
+                place_id = canonical.place_id
+            else:
+                # canonical is None: 厳密一致なし、かつ case-insensitive で 0 件 or ambiguous
+                raise UnknownPlaceInSlotError(
+                    f"LLM assigned unknown place_id {place_id!r} to slot {slot_meta['slot_id']!r}"
+                )
 
         day_index = _day_index_from_slot_id(slot_meta["slot_id"])
         slot_date = start_date + timedelta(days=day_index - 1)
         place = places_by_id[place_id]
+
+        # Phase 1.3e (iv) hard self-healing: LLM が opening_hours 不適合 place を
+        # 選んだ場合、assembler が pack 内の eligible 代替に自動差し替え（同カテゴリ優先）。
+        # eligible_for_slots を per-place で渡しているので LLM は本来この slot に充てるべき
+        # でないが、soft hint を無視するケースを救済する（validator で OUTSIDE_OPENING_HOURS
+        # を出して retry に頼るより自動修復が早い）。
+        if not is_place_eligible_for_slot(
+            place,
+            slot_start_hhmm=slot_meta["start_hhmm"],
+            slot_end_hhmm=slot_meta["end_hhmm"],
+            date_=slot_date,
+        ):
+            alternate = _find_eligible_alternate_for_slot(
+                pack=pack,
+                target_place=place,
+                slot_meta=slot_meta,
+                slot_date=slot_date,
+                prev_place_id=(prev_entry["place"].place_id if prev_entry else None),
+            )
+            if alternate is None:
+                raise IneligiblePlaceForSlotError(
+                    f"Place {place_id!r} is not eligible for slot {slot_meta['slot_id']!r} "
+                    f"(opening_hours mismatch on {slot_date}); "
+                    f"no eligible alternate place in pack"
+                )
+            logger.warning(
+                "LLM picked ineligible place %r for slot %r; swapped to %r (category=%s)",
+                place_id,
+                slot_meta["slot_id"],
+                alternate.place_id,
+                alternate.category[0] if alternate.category else None,
+            )
+            place = alternate
+            place_id = place.place_id
 
         # opening_hours に収まる範囲に時刻を調整（不適合は slot 時間帯に収められなければ skip せず強行、
         # validator で拾う。将来は代替 place 選定に回す）
@@ -192,11 +258,13 @@ def assemble_plan(
             prev_end_dt: datetime = prev_entry["end_dt"]
             edge = _lookup_transit_edge(prev_place.place_id, place_id, pack.transit_matrix)
             if edge is None:
-                # 代替選定: 同カテゴリ近接 place に差し替え（設計書 §「代替選定ロジック」）
+                # 代替選定: 同カテゴリ近接 + slot 適合 place に差し替え（設計書 §「代替選定ロジック」）
                 alternate = _find_alternate_place(
                     pack=pack,
                     from_place_id=prev_place.place_id,
                     target_place=place,
+                    slot_meta=slot_meta,
+                    slot_date=slot_date,
                 )
                 if alternate is None:
                     raise NoFeasibleTransitError(
@@ -224,6 +292,15 @@ def assemble_plan(
                 shift = transit_end - start_dt
                 start_dt = transit_end
                 end_dt = end_dt + shift
+            # Codex Critical fix: post-shift で start_dt が place の opening close を
+            # 超えるケースを assembler 側で raise する。validator が後段で catch する
+            # 経路は retry ロジック上不安定（issue 単位で LLM 解釈が散漫になる）
+            if not is_place_open_at_dt(place, start_dt):
+                raise IneligiblePlaceForSlotError(
+                    f"Place {place_id!r} closed at post-shift start "
+                    f"{start_dt.strftime('%Y-%m-%d %H:%M')} (transit shift "
+                    f"moved start past opening_hours close)"
+                )
             items.append(
                 _build_transit_item(
                     order_index=order_index,
@@ -277,6 +354,79 @@ def _day_index_from_slot_id(slot_id: str) -> int:
         except ValueError:
             return 1
     return 1
+
+
+def is_place_open_at_dt(place: PlacePoint, dt: datetime) -> bool:
+    """Place が指定 datetime に営業中か判定。validator の `_check_opening_hours` と
+    完全整合（閉区間 `open <= hhmm <= close`）。
+
+    transit shift 後の post-shift opening_hours check に使う（Codex Critical fix）。
+    """
+    dow = dt.weekday()
+    if dow in place.opening_hours_unknown_days or not place.opening_hours:
+        return True
+    hhmm = dt.strftime("%H:%M")
+    day_slots = [s for s in place.opening_hours if s.day_of_week == dow]
+    if not day_slots:
+        return False
+    return any(s.open_hhmm <= hhmm <= s.close_hhmm for s in day_slots)
+
+
+def is_place_eligible_for_slot(
+    place: PlacePoint,
+    *,
+    slot_start_hhmm: str,
+    slot_end_hhmm: str,
+    date_: date,
+) -> bool:
+    """Place が指定 slot の時間帯 × 曜日に営業しているか判定（pure）。
+
+    LLM プロンプトの per-place `eligible_for_slots` 構築用。
+    `_fit_to_opening_hours` / validator (`_check_opening_hours`) と整合した判定:
+
+    - opening_hours が空 → 検証スキップ → True 扱い（情報不足、reject しない）
+    - opening_hours_unknown_days に当該曜日含む → 検証スキップ → True
+    - 当該曜日に opening 枠が無い → 定休日 → False
+    - 当該曜日 opening 枠と slot 時間帯に **半開区間で重なり > 0** → True
+      （重なり = open_hhmm < slot_end_hhmm AND slot_start_hhmm < close_hhmm）
+    """
+    dow = date_.weekday()
+    if dow in place.opening_hours_unknown_days or not place.opening_hours:
+        return True
+    day_slots = [s for s in place.opening_hours if s.day_of_week == dow]
+    if not day_slots:
+        return False  # 定休日
+    return any(
+        s.open_hhmm < slot_end_hhmm and slot_start_hhmm < s.close_hhmm
+        for s in day_slots
+    )
+
+
+def compute_eligible_slot_ids_for_place(
+    place: PlacePoint,
+    *,
+    slot_catalog: list[dict],
+    base_date: date,
+) -> list[str]:
+    """Place に対して slot_catalog のうち eligible な slot_id 配列を返す。
+
+    Phase 1.3e (iv) per-slot tailored places: LLM プロンプトに各 place の
+    `eligible_for_slots` フィールドを付与するための補助。
+    `slot_id` は `dayN_<key>` 形式で N から日付オフセットを計算し
+    `is_place_eligible_for_slot` で判定する。
+    """
+    eligible: list[str] = []
+    for c in slot_catalog:
+        day_index = _day_index_from_slot_id(c["slot_id"])
+        slot_date = base_date + timedelta(days=day_index - 1)
+        if is_place_eligible_for_slot(
+            place,
+            slot_start_hhmm=c["start_hhmm"],
+            slot_end_hhmm=c["end_hhmm"],
+            date_=slot_date,
+        ):
+            eligible.append(c["slot_id"])
+    return eligible
 
 
 def _fit_to_opening_hours(
@@ -338,11 +488,82 @@ def _lookup_transit_edge(
     return None
 
 
+def _find_eligible_alternate_for_slot(
+    *,
+    pack: EvidencePack,
+    target_place: PlacePoint,
+    slot_meta: dict,
+    slot_date: date,
+    prev_place_id: str | None = None,
+) -> PlacePoint | None:
+    """Phase 1.3e (iv) hard self-healing 用: opening_hours 不適合 place の代替選定。
+
+    優先順位:
+      1. 同 `category[0]` を持ち、かつ slot に eligible + (prev から transit 到達可能) な place のうち rating 最高
+      2. category 共通集合 + 上記同条件のうち rating 最高
+      3. 任意の上記同条件 place のうち rating 最高
+      4. 見つからなければ None
+    target_place 自身は常に除外。
+
+    Codex Major fix: `prev_place_id` が渡された場合、transit 到達可能性も必須条件に。
+    これがないと「opening は OK だが transit 不能」の代替を選んで後段で
+    `NoFeasibleTransitError` を引き起こすケースがあった。最初の slot
+    （prev_entry None）では `prev_place_id=None` で transit check をスキップ。
+    """
+    reachable_ids: set[str] | None = None
+    if prev_place_id is not None:
+        reachable_ids = {
+            e.to_place_id
+            for e in pack.transit_matrix
+            if e.from_place_id == prev_place_id
+        }
+    candidates: list[PlacePoint] = []
+    for p in pack.places:
+        if p.place_id == target_place.place_id:
+            continue
+        if reachable_ids is not None and p.place_id not in reachable_ids:
+            continue
+        if not is_place_eligible_for_slot(
+            p,
+            slot_start_hhmm=slot_meta["start_hhmm"],
+            slot_end_hhmm=slot_meta["end_hhmm"],
+            date_=slot_date,
+        ):
+            continue
+        candidates.append(p)
+    if not candidates:
+        return None
+
+    target_primary = target_place.category[0] if target_place.category else None
+    target_categories = set(target_place.category)
+
+    def _sort_key(p: PlacePoint) -> tuple[int, float]:
+        # rating tie 安定化のため id 辞書順含めるが、Tuple 比較で rating 降順を優先
+        rating = p.rating if p.rating is not None else 0.0
+        return (-rating, 0)  # 降順
+
+    # tier 1: 同 category[0]
+    tier1 = [
+        p for p in candidates
+        if p.category and target_primary is not None and p.category[0] == target_primary
+    ]
+    if tier1:
+        return min(tier1, key=lambda p: (-(p.rating or 0.0), p.place_id))
+    # tier 2: category 共通集合
+    tier2 = [p for p in candidates if set(p.category) & target_categories]
+    if tier2:
+        return min(tier2, key=lambda p: (-(p.rating or 0.0), p.place_id))
+    # tier 3: 任意 eligible
+    return min(candidates, key=lambda p: (-(p.rating or 0.0), p.place_id))
+
+
 def _find_alternate_place(
     *,
     pack: EvidencePack,
     from_place_id: str,
     target_place: PlacePoint,
+    slot_meta: dict,
+    slot_date: date,
 ) -> PlacePoint | None:
     """transit 不成立時の代替 place 選定（設計書 §「代替選定ロジック」step 1-2）。
 
@@ -374,6 +595,17 @@ def _find_alternate_place(
         if p.place_id not in reachable_ids:
             continue
         if target_categories and not target_categories.intersection(p.category):
+            continue
+        # Phase 1.3e bug fix (run 22 で発見): transit 代替も slot の opening_hours
+        # に適合している必要がある。これが抜けていたため transit edge 不在で同
+        # category の月曜定休 place 等が選ばれ、validator で OUTSIDE_OPENING_HOURS
+        # を catch されるケースが残っていた
+        if not is_place_eligible_for_slot(
+            p,
+            slot_start_hhmm=slot_meta["start_hhmm"],
+            slot_end_hhmm=slot_meta["end_hhmm"],
+            date_=slot_date,
+        ):
             continue
         candidates.append(p)
     if not candidates:
@@ -419,18 +651,24 @@ def _build_transit_item(
 def _pick_departure_time(edge: TransitEdge, start_dt: datetime) -> str:
     """`edge.candidate_departures` から最適な出発時刻を選ぶ。
 
-    規則:
-      1. start_dt の HH:mm（JST）**以降** で **最早** の候補を優先
-      2. 全候補が start_dt より前なら **最遅** の候補を採択
-         （「過去の出発時刻で乗る」は validator 的に OK だが、現実の運行には乗れない点は別問題）
-      3. 空リストは ClientTransitEdge の min_length=1 で禁止なので到達しない
+    規則（Codex Major fix 後）:
+      1. start_dt の HH:mm（JST）**以降** で **最早** の候補を返す
+      2. 全候補が start_dt より前なら `NoFeasibleTransitError` を raise（「過去の電車に乗る」
+         意味的に誤った plan を出さないため。validator は順序を見ないので assembler 側で
+         弾く）。retry に伝わって LLM が別 slot 配分を出す経路で解消する想定
+      3. 空リストは `ClientTransitEdge.min_length=1` で禁止なので到達しない
     """
     start_hhmm = start_dt.astimezone(JST).strftime("%H:%M")
     candidates = edge.candidate_departures
     eligible = [d for d in candidates if d >= start_hhmm]
     if eligible:
         return min(eligible)
-    return max(candidates)
+    raise NoFeasibleTransitError(
+        f"All candidate_departures of edge "
+        f"{edge.from_place_id!r}->{edge.to_place_id!r} are before "
+        f"required start_hhmm={start_hhmm!r}; "
+        f"candidates={candidates}"
+    )
 
 
 def _compose_title(item_type: str, place: PlacePoint) -> str:

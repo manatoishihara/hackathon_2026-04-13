@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 from ..evidence.pack import EvidencePack
 from .assembly import (
     AssemblyError,
+    IneligiblePlaceForSlotError,
     NoFeasibleTransitError,
     UnknownPlaceInSlotError,
     UnknownSlotIdError,
@@ -46,8 +47,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PRIMARY_MODEL = "gpt-4o"
-DEFAULT_FALLBACK_MODEL = "gpt-4o-mini"
+DEFAULT_PRIMARY_MODEL = "gpt-4.1"
+DEFAULT_FALLBACK_MODEL = "gpt-4.1-mini"
 DEFAULT_PER_CALL_TIMEOUT_SEC = 35.0
 DEFAULT_GLOBAL_DEADLINE_SEC = 150.0
 DEFAULT_MAX_PRIMARY_ATTEMPTS = 3  # attempt 1-3
@@ -62,6 +63,8 @@ def _assembly_error_to_issue_kind(err: AssemblyError) -> IssueKind:
     """v2 assembly の例外を、既存 validator の IssueKind にマップして retry prompt に注入可能にする。"""
     if isinstance(err, UnknownPlaceInSlotError):
         return IssueKind.UNKNOWN_PLACE_ID
+    if isinstance(err, IneligiblePlaceForSlotError):
+        return IssueKind.OUTSIDE_OPENING_HOURS
     if isinstance(err, NoFeasibleTransitError):
         return IssueKind.UNKNOWN_TRANSIT_EDGE
     if isinstance(err, UnknownSlotIdError):
