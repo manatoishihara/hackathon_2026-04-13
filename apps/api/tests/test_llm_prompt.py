@@ -162,6 +162,34 @@ def test_build_user_prompt_omits_server_only_fields(sample_pack):
     assert "relevance_tags" not in prompt
 
 
+def test_build_user_prompt_v2_strips_transit_edge_to_minimal(sample_pack):
+    """Phase 1.3e β: v2 は transit edge を `{from, to}` のみに縮小（LCaMO 介入カタログ縮小）。
+
+    v2 の LLM は system prompt rule 7 で transit_matrix を「到達可能ペア」としてしか使わない。
+    mode/route_summary/duration_min/fare_jpy/candidate_departures は assembler が
+    元 TransitEdge から決定論で埋めるため、LLM 表現に含めるのは prompt token の浪費。
+    """
+    prompt = build_user_prompt(sample_pack, previous_issues=[], version="v2.0.0")
+    # edge 補助情報は v2 prompt から除外
+    assert "徒歩" not in prompt  # route_summary
+    assert "duration_min" not in prompt
+    assert "candidate_departures" not in prompt
+    assert "fare_jpy" not in prompt
+    assert '"mode"' not in prompt
+    # ただし from/to のペアは残る（到達可能性判断に必要）
+    assert "P_hakone_jinja" in prompt
+
+
+def test_build_user_prompt_v1_keeps_full_transit_edge(sample_pack):
+    """v1 regression 防止: v1 は LLM が transit_ref.departure_time を直接生成するため、
+    candidate_departures など full edge 情報を保持する必要がある。
+    """
+    prompt = build_user_prompt(sample_pack, previous_issues=[], version="v1.0.0")
+    assert "徒歩" in prompt  # route_summary 保持
+    assert "candidate_departures" in prompt
+    assert "duration_min" in prompt
+
+
 def test_count_prompt_tokens_returns_int(sample_pack):
     system = build_system_prompt()
     user = build_user_prompt(sample_pack, previous_issues=[])
