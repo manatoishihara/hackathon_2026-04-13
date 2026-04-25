@@ -1,87 +1,69 @@
-import Link from "next/link";
 import {
-  ArrowRight,
   Calendar,
   MapTrifold,
   ShieldCheck,
 } from "@phosphor-icons/react/dist/ssr";
+import {
+  FeatureSection,
+  type Feature,
+} from "@/components/landing/FeatureSection";
+import { FloatingCTA } from "@/components/landing/FloatingCTA";
+import { HeroSection } from "@/components/landing/HeroSection";
+
+const features: Feature[] = [
+  {
+    number: "01",
+    label: "EVIDENCE-BASED PLACES",
+    title: "実在するスポット だけを提案する",
+    description:
+      "Google Places で検証した店や観光地のみ提案。LLM が架空の店名を作り出す心配はありません。",
+    icon: <MapTrifold size={88} weight="duotone" />,
+  },
+  {
+    number: "02",
+    label: "TIME-AWARE PLAN",
+    title: "時間的に成立する 旅程を組む",
+    description:
+      "Google Maps の transit 情報で移動時間を計算し、営業時間を踏まえてアイテムを並べます。",
+    icon: <Calendar size={88} weight="duotone" />,
+  },
+  {
+    number: "03",
+    label: "GROUNDED BUDGET",
+    title: "根拠ある予算を 添える",
+    description:
+      "宿泊・食事・観光・交通ごとに、推定値か検証値かを Evidence バッジで明示します。",
+    icon: <ShieldCheck size={88} weight="duotone" />,
+  },
+];
 
 /**
- * ランディング (01)。主役 CTA は「旅を計画する」ボタン。
- * 下にサブとして 3 軸カード（実在スポット / 時間的に成立 / 根拠ある予算）。
+ * ランディング (01)。エクシブ公式サイト風の "縦スクロールでセクションが切り替わる" 構成。
+ * - Hero: 中央配置で Routeful + キャッチ + scroll down
+ * - Feature 01〜03: 特徴を 1 セクション 1 つで段階的開示
+ * - FloatingCTA: 「旅を計画する」を画面右下に固定、スクロールしても位置不動
  *
- * デザイナーは className / レイアウト / Motion を触ってよい。
- * - AI グラデ禁止・汎用ヒーロー禁止（frontend-design.md 参照）
- * - CTA が画面の主役になっているメリハリを維持
+ * 上部の "ROUTEFUL" は absolute 配置（fixed ではない）。スクロールすれば消える。
+ * Home は RSC、アニメ部分のみ landing/* で client 分離。
  */
 export default function Home() {
   return (
-    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-12 px-6 py-16">
-      <section className="flex flex-col gap-6">
-        <p className="text-sm font-medium tracking-widest text-[color:var(--color-primary)]">
+    <main className="relative bg-[color:var(--color-background)]">
+      <header className="absolute left-0 right-0 top-0 z-40 mx-auto flex max-w-6xl items-baseline justify-between px-6 pt-8">
+        <span className="font-heading text-base font-medium tracking-[0.28em] text-[color:var(--color-text-primary)]">
           ROUTEFUL
-        </p>
-        <h1 className="max-w-3xl text-4xl font-bold leading-tight text-[color:var(--color-text-primary)] sm:text-5xl">
-          みんなで集まって 1 画面を囲む、
-          <br className="hidden sm:block" />
-          evidence-based な旅行計画。
-        </h1>
-        <p className="max-w-2xl text-base leading-relaxed text-[color:var(--color-text-secondary)]">
-          LLM の意味理解と外部 API の構造化データを組み合わせて、
-          <strong className="font-medium text-[color:var(--color-text-primary)]">
-            実在し時間的に成立するプラン
-          </strong>
-          だけを提案します。対面で 2〜5 人で使う想定です。
-        </p>
-        <div className="flex flex-wrap items-center gap-3">
-          <Link
-            href="/plan/new"
-            className="inline-flex items-center gap-2 rounded-md bg-[color:var(--color-primary)] px-6 py-3 text-base font-medium text-white shadow-sm transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-primary)]"
-          >
-            旅を計画する
-            <ArrowRight size={18} weight="bold" />
-          </Link>
-        </div>
-      </section>
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <FeatureCard
-          icon={<MapTrifold size={24} weight="duotone" />}
-          title="実在するスポットだけ"
-          description="Google Places で検証した店や観光地のみ提案。架空の名前は出しません。"
-        />
-        <FeatureCard
-          icon={<Calendar size={24} weight="duotone" />}
-          title="時間的に成立する"
-          description="Google Maps の transit 情報で移動時間を計算。営業時間内か確認した上で組み立てます。"
-        />
-        <FeatureCard
-          icon={<ShieldCheck size={24} weight="duotone" />}
-          title="根拠ある予算"
-          description="宿泊・食事・観光・交通のカテゴリごとに、推定値か検証値かを Evidence バッジで明示。"
-        />
-      </section>
-    </main>
-  );
-}
+        </span>
+        <span className="hidden text-xs italic text-[color:var(--color-text-secondary)] sm:inline">
+          — for face-to-face planning
+        </span>
+      </header>
 
-function FeatureCard({
-  icon,
-  title,
-  description,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-}) {
-  return (
-    <article className="flex flex-col gap-3 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] p-5">
-      <div className="text-[color:var(--color-primary)]">{icon}</div>
-      <h2 className="text-base font-semibold text-[color:var(--color-text-primary)]">
-        {title}
-      </h2>
-      <p className="text-sm leading-relaxed text-[color:var(--color-text-secondary)]">
-        {description}
-      </p>
-    </article>
+      <HeroSection />
+      {features.map((feature) => (
+        <FeatureSection key={feature.number} feature={feature} />
+      ))}
+
+      <FloatingCTA />
+    </main>
   );
 }
