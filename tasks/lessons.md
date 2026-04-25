@@ -246,6 +246,16 @@
   - CI で走らせる場合は IP 当たりの rate limit を気にせず済むよう **ローカル Supabase（`supabase start`）を用意**するか、テスト用の別プロジェクトを切る運用を検討
 - → 2 回目が来たら `.claude/rules/testing.md` の「integration テスト」節に昇格（今は 1 回目）
 
+## 2026-04-25: setup-guide.md と requirements.txt / app.py が整合しないまま Phase 1.10 直前に来た
+- 問題: Phase 1.10 デプロイ準備のため現状調査したところ、本番が動かない 2 件のコード/設定漏れを発見:
+  - `apps/api/src/app.py` に CORS 設定がゼロ（Vercel→Render は cross-origin で全 fetch がプリフライト段階で blocked）
+  - `apps/api/requirements.txt` に `gunicorn` が無いが、`docs/setup-guide.md` の Render start command が `gunicorn 'src.app:create_app()'` を前提にしている
+- 原因: Phase 0〜1.9 はすべてローカル開発（`flask run` + `next dev` 同一 origin）で完結したので CORS 不要 + `flask` の dev server で動いてしまっていた。setup-guide.md は本番運用を前提に書いたものの、実コードは dev 動作に合わせて書いたまま放置
+- ルール:
+  - **デプロイ docs を書いたら、その docs に登場する依存（gunicorn / CORS / flask-cors 等）はその場で `requirements.txt` と起動コードに反映する**。docs 先行・実装後追いの時間差が長期化するとデプロイ直前に判明する
+  - 本番想定の cross-origin 通信が出てくる時点（フロントが Render URL を叩く設計に決まった時点）で CORS は仕様書だけでなくコードに入れる。ローカルで動いてるからといって後回しにしない
+- → 2 回目が来たら `.claude/rules/api-rules.md` の「環境変数の扱い」節の隣に「本番運用前提のミドルウェア（CORS / gunicorn / SecureHeaders 等）はローカル開発時から組み込む」を追加（今は 1 回目）
+
 ## 2026-04-25: docs/data-model.md の shared_plans VIEW がカラム名衝突で実行不能だった
 - 問題: `supabase/migrations/` を起こそうとして既存 DDL を読み直したら、`CREATE VIEW shared_plans AS SELECT p.*, pa.*, pi.* FROM plans p LEFT JOIN participants pa ... LEFT JOIN plan_items pi ...` が書かれていた。これは p.id / pa.id / pi.id など同名カラムが複数あるため PostgreSQL で `duplicate column name` エラーになり実行不能。Phase 0.2 で本番に適用した際に VIEW セクションを skip していたため見過ごされていた
 - 原因: DDL を docs に書いた時点で実行確認していなかった。Phase 1.9 共有 API の実装方針が「view 経由」から「Flask + service_role 経由」に変わった後も、docs の VIEW 定義を直し忘れた

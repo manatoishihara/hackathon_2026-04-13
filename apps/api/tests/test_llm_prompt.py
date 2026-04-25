@@ -87,12 +87,13 @@ def sample_pack() -> EvidencePack:
 
 
 def test_build_system_prompt_default_version():
+    """default = v2.0.0 (Phase 1.10 で切替) の system prompt が読める。"""
     prompt = build_system_prompt()
     assert "旅行プランナー" in prompt
     assert "絶対ルール" in prompt
     assert "architecture" not in prompt.lower()  # 余計なもの混入なし
-    # 絶対ルール 11 項目が含まれる
-    for i in range(1, 12):
+    # v2 の絶対ルールは 7 項目
+    for i in range(1, 8):
         assert f"{i}." in prompt
 
 
@@ -199,7 +200,8 @@ def test_count_prompt_tokens_returns_int(sample_pack):
 
 
 def test_load_prompt_version_default_constant():
-    assert PROMPT_VERSION_DEFAULT == "v1.0.0"
+    # Phase 1.10 で v2 (LCaMO 構造化版、hallucination 0% / success 100%) をデフォルトに
+    assert PROMPT_VERSION_DEFAULT == "v2.0.0"
 
 
 def test_load_prompt_version_reads_env(monkeypatch):
@@ -209,4 +211,4 @@ def test_load_prompt_version_reads_env(monkeypatch):
 
 def test_load_prompt_version_falls_back_to_default(monkeypatch):
     monkeypatch.delenv("PROMPT_VERSION", raising=False)
-    assert load_prompt_version() == "v1.0.0"
+    assert load_prompt_version() == "v2.0.0"

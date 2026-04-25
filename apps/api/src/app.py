@@ -1,13 +1,30 @@
 from __future__ import annotations
 
+import os
+
 from dotenv import find_dotenv, load_dotenv
 from flask import Flask, jsonify
+from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
 # リポジトリ root の .env → .env.local の順に読み込む（.env.local が優先）。
 # 本番（Render 等）では環境変数が直接注入されるので override=False で上書きしない。
 load_dotenv(find_dotenv(".env", usecwd=True), override=False)
 load_dotenv(find_dotenv(".env.local", usecwd=True), override=True)
+
+
+_DEFAULT_CORS_ORIGINS = ["http://localhost:3000"]
+
+
+def _resolve_cors_origins() -> list[str]:
+    """`CORS_ALLOWED_ORIGINS`(カンマ区切り) を読む。未設定時はローカル開発用デフォルト。
+
+    本番（Render）では Vercel 本番ドメインを `CORS_ALLOWED_ORIGINS` に設定する。
+    """
+    raw = os.environ.get("CORS_ALLOWED_ORIGINS")
+    if not raw:
+        return list(_DEFAULT_CORS_ORIGINS)
+    return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 def create_app() -> Flask:
@@ -17,6 +34,17 @@ def create_app() -> Flask:
     `.venv/bin/python -m flask --app src.app:create_app run` の両方から参照される。
     """
     app = Flask(__name__)
+
+    # CORS: フロント (Vercel) → バック (Render) は cross-origin。`Authorization` ヘッダ
+    # を送るためプリフライト OPTIONS が走る。allowlist 指定で credentials は使わない。
+    origins = _resolve_cors_origins()
+    CORS(
+        app,
+        resources={r"/*": {"origins": origins}},
+        allow_headers=["Authorization", "Content-Type"],
+        methods=["GET", "POST", "OPTIONS"],
+        max_age=600,
+    )
 
     # 巨大ペイロード DoS の一次防衛。Flask 既定値は None なので直接代入で確実にかける
     # （setdefault では既定値 None を上書きしない）。transit_matrix 最大 200 件 +
