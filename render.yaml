@@ -19,7 +19,7 @@ services:
     region: singapore # JP からの latency 最小（oregon との二択）
     rootDir: apps/api
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn 'src.app:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180 --access-logfile -
+    startCommand: gunicorn 'src.app:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180 --keep-alive 5 --worker-connections 100 --access-logfile -
     healthCheckPath: /healthz
     autoDeploy: true # main / develop push で自動デプロイ
     envVars:
