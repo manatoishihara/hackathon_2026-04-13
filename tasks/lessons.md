@@ -246,6 +246,23 @@
   - CI で走らせる場合は IP 当たりの rate limit を気にせず済むよう **ローカル Supabase（`supabase start`）を用意**するか、テスト用の別プロジェクトを切る運用を検討
 - → 2 回目が来たら `.claude/rules/testing.md` の「integration テスト」節に昇格（今は 1 回目）
 
+## 2026-04-25 (2回目): domain enum を 3 箇所以上に重複定義すると Codex に必ず指摘される
+- **これは 2回目**。前回（同日 Phase 2.1 backend）で Codex が `_THEME_KEYWORDS` (builder.py) / `_THEME_LABEL_JP` (prompt.py) / `ThemeKey` (schemas) の 3 箇所重複を Minor 5 として指摘し、`apps/api/src/themes.py` に集約した。今回（Phase 2.1 frontend）でも同パターンが `shared-types/ThemeKey` (型) / `planForm.ts/z.enum([...])` (zod 列挙) / `ThemePicker.tsx/THEME_OPTIONS` (UI options) の 3 箇所で再発、Codex に Major 2 として再指摘された
+- 対処: `packages/shared-types/src/index.ts` に **`THEME_KEYS = [...] as const`** + **`THEME_LABELS_JP: Record<ThemeKey, string>`** を runtime + 型の単一情報源として追加。zod は `z.enum(THEME_KEYS)` で参照、UI は `THEME_KEYS.map((k) => ({ key: k, label: THEME_LABELS_JP[k] }))` で options 導出
+- パターンの本質:
+  - **ドメイン列挙（`ThemeKey` / `StartMode` / `ItemType` 等）は backend 側に runtime 定数（`as const` 配列）+ 型を**、frontend 側にも同じ runtime 定数を export して、**zod schema / UI options / Pydantic Literal の参照元を 1 つに**せよ
+  - TypeScript の `as const` は型と runtime の両方に効く優れた集約手段。Python は `Literal[...]` + module 定数で同等を実現
+  - drift 防止のため、双方に「相手と並行管理」コメントを残し、`tests/test_schema_parity.py` で field 整合を見るのと同じ精神で enum 集約も自動化したい（次セッション以降）
+- ルール: **新規ドメイン enum を導入する時は、最初から「runtime 配列 + 型 + 表示ラベル」を集約モジュールに置く**。backend の `apps/api/src/themes.py` パターン or shared-types の `THEME_KEYS` パターンを踏襲
+- → **2回目なので .claude/rules/data-model-sync.md に「ドメイン enum 集約原則」節を追加**する（次セッション）
+
+## 2026-04-25: shared-types に runtime 定数を追加したら必ず `pnpm --filter shared-types build`
+- 問題: `packages/shared-types/src/index.ts` に `export const THEME_KEYS = [...] as const` を追加して即 `pnpm --filter web test` を回したら、`THEME_KEYS is undefined` で全 ThemePicker test が失敗
+- 原因: `packages/shared-types/package.json` の `main: "./dist/index.js"` で **build 済成果物を export** する構成。新規 export を追加しても dist/ を rebuild しないと web 側からは見えない
+- 対処: `pnpm --filter shared-types build` を実行 → 成功
+- ルール: **shared-types に runtime 定数（`export const`）を新規追加 / 改名したら、必ず `pnpm --filter shared-types build` を 1 回走らせてから web 側のテストを回す**。型のみの追加（`export type`）なら TS の path mapping 経由で見えるが、runtime 値は dist 必須
+- → 1回目、次再発したら `.claude/rules/data-model-sync.md` の「shared-types 変更時の手順」節に昇格
+
 ## 2026-04-25: assembler の self-healing が anchor を「救済しすぎる」と test 設計が崩れる
 - 問題: Phase 2.1 anchor mode の `AnchorMissingError` test を「2 slot で transit OTHER→OTHER (self-loop) → 代替探索 → ANCHOR1 が swap される」シナリオで書いたら、assembler が**親切すぎて anchor を再注入**してしまい AnchorMissingError が raise されなかった
 - 原因: Phase 1.3e で実装した `_find_alternate_place` は「同 category + transit reachable + slot eligible」で代替を探す。pack に anchor (ANCHOR1) と OTHER しかない状況で OTHER→OTHER が self-loop で塞がると、唯一の選択肢 ANCHOR1 が swap 候補に上がる。結果: LLM が anchor を無視しても assembler が自動で入れ直す

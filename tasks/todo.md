@@ -394,19 +394,22 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [x] `llm/validator.py` + `generator.py`: `IssueKind.ANCHOR_MISSING` 新設、retry prompt に inject される
 - [x] テスト: 全 299 件 PASS（既存 283 + 新規 16: schema_parity 2 / builder 5 / prompt 4 / assembly 5）
 
-**Frontend 実装完了** (2026-04-25 セッション、`feat/mode-selector-ui` ブランチ、commit 提案待ち):
+**Frontend 実装完了** (2026-04-25 セッション、`feat/mode-selector-ui` ブランチ、Codex レビュー 4 件すべて消化、commit 提案待ち):
 - [x] zod schema を discriminatedUnion("start_mode") に refactor（auto/anchor/theme + ThemeKey 6 値）+ 各 mode の payload schema（test 11 件）
 - [x] `apps/web/src/components/ThemePicker.tsx`: 6 theme chips、aria-pressed で active 表示、同 chip 再クリックで選択解除（test 4 件）
 - [x] `apps/web/src/components/AnchorPicker.tsx`: place_id chips + 入力 + 追加 / 削除（最大 3 件、空白 / duplicate 拒否、3 件で input disabled）（test 7 件）
-- [x] `apps/web/src/components/ModeSelector.tsx`: 3 モード radio（label 形式、active で primary border + ring）（test 3 件）
-- [x] `/plan/new` page.tsx に組み込み: mode 切替時に mode_payload を対応形にリセット、theme 解除で auto に戻す safety
-- [x] テスト: pnpm --filter web test 全 86 件 PASS（既存 61 + 新規 25）、pnpm --filter web build PASS、tsc clean
+- [x] `apps/web/src/components/ModeSelector.tsx`: 3 モード radio（label 形式、active で primary border + ring、role="radiogroup" + aria-labelledby、Codex Minor 4）（test 3 件）
+- [x] `/plan/new` page.tsx に組み込み: mode 切替時に mode_payload を対応形にリセット、theme 解除で auto に戻す safety、`clearErrors("mode_payload")` で旧 mode のエラー残留防止（Codex Minor 3）
+- [x] **theme registry を `packages/shared-types/src/index.ts` に集約**（Codex Major 2）: `THEME_KEYS as const` + `THEME_LABELS_JP`、planForm.ts の z.enum / ThemePicker の options をこれから導出。backend の `apps/api/src/themes.py` と並行管理
+- [x] **`/plan/new` の mode 切替統合テスト** `apps/web/src/app/plan/new/modeSwitch.test.tsx` 新規（Codex Major 1）: 5 件（初期 auto / anchor↔auto / theme↔anchor / theme 解除 safety / mode_payload リセット確認）
+- [x] テスト: pnpm --filter web test 全 91 件 PASS（既存 61 + 新規 30）、pnpm --filter web build PASS、tsc clean
 - [x] AnchorPicker は MVP として手動 place_id 貼付け方式。Maps JS Places Autocomplete UI 統合は polish 課題（ハッカソン提出後）
 
-**Frontend 残課題（次の polish フェーズ）**:
-- [ ] AnchorPicker に Maps JS Places Autocomplete を統合（現状は place_id 直入力のみ）
-- [ ] UI 耐久性: アンカー 3 つで崩れない、theme 6 個 chips が小画面で折り返し（実機確認）
-- [ ] 結合: ローカル `pnpm dev` で 3 モード触れて、各 mode で plan 生成が走ること（実 OpenAI コール、3 回 ~$1）
+**Frontend 残課題（次の polish フェーズ、優先度順）**:
+- [ ] AnchorPicker に Maps JS Places Autocomplete を統合（現状は place_id 直入力のみ、demo UX のため hackathon 当日までに対応推奨）
+- [ ] UI 耐久性: アンカー 3 つで崩れない、theme 6 個 chips が小画面で折り返し（実機確認、メンバー C のデザイン仕上げ範囲）
+- [ ] 結合: ローカル `pnpm dev` または本番 URL で 3 モード触れて、各 mode で plan 生成が走ること（実 OpenAI コール、3 回 ~$1）
+- [ ] (Codex 残 Minor) submit 時の `start_mode/mode_payload` 実引数を直接アサートする統合テスト（次セッション以降の堅牢化、必須ではない）
 
 ### 2.2 予算配分の制約化
 - [ ] テスト: スライダーの配分が LLM プロンプトに数値制約として渡される
