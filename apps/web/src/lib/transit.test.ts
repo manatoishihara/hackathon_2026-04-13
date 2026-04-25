@@ -1,9 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- partial Google Maps の mock 値で `any` キャストが必要 */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  ClientTransitEdge,
-  EvidencePlacesPlaceSummary,
-} from "shared-types";
+import type { EvidencePlacesPlaceSummary } from "shared-types";
 
 // setOptions/importLibrary を差し替えて実 Google API を呼ばない。
 // installMockGoogle が globalThis.google の routes ライブラリ（DirectionsService）を

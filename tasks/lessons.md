@@ -246,6 +246,49 @@
   - CI で走らせる場合は IP 当たりの rate limit を気にせず済むよう **ローカル Supabase（`supabase start`）を用意**するか、テスト用の別プロジェクトを切る運用を検討
 - → 2 回目が来たら `.claude/rules/testing.md` の「integration テスト」節に昇格（今は 1 回目）
 
+## 2026-04-25: pnpm strict isolation + 依存先 package の peer 宣言漏れで Next.js build が `Module not found: zod/v4/core` で失敗
+- 問題: Phase 1.10 Vercel deploy で `apps/web` の `next build --turbopack` が以下のエラーで失敗（ローカル `pnpm --filter web build` でも再現）:
+  ```
+  ./node_modules/.pnpm/@hookform+resolvers@5.2.2_react-hook-form@7.73.1_react@19.1.0_/node_modules/@hookform/resolvers/zod/dist/zod.mjs:1:127
+  Module not found: Can't resolve 'zod/v4/core'
+  ```
+- 真因（2 段重ね）:
+  - **`@hookform/resolvers@5.2.2` のパッケージ仕様バグ**: `peerDependencies` に `react-hook-form` のみ宣言、`zod` を宣言してないのに `./zod` サブエントリで `import * as n from "zod/v4/core"` を実行している
+  - **pnpm の strict isolation**: `.pnpm/<pkg>@<ver>/node_modules/<pkg>` は宣言済 peer だけ symlink される。zod が宣言されてないので `@hookform/resolvers` の nested node_modules には zod が無く、上位 `<root>/node_modules/` にも hoist されてないため Turbopack が解決できない
+- 対処: `<root>/.npmrc` に **`public-hoist-pattern[]=*zod*`** を追加 → `pnpm install` し直し → `<root>/node_modules/zod` が hoist され nested package からも resolution が通る
+- 効果: `pnpm --filter web build` 成功、6 ルート全部 generate 確認、テスト 61/61 PASS（regression なし）
+- ルール:
+  - **pnpm + monorepo + Next.js（特に Turbopack）構成で `Module not found: <subpath>` が出たら、まず依存元 package の `peerDependencies` 宣言を疑え**。issue tracker で similar bug が常に出ているライブラリ（react-hook-form / @hookform/resolvers / @tanstack 系）は要警戒
+  - **fix は `.npmrc` の `public-hoist-pattern[]=*<pkg>*` が最小侵襲**。ただし「自動的に hoist する範囲が増える」副作用があるので、対象は具体的な package 名 prefix で絞る
+  - 同じ問題は `npm` / `yarn classic` では起きない（hoisting が default で甘いため）。pnpm を使う限り宿命
+- → 2 回目が来たら `.claude/rules/frontend-design.md` か `docs/setup-guide.md` の monorepo セクションに昇格（今は 1 回目）
+
+## 2026-04-25: Render Free + Singapore region + render.yaml で /healthz 一発通過、CORS env も即時反映
+- 状況: `feat/deploy-prep` で配置した render.yaml を Render Blueprint に流し込んだだけで、コード追加なしで `https://routeful-api.onrender.com/healthz` が `{"service":"routeful-api","status":"ok"}` を返す状態に到達。手動セットアップ（Settings UI で Build / Start command / Python version を 1 つずつ設定）と比べて圧倒的に速かった
+- 良かった点:
+  - `region: singapore` を選んだら NRT (東京) edge 経由でルーティング、cold start 1 回目 ~0.4s、2 回目 ~0.1s。日本ユーザ向けで oregon より体感速い
+  - `CORS_ALLOWED_ORIGINS=http://localhost:3000` 仮置きで起動 → curl でも `access-control-allow-origin: http://localhost:3000` がエコーバック確認できた。実装と env が一致して production で初動する
+  - Free plan でも `gunicorn --workers 1 --timeout 180` の boot は問題なし。worker メモリ 512MB に収まる
+- 注意点（次セッション以降への申し送り）:
+  - Render Free の **HTTP Request Timeout 設定が UI に出ない**（plan による / UI 改定揺れ）。gunicorn の `--timeout 180` で worker は守られるが、edge proxy 側の上限が不明（推定 30〜100s）。Phase 1.3e で生成 4.4s 平均なので Free でも実用通る見込みだが、502/504 が出たら Starter ($7/mo) 移行
+  - 1 回目は cold start で 30〜60s かかる可能性。本番デモでは事前に warm-up 用 curl を 1 発打つと体感が劇的に良くなる
+- ルール:
+  - **monorepo + 多言語 (Python + TS) のサーバ deploy には render.yaml Blueprint を最優先**せよ。手動 UI セットアップは設定漏れ・再現性なしで他メンバーが困る
+  - region 選択は **JP 向けなら singapore 一択**（実測で oregon より速い、GH Action / OpenAI 米国へのレイテンシは無視できる程度）
+- → 2 回目が来たら `.claude/rules/api-rules.md` の「デプロイ」節に「IaC（render.yaml / vercel.json）優先」を追加（今は 1 回目）
+
+## 2026-04-25: Vercel の Root Directory ピッカーは monorepo の中間ディレクトリを隠す
+- 問題: Phase 1.10 Vercel デプロイで Root Directory に `apps/web` を指定したいのに、Vercel 新 UI のフォルダ選択モーダルに **`apps/` 自体が候補として出てこない**。表示は `hackathon_2026-04-13`（repo root）/ `docs` / `tasks` のみで、`apps`/`packages`/`supabase` が抜け落ち
+- 推測される原因: Vercel の Application Preset 検出が「直下に `package.json` + 認識可能な framework」のディレクトリだけを candidate にしている（apps/ 自体は workspace container で package.json なし、apps/web は次階層）。`docs` / `tasks` が出るのは謎（root のみ表示する別ロジック説あり）
+- 対処:
+  - **Root Directory フィールド横の Edit / 鉛筆アイコンをクリック → 自由テキストで `apps/web` と打つ**のが正攻法
+  - UI に Edit が見当たらないバージョンの場合は **「いったん root で Deploy → 失敗確認 → Settings > General > Root Directory に `apps/web` を入れて Redeploy」**の 2 ステップで回避
+  - Build & Output Settings の Install/Build Command を `cd ../.. && pnpm install` / `cd ../.. && pnpm --filter web build` で override すると Turborepo + pnpm-workspace でも通る（apps/web 単独 install だと shared-types が無く失敗）
+- ルール:
+  - **monorepo を Vercel に乗せる時は Root Directory のフリーテキスト入力 + Install Command override の 2 点を最初から想定せよ**。UI の自動検出に頼ると時間ロス
+  - 同じ罠を踏んだ経験がある人にしか分からない UI なので、deploy 手順 docs（setup-guide.md）に「Root Directory の手入力方法」を明記する
+- → 2 回目が来たら `docs/setup-guide.md` の Vercel 節に「Root Directory のフリーテキスト指定」スクショ + 手順を追加（今は 1 回目）
+
 ## 2026-04-25: validator の semantic check は「allowlist + 接尾辞パターン」の二段で Google Places の細粒度 category を吸収できる
 - 問題: Codex Minor 指摘「item_type vs category 整合性 validator 未実装」を実装する際、Google Places API は `restaurant` だけでなく `japanese_restaurant` / `yakiniku_restaurant` / `taiwanese_restaurant` / `seafood_restaurant` 等の細粒度 category を返す。素朴な `category in {"restaurant", "food", ...}` 厳密一致だと**ほとんどの実 place を mismatch と誤判定**する（Phase 1.3e の `_find_alternate_place` で同じ罠にハマった経験あり = `category[0]` 厳密一致だと candidate 枯渇）
 - 対応: 二段判定で吸収:

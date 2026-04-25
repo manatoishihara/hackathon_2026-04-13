@@ -36,6 +36,16 @@
   - 設計書 + 全 run 詳細 (run 4〜27) + Codex review 全文 + 工夫まとめは @tasks/plans/2026-04-25-structured-plan-assembly.md
 **Phase 1.4〜1.9 骨組み**: ✅ 完了（フロントの配線層、デザイナーへ引き渡し済み）
 
+**Phase 1.10 Render 先行デプロイ**: 🟢 2026-04-25 完了。`https://routeful-api.onrender.com/healthz` が `{"service":"routeful-api","status":"ok"}` を返す状態。Singapore region / NRT edge 経由 / cold start ~0.4s / CORS ヘッダ動作確認済（`access-control-allow-origin: http://localhost:3000` が env から正しく echo back）。次は RLS 42501 解消 → Vercel deploy → CORS_ALLOWED_ORIGINS を Vercel URL に書き換え。
+
+**Phase 1.10 Vercel 設定とビルド修正**: 🟡 2026-04-25 セッションで Vercel ビルド成功まで到達（`pnpm --filter web build` ローカル PASS / Web test 61/61 PASS）、本番 deploy は user push 後に確認。経緯:
+  - Vercel UI Root Directory picker が monorepo 中間 `apps/` を表示しない罠 → Plan B（root deploy → Settings 修正 → Redeploy）で迂回
+  - 設定: Root Directory `apps/web` / Install Command `pnpm install` / Production Branch `develop` を Settings の `Build and Deployment` / `Environments` 配下で個別設定（旧 UI と場所違い）
+  - Production Branch 切替後の Redeploy は元 deploy の branch を継ぐので、新規 deploy トリガーには `develop` への empty commit push が必要だった
+  - **build 失敗 1**: pnpm strict isolation × `@hookform/resolvers@5.2.2` の peer 宣言漏れで `Module not found: zod/v4/core` → `.npmrc` の `public-hoist-pattern[]=*zod*` で解消
+  - **build 失敗 2**: `transit.test.ts` の ESLint `no-explicit-any` 4 件（mock 用の意図的 any）→ file-level `eslint-disable` 1 行で解消
+  - 残: `develop` push → Vercel auto deploy → URL 確定 → Render の `CORS_ALLOWED_ORIGINS` 更新 → Google Maps browser key referrer に Vercel URL 追加 → 本番 E2E 確認
+
 **Phase 1.10 デプロイ準備（コード側）**: ✅ 2026-04-25 セッションで完了（`feat/deploy-prep` ブランチ、API unit 283 件 PASS / Web 61 件 PASS / gunicorn smoke OK）。デプロイ前ブロッカーをまとめて解消:
   - **CORS 追加**: `flask-cors` 導入 + `apps/api/src/app.py` に `_resolve_cors_origins()` 実装。env `CORS_ALLOWED_ORIGINS`(CSV) 読み、未設定時 `http://localhost:3000` のみ。`Authorization` / `Content-Type` 許可、`GET/POST/OPTIONS` 許可。CORS テスト 6 件
   - **gunicorn 追加**: `requirements.txt` に追加、`--workers 1 --timeout 180` で起動 smoke OK
