@@ -1,8 +1,15 @@
 # DB / バックエンド 整理タスク — メンバー B 向け
 
-**前提（2026-04-25 更新）**: Phase 1.3a〜1.3d まで実装完了（LLM 生成 + ハルシネーション検出 + plan_items 保存 + RLS E2E + pg_cron）。
-ただし **Phase 1.3d 実環境検証は未達**（10 回生成でハルシネーション 10%、RLS integration は Supabase anon sign-in rate limit で 2〜3/8 しか通っていない）。
-これらは Manato の TODO に残すが、**DB 担当のタスクは完全に独立して進められる**ので、本資料の DB-1 / DB-4〜6 / DB-7 / DB-8 に集中してほしい。
+**前提（2026-04-25 更新、夜の β 実装後）**: Phase 1.3a〜1.3d まで実装完了 + Phase 1.3e (Structured Plan Assembly, LCaMO 応用) も develop マージ済み（hallucination 構造的 0% 達成、success rate は別軸の残課題）。RLS E2E は rate limit クールダウン後に 8/8 PASS、`test_routes_plans.py` integration の 2/3 のみ RLS 42501 violation で残るが Manato 側で本番 policy drift 解消の SQL Editor 実行で吸収予定。**DB 担当のタスクは完全に独立して進められる**ので、本資料の DB-1 / DB-4〜6 / DB-7 / DB-8 に集中してほしい。
+
+## 着手前の軽い注意点（2026-04-25 夜、Manato 申し送り）
+
+1. **`SITE_BASE_URL` env 追加について**: 本資料 DB-4 で「`apps/api/src/config.py` に追加」と書いているが、**現状 `apps/api/src/config.py` は未作成**（既存コードは `os.environ.get(...)` を各ファイルで直接読む構成）。DB 担当の選択肢:
+   - (a) `share_routes.py` 内で直接 `os.environ.get("SITE_BASE_URL")` を読む（既存パターン踏襲、最小変更）
+   - (b) `apps/api/src/config.py` を新規作成して env 集約をスタートさせる（`.claude/rules/api-rules.md` の原則に沿う、ただし他ファイル retrofit は別タスク）
+   どちらでも OK。MVP 提出優先なら (a) で進めて、Phase 2 で (b) に集約する判断もあり
+2. **RLS 42501 問題は DB-5 の設計に影響しない**: `test_routes_plans.py` の anon INSERT 失敗は本番 policy drift 由来で Manato 側で解消予定。**DB-5 は Flask + service_role 経由なので RLS をバイパス**するため、この問題を踏まずに済む（handoff-db.md 既存の方針通り）
+3. **Phase 1.3e (β) の影響範囲**: `apps/api/src/llm/prompt.py` のみで、DB 担当が触る `routes/` / `supabase_client.py` / `migrations/` には触れていない。安心して着手して OK
 
 **1.3d と噛み合うタスク（DB-2 RLS E2E、DB-3 pg_cron クリーンアップ）は Manato が Phase 1.3d Branch D で実装済み**（@supabase/migrations/20260424_03_cleanup_cron.sql、@apps/api/tests/test_rls.py）。本資料からは「done」として触らなくて OK。
 
