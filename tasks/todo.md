@@ -11,12 +11,14 @@
 **Phase 1.1〜1.3d (実装)**: ✅ コード完了（バック: データモデル、Evidence Pack Builder、Transit Validator、LLM 生成 + ハルシネーション検出 + plan_items 保存、RLS E2E、pg_cron）
 **Phase 1.3d (実環境検証)**: ⚠️ **未達**。2026-04-25 に `verify_hallucination_rate.py` を計 3 回実行。10 runs × 2 回は hallucination 10%（`unknown_place_id` 主因）、その後 prompt token 圧縮（22,385→11,645、-48%）+ opening_hours 強調 + transit trim を施した 5 runs は hallucination 20% に悪化（`unknown_transit_edge` 7 件が新規噴出、**制約押し出し現象**）。詳細は @tasks/lessons.md 2026-04-25 エントリ
 
-**Phase 1.3e (Structured Plan Assembly, LCaMO 応用)**: 🟡 **基盤完成・運用安定化は次セッションへ**。ブランチ `feat/structured-plan-assembly`、develop 未マージ。schema v2 + assembly + prompts v2 + generator v2 分岐 + 代替選定第 1〜2 弾（category 共通集合 + 自己ループ回避）+ `_pick_departure_time` + opening_hours 閾値撤廃 + verify スクリプト transit_matrix 強化（candidate 10 点）+ unit test 16 件 + 全 250 件 PASS。`verify --runs 3` 4 回反復:
+**Phase 1.3e (Structured Plan Assembly, LCaMO 応用)**: 🟡 **基盤完成・運用安定化は user 判断待ち**。ブランチ `feat/structured-plan-assembly`、develop 未マージ。schema v2 + assembly + prompts v2 + generator v2 分岐 + 代替選定第 1〜2 弾（category 共通集合 + 自己ループ回避）+ `_pick_departure_time` + opening_hours 閾値撤廃 + verify スクリプト transit_matrix 強化（candidate 10 点）+ unit test 16 件 + 全 250 件 PASS。`verify --runs 3` 5 回反復:
   - run 1〜2: hallucination=0%、unknown_transit_edge=3/3（assembler stub）
   - run 3: hallucination=0%、unknown_transit_edge=0%（構造解消）、新たに departure_mismatch=18 + opening_hours=6
   - run 4: hallucination **悪化 66.7%**（candidate 10 点拡充で prompt 12k→14.6k、LLM 注意散漫）
+  - **run 5**（2026-04-25 13:50、本セッション）: candidate 10→3 (`["09:00","12:00","15:00"]`) で prompt **12,547 tok**。**hallucination 33.3%**（success 1/3、other_failure 1/3 = outside_opening_hours=2）。run 4 から改善するも 0% 未到達
+  - **run 6**（2026-04-25 14:03、本セッション、**β 実装後**）: `_edge_for_llm_v2(edge)→{from,to}` で v2 prompt の transit edge を縮小（mode/route_summary/duration_min/fare_jpy/candidate_departures 全削除、v1 は維持）。TDD で test 2 件先行（v2 strip / v1 keep）。**hallucination 0/3 = 0.0% PASS**（12k threshold 警告なし、構造的に回復）。success 0/3、other_failure 3/3 (`outside_opening_hours=2` + `unknown_transit_edge=1`)。Phase 1.3d 合格条件 PASS 表示、全 252 件 unit test PASS
 
-**主目的「hallucination 構造的 0%」は 1〜3 回目で達成済み**、副次調整で悪化したのは tuning スイートスポット未到達。**次セッションの最初の一手**: candidate_departures を 10 → 3〜5 に絞って prompt token を 12k 以下に戻す。設計書 + 実装状況は @tasks/plans/2026-04-25-structured-plan-assembly.md
+**主目的「hallucination 構造的 0%」は run 1〜3 と run 6 で達成済み**。**残課題**: success rate を上げる（`outside_opening_hours` の assembler 緩和 / `unknown_transit_edge` の代替選定第 3 弾）。これは Phase 1.3e の hallucination ゴールと別軸で user 判断。設計書 + 実装状況 + run 6 詳細は @tasks/plans/2026-04-25-structured-plan-assembly.md
 **Phase 1.4〜1.9 骨組み**: ✅ 完了（フロントの配線層、デザイナーへ引き渡し済み）
 **分業土台**: ✅ 2026-04-25 整備完了。3 メンバー並行着手可能な状態:
   - 型 3 点同期済み（`ShareResponse` / `SharedPlanResponse` 系、Phase 1.9 DB-4/5 の契約確定）
@@ -25,7 +27,7 @@
   - CLAUDE.md → tasks/todo.md → tasks/handoff-*.md の動線を明示、`docs/team-roles.md` / `handoff-frontend.md` も 2026-04-25 の状況で更新
 
 **次にやるべきタスク:**
-- [ ] **Manato（最優先）**: Phase 1.3d プロンプト/validator チューニング再挑戦（@tasks/lessons.md の次イテレーション案 a〜d）。目標: `verify_hallucination_rate.py --runs 10` で hallucination = 0
+- [x] **Manato**: Phase 1.3e β 実装完了（run 6 で hallucination 0% 復帰）。次は (a) develop merge 判断、(b) success rate 改善（`outside_opening_hours` / `unknown_transit_edge` 残）の優先順位
 - [ ] **Manato（新規）**: `test_routes_plans.py::test_integration_end_to_end_plan_generation` と `::test_integration_lock_conflict_returns_409` の RLS violation (42501) 解消。Supabase SQL Editor で `SELECT * FROM pg_policies WHERE tablename='plans';` して現状 policy を確認、必要なら `supabase/migrations/20260401_00_init.sql` を本番再適用で最新 policy に揃える（冪等 DROP → CREATE）。詳細は Phase 1.3d 検証ブロック参照
 - [ ] **Manato**: Phase 1.10 デプロイ準備（Vercel + Render）—1.3d チューニング後
 - [ ] **メンバー B**: DB-4〜6 共有 API（型は 2026-04-25 に同期済み、Flask 実装すれば通る） / DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）

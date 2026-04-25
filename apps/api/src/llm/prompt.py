@@ -21,7 +21,7 @@ from pathlib import Path
 
 import tiktoken
 
-from ..evidence.pack import EvidencePack, PlacePoint
+from ..evidence.pack import EvidencePack, PlacePoint, TransitEdge
 from .validator import ValidationIssue
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,17 @@ def build_user_prompt(
     template = template_path.read_text(encoding="utf-8")
     ctx_json = _to_json(pack.query_context.model_dump(mode="json"))
     places_json = _to_json([_place_for_llm(p) for p in pack.places])
-    transit_json = _to_json([edge.model_dump(mode="json") for edge in pack.transit_matrix])
+    if version.startswith("v2"):
+        # v2 (LCaMO 応用): LLM は transit_matrix を「到達可能ペア」としてしか使わない。
+        # mode / route_summary / duration_min / fare_jpy / candidate_departures は
+        # assembler が元の TransitEdge から決定論で埋めるため、LLM 表現に含めるのは無駄。
+        # 75 edge × ~30 tokens 削減で約 -2k tokens の効果（@tasks/lessons.md 2026-04-25）。
+        transit_json = _to_json([_edge_for_llm_v2(edge) for edge in pack.transit_matrix])
+    else:
+        # v1 は LLM が transit_ref.departure_time を直接生成するため full edge 必須
+        transit_json = _to_json(
+            [edge.model_dump(mode="json") for edge in pack.transit_matrix]
+        )
     budget_json = _to_json(pack.budget_constraints.model_dump(mode="json"))
     temporal_json = _to_json(pack.temporal_constraints.model_dump(mode="json"))
     issues_json = _to_json([_issue_to_dict(i) for i in (previous_issues or [])])
@@ -140,6 +150,11 @@ def _place_for_llm(place: PlacePoint) -> dict:
         "price_level": place.price_level,
         "rating": place.rating,
     }
+
+
+def _edge_for_llm_v2(edge: TransitEdge) -> dict:
+    """v2 用に TransitEdge を `{from, to}` 2 フィールドに縮小（LCaMO 介入カタログ縮小）。"""
+    return {"from": edge.from_place_id, "to": edge.to_place_id}
 
 
 def _issue_to_dict(issue: ValidationIssue) -> dict:

@@ -127,7 +127,9 @@ def _build_transit_matrix(
     収めるための調整（詳細は `tasks/lessons.md` 2026-04-25 エントリ参照）。
 
     `candidate_departures` は validator で transit_ref.departure_time との厳密一致を
-    求められるため、日中の主要時間帯を 10 件並べる（ClientTransitEdge.max_length=10 上限）。
+    求められるため、日中の主要時間帯を 3 件に絞る。10 件並べた run 4 で prompt token
+    が 12k → 14.6k に肥大化し hallucination=66.7% に悪化したため、12k 以下に戻す
+    （tasks/plans/2026-04-25-structured-plan-assembly.md「次セッション最初の一手」）。
     """
     places = pack.places
     edges: list[TransitEdge] = []
@@ -136,18 +138,7 @@ def _build_transit_matrix(
         route_summary="箱根近隣 想定経路",
         duration_min=20,
         fare_jpy=380,
-        candidate_departures=[
-            "08:00",
-            "09:00",
-            "10:00",
-            "11:00",
-            "12:00",
-            "13:00",
-            "14:00",
-            "15:00",
-            "16:00",
-            "17:00",
-        ],
+        candidate_departures=["09:00", "12:00", "15:00"],
     )
     seen: set[tuple[str, str]] = set()
     for a in places:

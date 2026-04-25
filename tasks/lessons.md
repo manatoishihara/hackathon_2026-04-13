@@ -109,6 +109,20 @@
     - **Phase 1.3e の主目的「hallucination 構造的 0%」は 1〜3 回目で 1 回達成**（success rate は別問題）。が、副次的調整で hallucination が戻る制約違反の押し出し現象を再演
     - **次セッションへの引き継ぎ**: `candidate_departures` を 10 → 3〜5 個に絞って prompt token を 12k 以下に戻すのが最初の一手。token と命中率のスイートスポット探索が必要
     - **Phase 1.3d の prompt tuning 限界（hallucination 10% 床）に対し Phase 1.3e は構造改修で下限を 0% に到達できる潜在能力を示した**。ただし運用安定化までは追加 1〜2 セッション必要
+  - **追記（2026-04-25 13:50 JST、run 5、新セッション）**: `candidate_departures` を 10 → 3 (`["09:00", "12:00", "15:00"]`) に縮小:
+    - prompt token = **12,547**（10 個時 14,600 から -2,053、目安 12k はわずか超過 +547）
+    - `verify --runs 3`: success 1/3、**hallucination 1/3 = 33.3%**、other_failure 1/3（outside_opening_hours=2）
+    - run 4 (66.7%) → run 5 (33.3%) で改善、ただし run 1〜3 の 0% には未到達
+    - 観察: run 1 と run 2 の両方で **同じ架空 ID `ChIJJD-9JCXWjGWARzY11tDYsd_k`** が `day2_morning` slot に対して出力。LLM が特定 slot に対して特定 ID を引きやすい構造的バイアス（実在の Google Places ID 形式で、token 圧で抑えきれていない）
+    - トークン-hallucination 線形相関: 11,866→0% / 12,547→33% / 14,600→67%。**12k threshold 内に収めれば 0% 復帰の可能性が高い**
+    - **次の手の選択肢（user 判断、まだ未着手）**: (α) 候補 1 個 (`["09:00"]`) で 11,866 tok 再現 / (β) transit edge から `mode`/`route_summary`/`duration_min`/`fare_jpy`/`candidate_departures` を LLM 表現から全部除外し `{from, to}` のみにする（-2k 想定、LCaMO「介入カタログ縮小」と完全一致） / (γ) places.category を `category[0]` 単一値に縮小 (-0.5〜1k) / (δ) system prompt 強化（「不安なら欠損 slot にせよ」等）
+    - 推奨優先: β が最筋（LLM の役割削減を更に徹底、10 candidates でも 12k 内に収まる）。次が α
+  - **追記（2026-04-25 14:03 JST、run 6、β 実装）**: `prompt.py::build_user_prompt` の v2 分岐で transit edge を `{from, to}` 2 フィールドに縮小（`_edge_for_llm_v2` 追加）。v1 は full edge 維持（regression 防止）:
+    - TDD で test 2 件先行（v2 strip / v1 keep）→ Red → Green。全 252 件 PASS
+    - `verify --runs 3`: 12k threshold 警告なし、**hallucination 0/3 = 0.0% 復帰**（run 5 の 33% から構造的回復）、success 0/3、other_failure 3/3 (`outside_opening_hours=2` + `unknown_transit_edge=1`)
+    - 中間 attempt の unknown_place_id は依然出るが retry で recover、最終 attempt は別 issue で fail。run 5 と異なり「同じ架空 ID を 4 attempt 連続出力」は消えた
+    - **主目的「hallucination 構造的 0%」を 4 セッション目で再現、LCaMO 「介入カタログ縮小」が安定化フェーズでも有効**
+    - 残課題: success rate を上げる作業（opening_hours 緩和 / 代替選定第 3 弾）。Phase 1.3e の hallucination ゴールとは別軸で user 判断
 
 ## 2026-04-25: Supabase anon sign-in を test 設計で枯渇させた
 - 問題: `pytest -m integration tests/test_rls.py` を走らせると 3 件 PASS / 5 件 `AuthApiError: Request rate limit reached` で FAIL。10 分・30 分待機でも解けず、Manato の IP から Supabase anon sign-in 枠（default 30 signups/hour/IP）がほぼ完全枯渇。routes_plans integration も同じ枠に阻まれて未実行

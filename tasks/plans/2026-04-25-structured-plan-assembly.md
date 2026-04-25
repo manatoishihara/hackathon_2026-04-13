@@ -155,3 +155,38 @@ slot[i] の place_x から slot[i+1] の place_y に transit_matrix の edge が
 - **次セッション最初の一手**: candidate_departures を 10 → 3〜5 個に減らし、prompt token を 12k 以下に戻す。token と命中率のスイートスポット探索（5 → 3 → 1 で run 1 と同条件に近づける）
 - 並行検討: prompt 軽量化（places の `category` を `category[0]` のみに、または除外）、LCaMO 論文の「介入カタログを各ラウンドで縮小」相当の段階制御
 - **develop マージは未推奨**: 現状の `feat/structured-plan-assembly` は run 4 の悪化条件で残っているので、git diff の最終時点での hallucination 率は 66.7%。next session でスイートスポットを定めてから merge 提案する
+
+## 次セッション着手記録（2026-04-25 13:50 JST、run 5）
+
+- 実施: `verify_hallucination_rate.py::_build_transit_matrix` の `candidate_departures` を **10 → 3** へ縮小（`["09:00", "12:00", "15:00"]`）。`_pick_departure_time` は eligible が空なら `max()` fallback するため夕方以降の slot でも assembler 自体は機能する（validator は departure_time が candidates に含まれることのみチェック）
+- unit test: `tests/test_llm_assembly.py` 16 件 PASS（regression なし）
+- `verify --runs 3` 結果（コスト ~$0.3、平均 19.6 秒/run）:
+  - prompt token = **12,547**（system 723 + user ~11,824、threshold 12,000 を 547 だけ超過）
+  - success 1/3、**hallucination 1/3 = 33.3%**、other_failure 1/3（`outside_opening_hours=2`）
+  - run 4 (66.7%) → run 5 (33.3%) で **改善** はしているが、run 1〜3 (0%) には未到達
+- 観察: run 1 と run 2 の両方で **同じ架空 place_id** `ChIJJD-9JCXWjGWARzY11tDYsd_k` が `day2_morning` slot に対して出力された。LLM が day2_morning 限定で特定 ID を引きやすい構造的バイアス。run 1 は retry で回復、run 2 は 4 attempt 全部 hallucinate して fail
+- トークンと hallucination 率の相関（線形ではないが強い）:
+  - 1 candidate → 11,866 tok → hallucination 0%
+  - 3 candidates → 12,547 tok → hallucination 33.3%
+  - 10 candidates → 14,600 tok → hallucination 66.7%
+- **次の選択肢（user 判断待ち）**:
+  - **(α) 候補をさらに削る**: `candidate_departures` を 2 個 (`["09:00", "15:00"]`) または 1 個 (`["09:00"]`) に。1 個なら 11,866 tok に戻り、hallucination 0% 再現の可能性が高い。assembler は validator 通過のみなので、夕方の transit が「09:00 出発」になる semantic な違和感は無視（実運用で transit は activity 間しか挟まらないので影響軽微）
+  - **(β) transit_matrix の LLM 表現を縮小**: LLM に渡す transit edge から `mode` / `route_summary` / `duration_min` / `fare_jpy` / `candidate_departures` を全削除し、`{from, to}` だけにする。LLM はシステムプロンプトのルール 7「到達可能ペアを優先」しか必要としない。約 -2k tokens 想定で、10 candidates でも 12k 圏内に収まる
+  - **(γ) places の category を絞る**: `category[0]` のみ送る、もしくは category を完全削除。約 -500〜1000 tokens 想定
+  - **(δ) system prompt 強化**: 「places リストに無い id は絶対に出すな、不安なら欠損 slot にせよ」など。コストはほぼ 0 だが、効果は限定的（lessons.md の prompt tuning 限界と同根）
+- 推奨優先順位: **β（transit edge 表現縮小）** が最も筋がいい（LCaMO 論文「介入カタログ縮小」と完全一致、LLM の役割削減を更に徹底）。次に α（候補 1 個 stub）。γ・δ は微調整余地
+
+## β 実装と run 6（2026-04-25 14:03 JST）
+
+- 実装: `apps/api/src/llm/prompt.py` に `_edge_for_llm_v2(edge)` を追加し、v2 prompt builder の transit_matrix_json を `[{"from": <pid>, "to": <pid>}, ...]` 形式に縮小（`mode`/`route_summary`/`duration_min`/`fare_jpy`/`candidate_departures` を全削除）。v1 は `model_dump(mode="json")` を維持（regression 防止、LLM が departure_time を直接生成するため candidate_departures が必要）
+- TDD: tests/test_llm_prompt.py に v2 strip / v1 keep の 2 件追加（Red→Green）。assembly 16 件 + prompt 13 件 = 29 件 PASS、全体 252 件 PASS
+- candidate_departures は run 5 と同じ 3 個に据置（β の純粋効果を測るため）
+- `verify --runs 3` 結果（コスト ~$0.3）:
+  - prompt token: **12k threshold 警告なし**（ログに `LLM prompt token count ... exceeds threshold` 0 件、run 5 の 12,547 から確実に減少。10k 圏想定）
+  - success 0/3、**hallucination 0/3 = 0.0% PASS**（run 5 の 33.3% から構造的に回復、Phase 1.3d 合格条件 PASS 表示）
+  - other_failure 3/3: 最終 attempt issue は `outside_opening_hours=2` / `unknown_transit_edge=1`
+  - 平均 20.7 秒/run
+- 中間 attempt では依然 unknown_place_id が複数発生しているが、retry でほぼ recover し最終 attempt は別 issue。run 5 と異なり「同じ架空 ID を 4 attempt 連続で出す」現象は消えた
+- **主目的「hallucination 構造的 0%」を 4 セッション目で構造改修 + token 削減のみで再現**。LCaMO 論文の方向性が安定化フェーズでも有効と再確認
+- **残課題**: success rate を上げるには `outside_opening_hours` の根本対応（assembler の `_fit_to_opening_hours` 緩和 or 代替 place 選定）と `unknown_transit_edge` の代替選定第 3 弾（連鎖探索 or category fallback の更なる緩和）。これは別作業として user 判断
+- **develop マージ可否**: hallucination 0% を達成したので、現在の `feat/structured-plan-assembly` HEAD は merge 候補となる。ただし success rate 0/3 のままで MVP に乗せるかは別判断（フロント骨組みは plans.status=succeeded を期待、failed 状態は UI でハンドル済み）
