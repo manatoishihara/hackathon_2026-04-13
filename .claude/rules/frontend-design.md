@@ -12,48 +12,63 @@ paths:
 **ビジュアル詳細は実装中に調整する**。このファイルは「最低限守るべき骨格」と「絶対にやってはいけないこと」のみ定める。
 カラートークン・フォントの微調整は、実際の画面を見ながら変更してよい（`app/globals.css` の CSS 変数を書き換える運用）。
 
-## Design Tokens（初期値）
+## 基調: blue hour 和モダン
+
+Routeful は対面で 2〜5 人が 1 画面を囲んで合意形成する場。派手さより「静けさ」と「情緒」を優先する。
+- Deep Navy × Coral × 和紙クリーム = "blue hour"（夕暮れの青い時間帯）の配色
+- 見出しは明朝体、本文はゴシック
+- 英字ラベル（例: "ROUTEFUL" / "WHY ROUTEFUL" / "DAY 1"）を `letter-spacing: 0.18em` 程度で添えて余白にリズムを作る
+- HTML モック `tabiai2_interactive_blue_hour.html`（ユーザ共有済み）が視覚基準
+
+## Design Tokens（現行）
 
 ```css
 /* apps/web/src/app/globals.css */
-:root {
-  /* Colors */
-  --color-primary: #D97757;        /* テラコッタ、CTAと強調 */
-  --color-secondary: #2C5F5D;      /* Deep Teal、サブアクション */
-  --color-background: #FAF7F2;     /* オフホワイト、ページ背景 */
+@theme {
+  /* Colors — blue hour 和モダン */
+  --color-primary: #042C53;        /* Deep Navy - 主役 CTA、見出し */
+  --color-accent: #F0997B;         /* Coral - アクセント、旅情 */
+  --color-secondary: #2C5F5D;      /* Deep Teal - 補助（旧 primary から降格、Evidence verified 近傍用途） */
+  --color-background: #F5EFE6;     /* 和紙クリーム */
   --color-surface: #FFFFFF;        /* カード背景 */
-  --color-text-primary: #1A1A1A;
-  --color-text-secondary: #6B6B6B;
-  --color-text-tertiary: #9B9B9B;
-  --color-border: rgba(0, 0, 0, 0.08);
+  --color-text-primary: #042C53;   /* Deep Navy */
+  --color-text-secondary: #3C5B8F; /* Blue Gray */
+  --color-text-tertiary: #7A8AA8;  /* Lighter Blue Gray */
+  --color-border: rgba(4, 44, 83, 0.12);
 
-  /* Evidence バッジ専用 */
+  /* Evidence バッジ専用（機能色、ブランドと独立で維持） */
   --color-evidence-verified: #3A7D44;   /* ✓ Places / Routes で検証済み */
   --color-evidence-estimated: #E8A951;  /* ~ 推定値 */
   --color-evidence-unknown: #C54B4B;    /* ? 検証不可 */
 
   /* Spacing (8px grid) */
-  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
-  --space-4: 16px; --space-5: 24px; --space-6: 32px;
-  --space-7: 48px;
+  --spacing-1: 4px;  --spacing-2: 8px;  --spacing-3: 12px;
+  --spacing-4: 16px; --spacing-5: 24px; --spacing-6: 32px;
+  --spacing-7: 48px;
 
   /* Radius */
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
 
-  /* Typography */
-  --font-heading: "Zen Kaku Gothic New", system-ui, sans-serif;
-  --font-body: "Noto Sans JP", system-ui, sans-serif;
+  /* Typography — next/font が注入する CSS 変数を優先 */
+  --font-heading: var(--font-noto-serif-jp), "Hiragino Mincho ProN", "Noto Serif JP", serif;
+  --font-body: var(--font-noto-sans-jp), "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
   --font-mono: "DM Sans", "JetBrains Mono", monospace;
+
+  /* Letter spacing（英字ラベル用） */
+  --tracking-label: 0.18em;
+  --tracking-wide: 0.08em;
 }
 ```
+
+**変更履歴**: 2026-04-25 に旧テラコッタ主導（`#D97757` / Zen Kaku Gothic）から現行の Deep Navy + Coral + Noto Serif JP（明朝体）に転換。HTML モック "blue hour" が基準。
 
 ## 表層のアンチパターン（AI感を消す）
 
 デフォルトに戻ったAI生成UIは一目で見分けがつく。以下は**禁止**：
 
-- **Interフォント禁止**。`--font-body` に Noto Sans JP + Zen Kaku Gothic New を使う
+- **Interフォント禁止**。`--font-body` に Noto Sans JP、`--font-heading` に Noto Serif JP（明朝体）を使う。見出しゴシックへの回帰（Zen Kaku Gothic New 等）は blue hour 方針に反するので不可
 - **Lucide アイコンのみの使用禁止**。Phosphor Icons をデフォルトとする（`@phosphor-icons/react`）
 - **青→紫のAIグラデーション禁止**。グラデーション自体を最小限に
 - **shadcn/ui のデフォルトテーマそのまま禁止**。必ず上記デザイントークンで上書き
