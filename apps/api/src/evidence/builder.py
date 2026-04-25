@@ -130,12 +130,45 @@ def _search_safe(query: str) -> list[PlacePoint]:
         return []
 
 
+# Google Places API が返す「region/area」相当の primary category。
+# これらが先頭にある place は specific spot ではなく地理範囲（locality=市町村、
+# colloquial_area=俗称エリア、political/administrative_area=行政区分）を表すため
+# plan item にできず、opening_hours も無い。pack 構築時に除外する
+# （@tasks/lessons.md 2026-04-25 診断、Phase 1.3e success rate 改善）。
+_AREA_PRIMARY_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "locality",
+        "sublocality",
+        "sublocality_level_1",
+        "sublocality_level_2",
+        "colloquial_area",
+        "political",
+        "country",
+        "administrative_area_level_1",
+        "administrative_area_level_2",
+        "administrative_area_level_3",
+        "neighborhood",
+        "postal_code",
+    }
+)
+
+
+def _is_area_place(place: PlacePoint) -> bool:
+    """primary category（category[0]）が area 系なら True。"""
+    if not place.category:
+        return False
+    return place.category[0] in _AREA_PRIMARY_CATEGORIES
+
+
 def _dedupe_and_cap(batches: list[list[PlacePoint]], cap: int) -> list[PlacePoint]:
     unique: dict[str, PlacePoint] = {}
     for batch in batches:
         for p in batch:
-            if p.place_id not in unique:
-                unique[p.place_id] = p
+            if p.place_id in unique:
+                continue
+            if _is_area_place(p):
+                continue
+            unique[p.place_id] = p
     return list(unique.values())[:cap]
 
 

@@ -58,11 +58,18 @@ def _sample_request(**overrides) -> GeneratePlanRequest:
     return GeneratePlanRequest(**defaults)
 
 
-def _place(place_id: str, name: str, lat: float, lng: float) -> PlacePoint:
+def _place(
+    place_id: str,
+    name: str,
+    lat: float,
+    lng: float,
+    *,
+    category: list[str] | None = None,
+) -> PlacePoint:
     return PlacePoint(
         place_id=place_id,
         name=name,
-        category=["tourist_attraction"],
+        category=category if category is not None else ["tourist_attraction"],
         lat=lat,
         lng=lng,
         address="神奈川県箱根町",
@@ -138,6 +145,69 @@ def test_dedupe_caps_total_count():
     batches = [[_place(f"p{i}", str(i), 0, 0) for i in range(20)]]
     unique = _dedupe_and_cap(batches, cap=5)
     assert len(unique) == 5
+
+
+def test_dedupe_excludes_area_categories():
+    """Phase 1.3e: area 系 category（locality / colloquial_area / political /
+    administrative_area_*）は plan item にできない（specific spot ではなく region 名で
+    opening_hours も無い）ため、pack 構築時に除外する。
+
+    実例: Places API は region 名 query で「箱根町（locality）」「箱根温泉（colloquial_area）」
+    を返すが、これらが pack に入ると LLM が slot に充てて自己ループの origin になり
+    `unknown_transit_edge` で詰む（@tasks/lessons.md 2026-04-25 診断）。
+    """
+    batches = [
+        [
+            _place("p_spot", "観光地", 0, 0, category=["tourist_attraction"]),
+            _place("p_locality", "箱根町", 0, 0, category=["locality", "political"]),
+            _place(
+                "p_colloquial",
+                "箱根温泉",
+                0,
+                0,
+                category=["colloquial_area", "establishment"],
+            ),
+            _place(
+                "p_admin",
+                "神奈川県",
+                0,
+                0,
+                category=["administrative_area_level_1"],
+            ),
+            _place("p_food", "和食店", 0, 0, category=["japanese_restaurant"]),
+        ]
+    ]
+    unique = _dedupe_and_cap(batches, cap=10)
+    ids = [p.place_id for p in unique]
+    assert "p_spot" in ids
+    assert "p_food" in ids
+    # area 系は除外
+    assert "p_locality" not in ids
+    assert "p_colloquial" not in ids
+    assert "p_admin" not in ids
+    assert len(unique) == 2
+
+
+def test_dedupe_keeps_place_with_secondary_area_tag_if_primary_is_specific():
+    """`category[0]` が specific な場合、secondary に area tag が混じっていても残す。
+
+    例: Google Places は商業施設に `establishment` / `point_of_interest` の generic tag を
+    必ず付ける。これらは除外対象にしない。除外は **primary（category[0]）が area 系** の
+    時のみ作用する。
+    """
+    batches = [
+        [
+            _place(
+                "p_mixed",
+                "ホテル",
+                0,
+                0,
+                category=["lodging", "establishment", "point_of_interest"],
+            ),
+        ]
+    ]
+    unique = _dedupe_and_cap(batches, cap=10)
+    assert [p.place_id for p in unique] == ["p_mixed"]
 
 
 # ==============================
