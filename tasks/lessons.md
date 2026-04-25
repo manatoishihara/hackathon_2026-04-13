@@ -27,6 +27,39 @@
 
 ## ログ
 
+## 2026-04-26: Google Cloud SDK 利用は **4 階層** を全部確認する必要がある（API key の allowlist が見落とされやすい）
+- 状況: PlaceAutocompleteElement に migrate 後、smoke test で 403 「Requests to this API places.googleapis.com method google.maps.places.v1.Places.AutocompletePlaces are blocked」エラー
+- 真因: Phase 1.10 でブラウザキーを「Maps JavaScript API のみ」に絞ったため、`PlaceAutocompleteElement` がブラウザから直接叩く Places API (New) endpoint が key 制限で reject された。Cloud project では Places API (New) は enable 済だが、API key 側で許可されてない
+- **4 階層の確認 checklist**（Maps Platform / 同種 SaaS で必須）:
+  1. **SDK class 存在**: `importLibrary` で取得できる class があるか
+  2. **Cloud project 有効 API**: 該当 API が project 単位で enable されているか
+  3. **API key allowlist**: 該当 API key が「キーを制限」で該当 API を呼べる設定か（Maps JS API だけ許可で Places API (New) を呼べない、等）
+  4. **HTTP referrer / IP 制限**: 呼び出し元 origin / IP が allowlist に入っているか
+- 過去の失敗との関係:
+  - 「Cloud project enable API と SDK class 一致確認」(本ファイル別 lesson) は **2 階層目**の話
+  - 本件は **3 階層目** の見落としで、独立した失敗
+  - 次の polish タスクで「4 階層を最初に列挙して埋める」ワークフローに切替（実装前 checklist の項目を追加）
+- ルール:
+  - **Maps Platform / 同種 SaaS の SDK class を呼ぶ前に 4 階層全部 ✅ してから着手**。1 階層飛ばすと smoke test で詰まる
+  - API key を新規発行する時は「キーを制限」で **将来呼びたい API も含めて allowlist に入れる**。あとから追加し忘れると本件のような 403 になる
+- → 2 回目が来たら `.claude/rules/external-api-rules.md` に「Google Cloud SDK 4 階層 checklist」として昇格（今は 1 回目）
+
+## 2026-04-25: Cloud project の enable API と SDK class が一致しているか実装前に検証する
+- 問題: Phase 2.1 polish で AnchorPicker に Google Places Autocomplete を統合する際、deprecated 警告だけ気にして `google.maps.places.Autocomplete` (legacy) で実装 → ローカル smoke test で「This API project is not authorized to use this API. (legacy Places API)」エラー。Routeful の Google Cloud project は **「Places API (New)」だけ enable** していて、legacy "Places API" は enable していなかった
+- 原因:
+  - 「legacy `Autocomplete` クラスは existing project でまだ動く」という認識は **deprecated 警告レベルの話**で、Cloud Console で legacy "Places API" を enable しないと SDK class そのものが動かない（`@types/google.maps` の deprecated コメントにも「support は当面継続」とあるが「project の API enable」という前提を覆す情報ではない）
+  - 「公式 docs に migration guide のリンクがある」=「新 API への移行は推奨」止まりで、「現コードで動くかどうか」は別問題
+  - 公式 docs を読んで「使える SDK class はどれか」と「Cloud project に enable されている API」を **両方確認**せずに、deprecated 警告だけで判断した
+- ルール:
+  - Google Maps Platform / Cloud API を使う SDK class を選ぶ前に **必ず以下を確認**:
+    - (a) その SDK class が require する Cloud API (例: "Places API (New)" / "Places API" / "Maps JavaScript API") が **本プロジェクトで enable されているか**（gcloud / Console / `.env` の運用メモ）
+    - (b) 公式 docs ページの "Required APIs" / "Get an API key" 節に該当 API 名が明記されているか
+    - (c) 旧 class が deprecated でも、`Cloud Console で API が enable されていなければ runtime error` という事実
+  - 不一致時は **新 API 版に migrate** か **Cloud Console で legacy API を追加 enable** の二択を明示してから着手
+  - `PlaceAutocompleteElement` (Places API (New) のみで動作、web component) は legacy enable 不要なので、新規プロジェクトはこちらをデフォルトにする
+  - 検証 checklist は実装前に書く（前回失敗の予防策。本件では「事前検証 checklist」を実装前に書いて Web 検索 + 公式 docs で全項目埋めてから着手するワークフローに切替）
+- → 2 回目が来たら `.claude/rules/external-api-rules.md` に昇格（今は 1 回目）
+
 ## 2026-04-21: Google Directions / Routes API は日本国内 transit を返さない
 - 問題: Phase 1.2 で Routes API の TRANSIT モードを使って 新宿駅→箱根湯本駅 の経路を取ろうとしたが、HTTP 200 で空レスポンス (`{}` or `{"geocodingResults":{}}`) が返り続けた。代わりに Legacy Directions API を enable しても同じ（`ZERO_RESULTS`）。US ルート（SF→Mountain View）や DRIVE モードは正常動作
 - 原因: Google Maps Platform の **Directions / Routes API tier は日本の公共交通データを持たない**。consumer 版 Google Maps（maps.google.com / Maps JavaScript API の DirectionsService）だけが Jorudan / Navitime と提携した日本 transit データを返す。2026-04 時点でも同じ制約
@@ -245,6 +278,41 @@
   - 連続実行時は `pytest -m integration --maxfail=1 -x` で枠枯渇を早期検出し 1 時間クールダウン
   - CI で走らせる場合は IP 当たりの rate limit を気にせず済むよう **ローカル Supabase（`supabase start`）を用意**するか、テスト用の別プロジェクトを切る運用を検討
 - → 2 回目が来たら `.claude/rules/testing.md` の「integration テスト」節に昇格（今は 1 回目）
+
+## 2026-04-25: useEffect で外部 SDK を attach するなら ref pattern で closure 罠を回避
+- 状況: AnchorPicker に Google Maps Places Autocomplete を attach する useEffect を書く際、`value` / `onChange` を effect 内で直接参照すると、依存配列を空 `[]` にした場合に **初回 mount 時の値で capture** されて永久に古い値を使い続けるバグになる
+- 対処パターン:
+  ```typescript
+  const valueRef = useRef(value);
+  useEffect(() => { valueRef.current = value; }, [value]);
+
+  useEffect(() => {
+    const ac = new lib.Autocomplete(input, {...});
+    listenerRef.current = ac.addListener("place_changed", () => {
+      const current = valueRef.current; // ← ref 経由で常に最新
+      if (current.length >= MAX) return;
+      onChangeRef.current([...current, ...]);
+    });
+  }, []); // SDK は 1 回だけ attach
+  ```
+- 代替案を退けた理由:
+  - 依存配列に `[value, onChange]` を入れる → value 変化のたび SDK を destroy & re-attach → 重い + listener が短時間に消えるレース
+  - `useCallback` で `onChange` を stable に → 親側で `useCallback` 必須化を強制するのは API として無礼
+- ルール:
+  - **長期間 attach する SDK / global event listener を持つ useEffect では、最新 props/state は ref 経由で参照する**。依存配列空 + ref 更新 effect の二段で構成
+  - listener cleanup は必ず `return () => listener.remove()` で、unmount 時に解除する
+- → 2 回目が来たら `.claude/rules/frontend-design.md` の「コンポーネント実装規則」節に「外部 SDK attach は ref pattern」を追加（今は 1 回目）
+
+## 2026-04-25: Next.js Turbopack build は ESLint 警告すら fail にする
+- 状況: AnchorPicker 実装中に `// eslint-disable-next-line react-hooks/exhaustive-deps` を「念のため」入れたら、ESLint は実際には trigger しない箇所だったため `Warning: Unused eslint-disable directive` が出て build fail
+- 別 case: test mock で `activeMock = this` を書いたら `@typescript-eslint/no-this-alias` が error 扱いで build fail（vitest test には無関係なのに Next.js build がチェック）
+- 対処:
+  - 「念のため eslint-disable」を入れない、本当に必要な場所だけに限定
+  - test ファイルでも mock の都合で `this` alias / `any` 使う場合は **ファイル先頭で具体的な rule 名を明示して disable**（`/* eslint-disable @typescript-eslint/no-this-alias, @typescript-eslint/no-explicit-any -- 理由 */`）
+- ルール:
+  - **`pnpm --filter web test` PASS だけ確認して終わらず、必ず `pnpm --filter web build` も走らせる**。Next.js は ESLint warning を error 扱いするため
+  - test ファイル先頭の eslint-disable は必要最小限の rule 名のみ列挙
+- → 1 回目、再発したら `.claude/rules/testing.md` の「web test 完了条件」節に昇格
 
 ## 2026-04-25 (2回目): domain enum を 3 箇所以上に重複定義すると Codex に必ず指摘される
 - **これは 2回目**。前回（同日 Phase 2.1 backend）で Codex が `_THEME_KEYWORDS` (builder.py) / `_THEME_LABEL_JP` (prompt.py) / `ThemeKey` (schemas) の 3 箇所重複を Minor 5 として指摘し、`apps/api/src/themes.py` に集約した。今回（Phase 2.1 frontend）でも同パターンが `shared-types/ThemeKey` (型) / `planForm.ts/z.enum([...])` (zod 列挙) / `ThemePicker.tsx/THEME_OPTIONS` (UI options) の 3 箇所で再発、Codex に Major 2 として再指摘された
