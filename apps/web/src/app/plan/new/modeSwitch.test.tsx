@@ -37,29 +37,29 @@ describe("/plan/new mode 切替統合", () => {
     const autoRadio = screen.getByLabelText(/お任せ/) as HTMLInputElement;
     expect(autoRadio.checked).toBe(true);
     // sub UI は非表示
-    expect(screen.queryByLabelText("place_id")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/スポット検索/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "温泉" })).not.toBeInTheDocument();
   });
 
   it("anchor モード選択で AnchorPicker が現れ、auto に戻すと消える", () => {
     render(<NewPlanPage />);
     fireEvent.click(screen.getByLabelText(/アンカー/));
-    expect(screen.getByLabelText("place_id")).toBeInTheDocument();
+    expect(screen.getByLabelText(/スポット検索/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "温泉" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText(/お任せ/));
-    expect(screen.queryByLabelText("place_id")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/スポット検索/)).not.toBeInTheDocument();
   });
 
   it("theme モード選択で ThemePicker が現れ、anchor に切替えると ThemePicker が消えて AnchorPicker が出る", () => {
     render(<NewPlanPage />);
     fireEvent.click(screen.getByLabelText(/テーマ/));
     expect(screen.getByRole("button", { name: "温泉" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("place_id")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/スポット検索/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText(/アンカー/));
     expect(screen.queryByRole("button", { name: "温泉" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("place_id")).toBeInTheDocument();
+    expect(screen.getByLabelText(/スポット検索/)).toBeInTheDocument();
   });
 
   it("theme モードで現選択 chip を再クリックすると auto に戻る（解除 safety）", () => {
@@ -75,19 +75,17 @@ describe("/plan/new mode 切替統合", () => {
     expect(autoRadio.checked).toBe(true);
   });
 
-  it("anchor で chip を追加し、theme に切替えると anchor 状態は破棄される", () => {
+  it("anchor → theme → anchor 往復で AnchorPicker は empty state（mode_payload リセット）", () => {
     render(<NewPlanPage />);
     fireEvent.click(screen.getByLabelText(/アンカー/));
-    const input = screen.getByLabelText("place_id") as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "ChIJ_test" } });
-    fireEvent.click(screen.getByRole("button", { name: "追加" }));
-    expect(screen.getByText("ChIJ_test")).toBeInTheDocument();
+    // empty state placeholder が表示されている（chip は無い）
+    expect(screen.getByTestId("anchor-empty-state")).toBeInTheDocument();
 
-    // theme に切替
     fireEvent.click(screen.getByLabelText(/テーマ/));
-    expect(screen.queryByText("ChIJ_test")).not.toBeInTheDocument();
-    // anchor に戻したら空配列で再開（前の入力は残らない）
+    expect(screen.queryByTestId("anchor-empty-state")).not.toBeInTheDocument();
+
+    // anchor に戻ると mode_payload が空配列でリセットされ、empty state に戻る
     fireEvent.click(screen.getByLabelText(/アンカー/));
-    expect(screen.queryByText("ChIJ_test")).not.toBeInTheDocument();
+    expect(screen.getByTestId("anchor-empty-state")).toBeInTheDocument();
   });
 });

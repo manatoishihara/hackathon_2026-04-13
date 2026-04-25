@@ -405,8 +405,18 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [x] テスト: pnpm --filter web test 全 91 件 PASS（既存 61 + 新規 30）、pnpm --filter web build PASS、tsc clean
 - [x] AnchorPicker は MVP として手動 place_id 貼付け方式。Maps JS Places Autocomplete UI 統合は polish 課題（ハッカソン提出後）
 
+**Frontend polish 完了** (2026-04-25 〜 2026-04-26 セッション、`feat/anchor-autocomplete` ブランチ、commit 提案待ち):
+- [x] AnchorPicker に Maps JS Places Autocomplete 統合。`apps/web/src/lib/places-autocomplete.ts` 新規（loader singleton + `_resetPlacesLoaderForTests`）
+- [x] UX: 入力欄に「箱根神社」と打つ → Google ドロップダウン → クリックで chip に**日本語名**で追加。内部的に place_id を保持して form schema 互換維持
+- [x] 設計: `value: string[]` props そのまま、内部 `useState<Map<string, string>>` で name lookup、closure 罠は ref pattern で回避
+- [x] テスト: AnchorPicker test を Autocomplete mock で書き直し（10 件）、modeSwitch test も新 label に追従（test-id 経由で empty state 判定）
+- [x] 検証: web test 全 95 件 PASS、build PASS、tsc clean、API 323 件も regression なし
+- [x] 設計書 `tasks/plans/2026-04-25-anchor-autocomplete.md`、research subagent で Maps JS API 現状確認 (Autocomplete legacy で OK、PlaceAutocompleteElement は shadow DOM で blue hour テーマ整合性が悪い)
+- [x] **2026-04-26: `PlaceAutocompleteElement` に migrate**（Places API (New) のみで動作、legacy enable 不要）。subagent 主導で実装、`apps/web/src/components/AnchorPicker.tsx` を web component (`<gmp-place-autocomplete>`) 経由に書き換え + Mock を `customElements.define` パターンで再構築。test 96 件 PASS / build / tsc 全クリア。詳細は @tasks/plans/2026-04-25-anchor-autocomplete.md「2026-04-25 補足」+ @tasks/lessons.md「Cloud project enable API と SDK class 一致確認」
+- [x] **2026-04-26: ブラウザキーの API allowlist に「Places API (New)」追加**（Phase 1.10 で「Maps JavaScript API のみ」だったため `places.googleapis.com` 直接 fetch が 403）。詳細は lessons.md「Google Cloud SDK 利用は 4 階層を全部確認」
+- [x] **ローカル smoke test 完走**（2026-04-26、`/plan/new` で 「箱根神社」入力 → ドロップダウン → chip に日本語名で追加、Phase 2.1 polish 完全動作確認）
+
 **Frontend 残課題（次の polish フェーズ、優先度順）**:
-- [ ] AnchorPicker に Maps JS Places Autocomplete を統合（現状は place_id 直入力のみ、demo UX のため hackathon 当日までに対応推奨）
 - [ ] UI 耐久性: アンカー 3 つで崩れない、theme 6 個 chips が小画面で折り返し（実機確認、メンバー C のデザイン仕上げ範囲）
 - [ ] 結合: ローカル `pnpm dev` または本番 URL で 3 モード触れて、各 mode で plan 生成が走ること（実 OpenAI コール、3 回 ~$1）
 - [ ] (Codex 残 Minor) submit 時の `start_mode/mode_payload` 実引数を直接アサートする統合テスト（次セッション以降の堅牢化、必須ではない）
