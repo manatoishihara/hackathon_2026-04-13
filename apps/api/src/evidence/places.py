@@ -15,6 +15,7 @@ from .opening_hours import parse_weekday_descriptions
 from .pack import PlacePoint
 
 PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+PLACES_DETAILS_URL_TEMPLATE = "https://places.googleapis.com/v1/places/{place_id}"
 REQUEST_TIMEOUT_SEC = 10.0
 
 _FIELD_MASK = ",".join(
@@ -28,6 +29,22 @@ _FIELD_MASK = ",".join(
         "places.rating",
         "places.userRatingCount",
         "places.types",
+    ]
+)
+
+# fetch_place_details (Phase 2.1 anchor mode 用) は単一 place 取得なので
+# `places.` prefix なしの field 名を使う仕様。
+_DETAILS_FIELD_MASK = ",".join(
+    [
+        "id",
+        "displayName",
+        "formattedAddress",
+        "location",
+        "regularOpeningHours.weekdayDescriptions",
+        "priceLevel",
+        "rating",
+        "userRatingCount",
+        "types",
     ]
 )
 
@@ -88,6 +105,43 @@ def search_by_text(
     data = res.json()
     raw_places = data.get("places", [])
     return [_to_place_point(p) for p in raw_places]
+
+
+def fetch_place_details(
+    place_id: str,
+    *,
+    language: str = "ja",
+    api_key: str | None = None,
+) -> PlacePoint | None:
+    """Place ID 指定で 1 件だけ詳細取得する（Phase 2.1 anchor モード用）。
+
+    見つからない (404) → None を返す。HTTP / 環境エラーは PlacesError を上げる。
+    """
+    key = api_key or os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not key:
+        raise PlacesError("GOOGLE_MAPS_API_KEY が未設定")
+
+    url = PLACES_DETAILS_URL_TEMPLATE.format(place_id=place_id)
+    try:
+        res = requests.get(
+            url,
+            headers={
+                "X-Goog-Api-Key": key,
+                "X-Goog-FieldMask": _DETAILS_FIELD_MASK,
+                "Accept-Language": language,
+            },
+            params={"languageCode": language},
+            timeout=REQUEST_TIMEOUT_SEC,
+        )
+    except requests.RequestException as e:
+        raise PlacesError(f"Places Details request failed: {type(e).__name__}: {e}") from e
+
+    if res.status_code == 404:
+        return None
+    if not res.ok:
+        raise PlacesError(f"Places Details returned {res.status_code}: {res.text[:200]}")
+
+    return _to_place_point(res.json())
 
 
 def _to_place_point(raw: dict[str, Any]) -> PlacePoint:

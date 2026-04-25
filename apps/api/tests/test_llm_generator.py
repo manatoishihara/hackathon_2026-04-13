@@ -403,3 +403,35 @@ def test_llm_generation_error_exposes_issues():
     from src.llm.validator import IssueKind
 
     assert IssueKind.UNKNOWN_PLACE_ID in kinds
+
+
+# ==============================
+# Phase 2.1: AssemblyError -> IssueKind マップ（Codex Major 4 対応）
+# ==============================
+
+
+def test_assembly_error_mapping_anchor_missing():
+    """AnchorMissingError は IssueKind.ANCHOR_MISSING にマップされ retry prompt に inject される。"""
+    from src.llm.assembly import AnchorMissingError
+    from src.llm.generator import _assembly_error_to_issue_kind
+    from src.llm.validator import IssueKind
+
+    err = AnchorMissingError("anchor mode: 指定 place_id が plan に含まれない: ['ANCHOR1']")
+    assert _assembly_error_to_issue_kind(err) == IssueKind.ANCHOR_MISSING
+
+
+def test_assembly_error_mapping_known_classes():
+    """既存 AssemblyError サブクラスのマップが安定して動く（regression check）。"""
+    from src.llm.assembly import (
+        IneligiblePlaceForSlotError,
+        NoFeasibleTransitError,
+        UnknownPlaceInSlotError,
+        UnknownSlotIdError,
+    )
+    from src.llm.generator import _assembly_error_to_issue_kind
+    from src.llm.validator import IssueKind
+
+    assert _assembly_error_to_issue_kind(UnknownPlaceInSlotError("x")) == IssueKind.UNKNOWN_PLACE_ID
+    assert _assembly_error_to_issue_kind(IneligiblePlaceForSlotError("x")) == IssueKind.OUTSIDE_OPENING_HOURS
+    assert _assembly_error_to_issue_kind(NoFeasibleTransitError("x")) == IssueKind.UNKNOWN_TRANSIT_EDGE
+    assert _assembly_error_to_issue_kind(UnknownSlotIdError("x")) == IssueKind.MISSING_REQUIRED_FIELD

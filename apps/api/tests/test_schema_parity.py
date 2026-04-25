@@ -11,6 +11,7 @@ TS と Pydantic は手動で同期する運用なので、フィールド名の�
 from __future__ import annotations
 
 from src.schemas import (
+    AnchorModePayload,
     BudgetBreakdown,
     ClientTransitEdge,
     Evidence,
@@ -31,6 +32,7 @@ from src.schemas import (
     SharedPlanItem,
     SharedPlanResponse,
     SharedPlanSummary,
+    ThemeModePayload,
     TransitToNext,
 )
 
@@ -175,6 +177,11 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
         "updated_at",
     },
     "SharedPlanResponse": {"plan", "participants", "plan_items"},
+    # Phase 2.1: 出発モード切替の mode_payload narrow 用 helper モデル。
+    # Plan.mode_payload は dict[str, Any] | None のままで後方互換、これらは
+    # form / API 入力時の validate に使う（discriminated by start_mode）。
+    "AnchorModePayload": {"anchor_place_ids"},
+    "ThemeModePayload": {"theme"},
 }
 
 _MODELS = {
@@ -199,6 +206,8 @@ _MODELS = {
     "SharedParticipant": SharedParticipant,
     "SharedPlanItem": SharedPlanItem,
     "SharedPlanResponse": SharedPlanResponse,
+    "AnchorModePayload": AnchorModePayload,
+    "ThemeModePayload": ThemeModePayload,
 }
 
 

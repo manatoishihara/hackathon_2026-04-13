@@ -246,6 +246,19 @@
   - CI で走らせる場合は IP 当たりの rate limit を気にせず済むよう **ローカル Supabase（`supabase start`）を用意**するか、テスト用の別プロジェクトを切る運用を検討
 - → 2 回目が来たら `.claude/rules/testing.md` の「integration テスト」節に昇格（今は 1 回目）
 
+## 2026-04-25: assembler の self-healing が anchor を「救済しすぎる」と test 設計が崩れる
+- 問題: Phase 2.1 anchor mode の `AnchorMissingError` test を「2 slot で transit OTHER→OTHER (self-loop) → 代替探索 → ANCHOR1 が swap される」シナリオで書いたら、assembler が**親切すぎて anchor を再注入**してしまい AnchorMissingError が raise されなかった
+- 原因: Phase 1.3e で実装した `_find_alternate_place` は「同 category + transit reachable + slot eligible」で代替を探す。pack に anchor (ANCHOR1) と OTHER しかない状況で OTHER→OTHER が self-loop で塞がると、唯一の選択肢 ANCHOR1 が swap 候補に上がる。結果: LLM が anchor を無視しても assembler が自動で入れ直す
+- 対処: test を **1 slot 構成** に変えて transit / swap 経路を排除し、純粋に「anchor が plan に居ない」case を作った
+- 学びの本質:
+  - **self-healing が強い設計は production の robustness に有用**だが、**「healing で隠蔽されるエラー」を test で再現するには healing 経路を意図的に塞ぐ必要**がある
+  - test の「最小再現条件」は実装の挙動次第で変わる。Phase 1.3e で healing を強化したことで、Phase 2.1 の anchor missing test の条件が複雑化した（2 phase 間の影響）
+  - production で anchor が swap されて消える case は実在する（hallucination ではないが anchor 軽視）。post-check は必須
+- ルール:
+  - **self-healing 系を追加した後、その healing が「validator/check で catch すべき error」を握りつぶしていないか必ず逆方向の test も書け**
+  - test 設計は「最小再現」が原則だが、self-healing がある場合「healing が動かない最小条件」まで踏み込む
+- → 2 回目が来たら `.claude/rules/testing.md` の「self-healing がある実装の test 設計」節に昇格（今は 1 回目）
+
 ## 2026-04-25: 「RLS 42501」の真因は実は `plans.session_id` の FK 違反 (23503) だった
 - 状況: Phase 1.10 Vercel 本番 E2E で `/plan/new` submit すると `POST /rest/v1/plans 409 Conflict` が返る。Network response header に `proxy-status: PostgREST; error=23503` (foreign_key_violation) が乗っており、**RLS ではなく FK 違反**だと確定
 - 真因: `plans.session_id UUID NOT NULL REFERENCES sessions(id)` という FK 制約があるが、Supabase の anon サインインは `auth.users` にしか行を作らず `public.sessions` には mirror されない。`session_id = auth.uid()` で INSERT すると参照先 row が存在せず FK 違反

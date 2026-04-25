@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _HHMM_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -24,6 +24,10 @@ ItemType = Literal["activity", "meal", "transit", "lodging"]
 CostConfidence = Literal["verified", "estimated", "unknown"]
 TransitMode = Literal["train", "bus", "walk", "car"]
 PlanStatus = Literal["draft", "generating", "succeeded", "failed"]
+
+# Phase 2.1: ThemeKey は themes.py で単一情報源として定義（Codex Minor 5）。
+# Pydantic からは re-export して参照経路の後方互換を保つ。
+from ..themes import ThemeKey  # noqa: E402,F401
 
 
 class _StrictBase(BaseModel):
@@ -60,6 +64,27 @@ class Plan(_StrictBase):
     share_token: str | None
     created_at: datetime
     updated_at: datetime
+
+
+# Phase 2.1: 出発モード切替 / mode_payload narrow 用 helper モデル。
+# Plan.mode_payload は dict[str, Any] | None のままだが、フォーム/API 入力時には
+# start_mode 値に応じて以下のどちらかとして validate する。
+# Place ID は Google Places の不透明文字列。実例は `ChIJFc0R0G-jGWARNMTt10zT2GY` 等
+# だが将来の subtype でハイフン以外の記号が入る可能性もあるので、文字種は厳格にせず
+# 長さだけ縛って DoS 級の悪入力を弾く（Codex Critical 1 対応）。
+PlaceIdStr = Annotated[str, Field(min_length=1, max_length=255)]
+
+
+class AnchorModePayload(_StrictBase):
+    """anchor モード: 必ず含めたい place_id を 1〜3 件指定。"""
+
+    anchor_place_ids: list[PlaceIdStr] = Field(min_length=1, max_length=3)
+
+
+class ThemeModePayload(_StrictBase):
+    """theme モード: 6 種から 1 つ選択。"""
+
+    theme: ThemeKey
 
 
 class Participant(_StrictBase):
@@ -145,6 +170,35 @@ class GeneratePlanRequest(_StrictBase):
     start_mode: StartMode
     mode_payload: dict[str, Any] | None
     participants: list[ParticipantInput]
+
+    @model_validator(mode="after")
+    def _validate_mode_payload_against_start_mode(self) -> "GeneratePlanRequest":
+        """Phase 2.1 (Codex Critical 1): start_mode と mode_payload の整合を検証。
+
+        - auto: mode_payload は None（追加情報なし）
+        - anchor: AnchorModePayload で validate（anchor_place_ids 1〜3 件、各 1〜255 文字）
+        - theme: ThemeModePayload で validate（theme は ThemeKey の 6 値のいずれか）
+        不整合は ValidationError で 400 を返す。フロントから来る dict[str, Any] を
+        helper モデルで強く narrow して DoS 級悪入力（巨大 list / 異常値）を弾く。
+        """
+        if self.start_mode == "auto":
+            if self.mode_payload is not None:
+                raise ValueError(
+                    "start_mode='auto' のとき mode_payload は null でなければなりません"
+                )
+        elif self.start_mode == "anchor":
+            if not isinstance(self.mode_payload, dict):
+                raise ValueError(
+                    "start_mode='anchor' のとき mode_payload (dict) が必須です"
+                )
+            AnchorModePayload.model_validate(self.mode_payload)
+        elif self.start_mode == "theme":
+            if not isinstance(self.mode_payload, dict):
+                raise ValueError(
+                    "start_mode='theme' のとき mode_payload (dict) が必須です"
+                )
+            ThemeModePayload.model_validate(self.mode_payload)
+        return self
 
 
 class GeneratePlanResponse(_StrictBase):

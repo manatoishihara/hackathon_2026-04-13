@@ -43,6 +43,7 @@ class IssueKind(str, Enum):
     OUT_OF_TEMPORAL_RANGE = "out_of_temporal_range"
     MISSING_TIMEZONE = "missing_timezone"
     ITEM_TYPE_CATEGORY_MISMATCH = "item_type_category_mismatch"
+    ANCHOR_MISSING = "anchor_missing"
 
 
 @dataclass(frozen=True)

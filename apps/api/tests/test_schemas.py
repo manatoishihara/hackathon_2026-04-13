@@ -155,6 +155,142 @@ def test_plan_item_nested_location_and_evidence():
 # ==============================
 
 
+# ==============================
+# Phase 2.1: GeneratePlanRequest の start_mode × mode_payload 整合検証
+# ==============================
+
+
+def _base_request_kwargs():
+    return dict(
+        title="箱根温泉旅",
+        region="神奈川",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 2),
+        departure_point="新宿駅",
+        budget_per_person_jpy=30000,
+        budget_breakdown=_valid_budget(),
+        participants=[
+            ParticipantInput(
+                display_name="太郎",
+                avatar_color="#D97757",
+                wishes_text="温泉でゆっくり",
+                tags=["温泉"],
+                order_index=0,
+            ),
+        ],
+    )
+
+
+def test_request_auto_mode_with_null_payload_ok():
+    req = GeneratePlanRequest(**_base_request_kwargs(), start_mode="auto", mode_payload=None)
+    assert req.start_mode == "auto"
+
+
+def test_request_auto_mode_with_non_null_payload_rejected():
+    """auto モードで mode_payload が non-null なら拒否（user 入力のずれを早期発見）。"""
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(), start_mode="auto", mode_payload={"theme": "onsen"}
+        )
+
+
+def test_request_anchor_mode_with_valid_payload_ok():
+    req = GeneratePlanRequest(
+        **_base_request_kwargs(),
+        start_mode="anchor",
+        mode_payload={"anchor_place_ids": ["ChIJ_anchor1", "ChIJ_anchor2"]},
+    )
+    assert req.start_mode == "anchor"
+
+
+def test_request_anchor_mode_null_payload_rejected():
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(), start_mode="anchor", mode_payload=None
+        )
+
+
+def test_request_anchor_mode_empty_ids_rejected():
+    """anchor_place_ids 空配列は min_length 違反。"""
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(),
+            start_mode="anchor",
+            mode_payload={"anchor_place_ids": []},
+        )
+
+
+def test_request_anchor_mode_too_many_ids_rejected():
+    """anchor_place_ids 4 件以上は max_length=3 違反。"""
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(),
+            start_mode="anchor",
+            mode_payload={"anchor_place_ids": ["a", "b", "c", "d"]},
+        )
+
+
+def test_request_anchor_mode_id_too_long_rejected():
+    """anchor_place_ids の各要素は max_length=255。"""
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(),
+            start_mode="anchor",
+            mode_payload={"anchor_place_ids": ["a" * 300]},
+        )
+
+
+def test_request_anchor_mode_empty_id_rejected():
+    """anchor_place_ids の各要素は非空。"""
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(),
+            start_mode="anchor",
+            mode_payload={"anchor_place_ids": [""]},
+        )
+
+
+def test_request_anchor_mode_unknown_field_rejected():
+    """anchor mode で payload に未知のフィールドが混入したら拒否（_StrictBase の forbid 経由）。"""
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(),
+            start_mode="anchor",
+            mode_payload={"anchor_place_ids": ["a"], "extra": True},
+        )
+
+
+def test_request_theme_mode_with_valid_theme_ok():
+    req = GeneratePlanRequest(
+        **_base_request_kwargs(), start_mode="theme", mode_payload={"theme": "onsen"}
+    )
+    assert req.start_mode == "theme"
+
+
+def test_request_theme_mode_unknown_theme_rejected():
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(), start_mode="theme", mode_payload={"theme": "unknown_theme"}
+        )
+
+
+def test_request_theme_mode_null_payload_rejected():
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(), start_mode="theme", mode_payload=None
+        )
+
+
+def test_request_anchor_payload_for_theme_mode_rejected():
+    """start_mode と mode_payload の形が不一致の場合（anchor キーで theme を呼ぶ等）→ 拒否。"""
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(),
+            start_mode="theme",
+            mode_payload={"anchor_place_ids": ["a"]},  # anchor の形
+        )
+
+
 def test_generate_plan_request_accepts_multiple_participants():
     req = GeneratePlanRequest(
         title="箱根温泉旅",
