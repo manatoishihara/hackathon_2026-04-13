@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 
 from ..evidence.pack import EvidencePack
 from .assembly import (
+    AnchorMissingError,
     AssemblyError,
     IneligiblePlaceForSlotError,
     NoFeasibleTransitError,
@@ -70,6 +71,8 @@ def _assembly_error_to_issue_kind(err: AssemblyError) -> IssueKind:
     if isinstance(err, UnknownSlotIdError):
         # slot_id は v1 にない概念なので MISSING_REQUIRED_FIELD 扱い
         return IssueKind.MISSING_REQUIRED_FIELD
+    if isinstance(err, AnchorMissingError):
+        return IssueKind.ANCHOR_MISSING
     return IssueKind.MISSING_REQUIRED_FIELD
 
 

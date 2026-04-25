@@ -284,6 +284,171 @@ def test_all_searches_failing_still_returns_pack(mock_search):
 
 
 # ==============================
+# Phase 2.1: 出発モード切替（anchor / theme）
+# ==============================
+
+
+def test_generate_keywords_includes_theme_keywords():
+    """theme モードでは pack 構築検索 keyword に theme 用語が追加される。"""
+    ctx = QueryContext(
+        region="箱根",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 2),
+        departure_point="新宿",
+        start_mode="theme",
+        mode_payload={"theme": "onsen"},
+        participants=[QueryContextParticipant(name="a", wishes="", tags=[])],
+    )
+    keywords = _generate_keywords(ctx)
+    # 温泉系 keyword が含まれる（少なくとも 1 つ）
+    assert any("温泉" in kw for kw in keywords)
+
+
+def test_generate_keywords_history_theme():
+    ctx = QueryContext(
+        region="京都",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 2),
+        departure_point="東京",
+        start_mode="theme",
+        mode_payload={"theme": "history"},
+        participants=[QueryContextParticipant(name="a", wishes="", tags=[])],
+    )
+    keywords = _generate_keywords(ctx)
+    # history 系（神社 / 寺 / 歴史 のいずれか）
+    assert any(("神社" in kw) or ("寺" in kw) or ("歴史" in kw) for kw in keywords)
+
+
+def test_generate_keywords_auto_mode_is_unchanged():
+    """auto モードでは theme keyword は追加されない（regression check）。"""
+    ctx = QueryContext(
+        region="箱根",
+        start_date=date(2026, 6, 1),
+        end_date=date(2026, 6, 2),
+        departure_point="新宿",
+        start_mode="auto",
+        mode_payload=None,
+        participants=[QueryContextParticipant(name="a", wishes="", tags=["温泉"])],
+    )
+    keywords = _generate_keywords(ctx)
+    # tag の温泉は含むが、theme 拡張は無いので件数は base+tag のみ
+    # base 2 (観光/飲食) + tag 1 (温泉) = 3 のはず
+    assert len(keywords) == 3
+
+
+@patch("src.evidence.builder.fetch_place_details")
+@patch("src.evidence.builder.search_by_text")
+def test_build_evidence_pack_anchor_mode_includes_anchors_first(
+    mock_search, mock_fetch
+):
+    """anchor モードで指定 place_id が pack の先頭に配置され、area filter も skip される。"""
+    mock_search.return_value = [
+        _place("search1", "箱根神社", 35.20, 139.02),
+    ]
+    mock_fetch.side_effect = lambda pid: _place(
+        pid, f"anchor-{pid}", 35.0, 139.0, category=["restaurant"]
+    )
+
+    req = _sample_request(
+        start_mode="anchor",
+        mode_payload={"anchor_place_ids": ["anc1", "anc2"]},
+    )
+    pack = build_evidence_pack(req)
+
+    place_ids = [p.place_id for p in pack.places]
+    # anchor が先頭 2 件
+    assert place_ids[:2] == ["anc1", "anc2"]
+    # text search の結果も含まれる
+    assert "search1" in place_ids
+
+
+@patch("src.evidence.builder.fetch_place_details")
+@patch("src.evidence.builder.search_by_text")
+def test_build_evidence_pack_anchor_mode_skips_area_filter_for_anchors(
+    mock_search, mock_fetch
+):
+    """anchor は user 明示意思なので area_place フィルタを skip（locality カテゴリでも残す）。"""
+    mock_search.return_value = []
+    mock_fetch.side_effect = lambda pid: _place(
+        pid, "箱根町", 35.2, 139.0, category=["locality", "political"]
+    )
+
+    req = _sample_request(
+        start_mode="anchor",
+        mode_payload={"anchor_place_ids": ["loc_anchor"]},
+    )
+    pack = build_evidence_pack(req)
+
+    assert "loc_anchor" in [p.place_id for p in pack.places]
+
+
+@patch("src.evidence.builder.fetch_place_details")
+@patch("src.evidence.builder.search_by_text")
+def test_build_evidence_pack_anchor_failure_raises_fetch_error(mock_search, mock_fetch):
+    """fetch_place_details が None を返した anchor があれば fail-fast で AnchorFetchError raise
+    （Codex Major 3 対応: pack に anchor が無いまま LLM retry を浪費させない）。"""
+    from src.evidence.builder import AnchorFetchError
+
+    mock_search.return_value = [_place("s1", "箱根神社", 35.20, 139.02)]
+    fetch_results = {
+        "good_anchor": _place("good_anchor", "良い場所", 35.1, 139.1, category=["museum"]),
+    }
+    mock_fetch.side_effect = lambda pid: fetch_results.get(pid)  # bad_anchor → None
+
+    req = _sample_request(
+        start_mode="anchor",
+        mode_payload={"anchor_place_ids": ["good_anchor", "bad_anchor"]},
+    )
+    with pytest.raises(AnchorFetchError) as exc:
+        build_evidence_pack(req)
+    assert "bad_anchor" in exc.value.missing_ids
+    assert "good_anchor" not in exc.value.missing_ids
+
+
+@patch("src.evidence.builder.fetch_place_details")
+@patch("src.evidence.builder.search_by_text")
+def test_build_evidence_pack_anchor_api_error_raises_upstream_error(mock_search, mock_fetch):
+    """Codex 再レビュー Major 1: PlacesError (5xx / network / 認証) は 404 と区別して
+    AnchorFetchUpstreamError raise（route 側で 502 に分岐）。"""
+    from src.evidence.builder import AnchorFetchUpstreamError
+    from src.evidence.places import PlacesError
+
+    mock_search.return_value = []
+
+    def fetch_side_effect(pid):
+        if pid == "transient_failure":
+            raise PlacesError("network error")
+        return _place(pid, "ok", 35.0, 139.0, category=["museum"])
+
+    mock_fetch.side_effect = fetch_side_effect
+
+    req = _sample_request(
+        start_mode="anchor",
+        mode_payload={"anchor_place_ids": ["transient_failure"]},
+    )
+    with pytest.raises(AnchorFetchUpstreamError) as exc:
+        build_evidence_pack(req)
+    assert exc.value.place_id == "transient_failure"
+    assert isinstance(exc.value.__cause__, PlacesError)
+
+
+@patch("src.evidence.builder.search_by_text")
+def test_build_evidence_pack_theme_mode_passes_through(mock_search):
+    """theme モードでは builder が theme keyword を生成して search するが、
+    出力 pack の構造自体は auto と同じ。"""
+    mock_search.return_value = [_place("p_onsen", "温泉宿", 35.2, 139.0)]
+    req = _sample_request(
+        start_mode="theme",
+        mode_payload={"theme": "onsen"},
+    )
+    pack = build_evidence_pack(req)
+    assert pack.query_context.start_mode == "theme"
+    assert pack.query_context.mode_payload == {"theme": "onsen"}
+    # search は呼ばれた（keywords ベースで 5 件くらい）
+    assert mock_search.call_count >= 1
+
+
+# ==============================
 # Integration（ライブ Places API、transit はフロント task なのでここでは検証しない）
 # ==============================
 

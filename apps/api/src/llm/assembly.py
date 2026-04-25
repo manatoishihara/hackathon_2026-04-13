@@ -132,6 +132,13 @@ class IneligiblePlaceForSlotError(AssemblyError):
     Phase 1.3e (iv) hard self-healing 用。validator の OUTSIDE_OPENING_HOURS にマップされる。"""
 
 
+class AnchorMissingError(AssemblyError):
+    """anchor モードで指定 place_id が plan のどの item にも含まれない（Phase 2.1）。
+
+    LLM が anchor 指示を無視 or assembler の self-healing で anchor が swap された
+    case で発生。retry プロンプトに inject して LLM に anchor を入れ直してもらう。"""
+
+
 # ==============================
 # 本体: assemble
 # ==============================
@@ -329,7 +336,38 @@ def assemble_plan(
         order_index += 1
         prev_entry = {"place": place, "end_dt": end_dt}
 
+    # Phase 2.1: anchor モード post-check（swap で anchor が落ちたケースも catch）
+    _check_anchors_present(pack, items)
+
     return LlmGeneratedPlan(items=items)
+
+
+def _check_anchors_present(pack: EvidencePack, items: list[LlmPlanItem]) -> None:
+    """anchor モードで指定 place_id が全て plan items に含まれるか check。
+
+    auto / theme モードでは何もしない。anchor モードで mode_payload が壊れている場合も
+    fail-open（payload validate は API 入力層の責任）。
+    """
+    qc = pack.query_context
+    if qc.start_mode != "anchor":
+        return
+    payload = qc.mode_payload
+    if not isinstance(payload, dict):
+        return
+    raw_ids = payload.get("anchor_place_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return
+    anchor_ids = [pid for pid in raw_ids if isinstance(pid, str)]
+    if not anchor_ids:
+        return
+
+    item_pids = {it.place_id for it in items if it.place_id is not None}
+    missing = [pid for pid in anchor_ids if pid not in item_pids]
+    if missing:
+        raise AnchorMissingError(
+            f"anchor mode: 指定 place_id が plan に含まれない: {missing}. "
+            f"これらの id を必ずいずれかの slot に割当てよ"
+        )
 
 
 # ==============================

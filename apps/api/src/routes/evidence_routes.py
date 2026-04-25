@@ -15,7 +15,11 @@ from flask import Blueprint, current_app, g, jsonify, request
 from pydantic import ValidationError
 
 from ..auth import require_session
-from ..evidence.builder import build_evidence_pack
+from ..evidence.builder import (
+    AnchorFetchError,
+    AnchorFetchUpstreamError,
+    build_evidence_pack,
+)
 from ..evidence.cache import CacheError, store_pack
 from ..schemas import (
     EvidencePlacesPlaceSummary,
@@ -36,9 +40,28 @@ def create_places_pack():
     try:
         payload = GeneratePlanRequest.model_validate(raw)
     except ValidationError as e:
-        return jsonify({"error": "validation failed", "details": e.errors()}), 400
+        # include_context=False: model_validator が raise した ValueError オブジェクトを
+        # ctx から外す（そのままでは JSON シリアライズできずに 500 に畳まれる）
+        return jsonify({
+            "error": "validation failed",
+            "details": e.errors(include_context=False),
+        }), 400
 
-    pack = build_evidence_pack(payload)
+    try:
+        pack = build_evidence_pack(payload)
+    except AnchorFetchError as e:
+        # Phase 2.1 Codex Major 3: anchor が 404 (存在しない) → user 入力ミス相当で 400。
+        return jsonify({
+            "error": "anchor places not found",
+            "missing_anchor_ids": e.missing_ids,
+        }), 400
+    except AnchorFetchUpstreamError as e:
+        # Codex 再レビュー Major 1: Places API 側のインフラ障害は user の責ではないので 502。
+        # 監視メトリクス（5xx 率）が誤って 400 に薄まらないようにする。
+        current_app.logger.warning(
+            f"anchor fetch upstream error: place_id={e.place_id!r} cause={e.__cause__}"
+        )
+        return jsonify({"error": "anchor lookup upstream unavailable"}), 502
 
     try:
         pack_id = store_pack(pack, owner_session_id=g.owner_session_id)

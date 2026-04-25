@@ -187,6 +187,30 @@ export type CostConfidence = 'verified' | 'estimated' | 'unknown';
 
 export type PlanStatus = 'draft' | 'generating' | 'succeeded' | 'failed';
 
+// Phase 2.1 出発モード切替で使う theme key（テーマモードの選択肢）
+export type ThemeKey =
+  | 'onsen'
+  | 'art'
+  | 'gourmet'
+  | 'nature'
+  | 'history'
+  | 'experience';
+
+// Phase 2.1: start_mode に応じた mode_payload 内訳（discriminated by start_mode）。
+// DB 側は plans.mode_payload JSONB なので Plan 自体の型は Record<string, unknown> | null
+// のまま（後方互換のため緩い）。新規生成リクエスト / フロント form では以下の helper 型で
+// 強く validate する。
+export type AnchorModePayload = {
+  // 必ずプランに含めたい Google Places place_id（1〜3 件）
+  anchor_place_ids: string[];
+};
+
+export type ThemeModePayload = {
+  theme: ThemeKey;
+};
+
+// AutoModePayload は null（追加データなし）。Union 表現上は省略可。
+
 // ==============================
 // エンティティ
 // ==============================

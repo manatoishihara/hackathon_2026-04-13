@@ -17,6 +17,7 @@ from src.evidence.pack import (
     TransitEdge,
 )
 from src.llm.assembly import (
+    AnchorMissingError,
     IneligiblePlaceForSlotError,
     NoFeasibleTransitError,
     UnknownPlaceInSlotError,
@@ -736,6 +737,172 @@ def test_assemble_plan_fits_time_into_opening_hours():
     # start_time は 10:00 に寄せられる（重なり 10:00-11:30 で最大重複）
     assert "T10:00:00" in item.start_time
     assert "T11:30:00" in item.end_time
+
+
+# ==============================
+# Phase 2.1: anchor mode の必須 place 検証
+# ==============================
+
+
+def _make_pack_anchor(
+    places: list[PlacePoint],
+    anchor_ids: list[str],
+    edges: list[TransitEdge] | None = None,
+    total_days: int = 2,
+) -> EvidencePack:
+    """anchor モード用の pack ヘルパ（query_context.start_mode='anchor'）。"""
+    base = _make_pack(places=places, edges=edges or [], total_days=total_days)
+    return base.model_copy(
+        update={
+            "query_context": base.query_context.model_copy(
+                update={"start_mode": "anchor", "mode_payload": {"anchor_place_ids": anchor_ids}}
+            )
+        }
+    )
+
+
+def _full_edges_between(*place_ids: str) -> list[TransitEdge]:
+    """与えられた place_ids 間で全方向 edge を生成（transit 不在で test が落ちるのを回避）。"""
+    edges = []
+    for a in place_ids:
+        for b in place_ids:
+            if a != b:
+                edges.append(_edge(a, b))
+    return edges
+
+
+def test_assemble_plan_anchor_present_no_error():
+    """anchor モードで指定 place_id が slot に含まれていれば成功。"""
+    p_anchor = _place("ANCHOR1")
+    p_other = _place("OTHER")
+    pack = _make_pack_anchor(
+        places=[p_anchor, p_other],
+        anchor_ids=["ANCHOR1"],
+        edges=_full_edges_between("ANCHOR1", "OTHER"),
+    )
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="ANCHOR1", rationale="アンカーで指定されたスポット"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="OTHER", rationale="昼食タイムで定番店を選定"),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    item_pids = [it.place_id for it in result.items if it.place_id is not None]
+    assert "ANCHOR1" in item_pids
+
+
+def test_assemble_plan_anchor_missing_raises():
+    """anchor モードで指定 place_id が slot に含まれない → AnchorMissingError。
+
+    1 slot 構成で transit / swap 経路を排除し、純粋に「anchor が plan に居ない」
+    case を作る。
+    """
+    p_anchor = _place("ANCHOR1")
+    p_other = _place("OTHER")
+    pack = _make_pack_anchor(
+        places=[p_anchor, p_other],
+        anchor_ids=["ANCHOR1"],
+        edges=[],  # transit 不要（1 slot のみ）
+    )
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="OTHER", rationale="アンカー以外の通常スポット"),
+        ]
+    )
+    with pytest.raises(AnchorMissingError) as exc:
+        assemble_plan(plan_v2, pack)
+    assert "ANCHOR1" in str(exc.value)
+
+
+def test_assemble_plan_multiple_anchors_partial_missing_raises():
+    """anchor 2 件中 1 件のみ含まれる → 不足分を AnchorMissingError で報告。"""
+    p_a1 = _place("A1")
+    p_a2 = _place("A2")
+    pack = _make_pack_anchor(
+        places=[p_a1, p_a2],
+        anchor_ids=["A1", "A2"],
+        edges=[],  # 1 slot のみで transit 不要
+    )
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="A1", rationale="アンカー1番目のスポット"),
+        ]
+    )
+    with pytest.raises(AnchorMissingError) as exc:
+        assemble_plan(plan_v2, pack)
+    assert "A2" in str(exc.value)
+    assert "A1" not in str(exc.value)  # A1 は含まれてるので報告対象外
+
+
+def test_assemble_plan_auto_mode_no_anchor_check():
+    """auto モードでは anchor チェックなし（既存 happy path と同じ挙動）。"""
+    p = _place("P_A")
+    pack = _make_pack(places=[p], edges=[])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[LlmSlotAssignment(slot_id="day1_morning", place_id="P_A", rationale="通常選定の rationale")]
+    )
+    result = assemble_plan(plan_v2, pack)
+    assert len(result.items) == 1
+
+
+def test_assemble_plan_anchor_swapped_by_self_healing_raises():
+    """LLM が anchor を pick しても assembler の self-healing で swap され消えたら
+    post-check で AnchorMissingError raise（Codex 再レビュー Major 2 対応で実 swap 経路）。
+
+    シナリオ（fixture: 2026-06-01 = 月曜 day_of_week=0 を day1 とする 1 day pack）:
+    - ANCHOR1: 水曜のみ営業 (day_of_week=2) → day1 (月曜) slot で ineligible
+    - SUB1: 全曜日営業、ANCHOR1 と同 category（"museum"）→ self-healing の swap 候補
+    - LLM が day1_morning (=月曜) に ANCHOR1 を割当
+    - assembler の `_find_eligible_alternate_for_slot` で SUB1 に swap される
+    - 最終 items に ANCHOR1 が居ない → anchor post-check で raise
+    """
+    p_anchor1 = _place(
+        "ANCHOR1",
+        opening=[(2, "09:00", "21:00")],  # 水曜のみ
+        category=["museum"],
+    )
+    p_sub1 = _place(
+        "SUB1",
+        opening=[(d, "09:00", "21:00") for d in range(7)],  # 全曜日
+        category=["museum"],  # ANCHOR1 と同 category（swap 候補に上がる）
+    )
+    pack = _make_pack_anchor(
+        places=[p_anchor1, p_sub1],
+        anchor_ids=["ANCHOR1"],
+        edges=[],
+        total_days=1,  # day1 のみ（=月曜のみ）
+    )
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="ANCHOR1", rationale="アンカー指定で午前に訪問する"),
+        ]
+    )
+    with pytest.raises(AnchorMissingError) as exc:
+        assemble_plan(plan_v2, pack)
+    assert "ANCHOR1" in str(exc.value)
+    # AnchorMissingError が raise されたということは、ineligible 検出 → swap で
+    # ANCHOR1 が SUB1 に置き換わって items から消えたことの間接的証拠。
+    # （swap が起きなかったら IneligiblePlaceForSlotError が先に raise される。
+    #  どちらでもなく成功で抜けた場合は ANCHOR1 が items に残るので AnchorMissingError も出ない。）
+
+
+def test_assemble_plan_anchor_with_invalid_payload_no_check():
+    """anchor モードだが mode_payload が壊れてる場合は anchor チェックを skip（fail-open）。"""
+    p = _place("P_A")
+    pack = _make_pack(places=[p], edges=[])
+    pack = pack.model_copy(
+        update={
+            "query_context": pack.query_context.model_copy(
+                update={"start_mode": "anchor", "mode_payload": {"unrelated": True}}
+            )
+        }
+    )
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[LlmSlotAssignment(slot_id="day1_morning", place_id="P_A", rationale="通常選定の rationale")]
+    )
+    # raise しない（payload 不整合は assembler の責任外）
+    result = assemble_plan(plan_v2, pack)
+    assert len(result.items) == 1
 
 
 def test_assemble_plan_cost_for_unknown_price_level():

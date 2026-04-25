@@ -384,11 +384,25 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 ## Phase 2 / 差別化機能（ハッカソン向けに優先度高）
 
 ### 2.1 出発モード切替（お任せ / アンカー / テーマ）
-- [ ] テスト: 3モードに応じて LLM プロンプトが切り替わる
-- [ ] テスト: アンカー型で指定したスポットが必ずプランに含まれる
-- [ ] 実装: `apps/web/src/components/ModeSelector.tsx`
-- [ ] 実装: アンカー型のスポット検索 UI（Places Autocomplete）
-- [ ] UI 耐久性: アンカー3つ以上でもレイアウトが崩れない
+
+**Backend 実装完了** (2026-04-25 セッション、`feat/mode-selector` ブランチ、commit 提案待ち):
+- [x] 型 3 点同期（`AnchorModePayload` / `ThemeModePayload` / `ThemeKey`）。Plan.mode_payload は `dict[str, Any] | None` のままで後方互換、helper 型は form / API 入力時の validate に使用。設計詳細は `tasks/plans/2026-04-25-mode-selector.md`
+- [x] `evidence/builder.py`: anchor mode で `fetch_place_details` 並列 fetch、pack 先頭注入、area filter skip（user 明示意思優先）、fail-soft
+- [x] `evidence/builder.py`: theme mode で `_THEME_KEYWORDS` による検索 keyword bias（onsen/art/gourmet/nature/history/experience の 6 種、各 3 keyword）
+- [x] `llm/prompt.py` v2: `mode_context_md` placeholder 追加、anchor 必須リスト + theme 日本語ラベル（テーマ衝突時は参加者希望優先の旨明記）
+- [x] `llm/assembly.py`: `AnchorMissingError` + `_check_anchors_present`（assembly 完了後 post-check、self-healing で anchor swap された case も catch）
+- [x] `llm/validator.py` + `generator.py`: `IssueKind.ANCHOR_MISSING` 新設、retry prompt に inject される
+- [x] テスト: 全 299 件 PASS（既存 283 + 新規 16: schema_parity 2 / builder 5 / prompt 4 / assembly 5）
+
+**Frontend 実装（次セッション、`feat/mode-selector` ブランチ続き）**:
+- [ ] テスト: zod discriminatedUnion で 3 モードの form payload を validate
+- [ ] テスト: アンカー型で指定したスポットが UI 上で chips 表示
+- [ ] 実装: `apps/web/src/components/ModeSelector.tsx`（3 モード radio + sub UI 切替）
+- [ ] 実装: `apps/web/src/components/AnchorPicker.tsx`（Places Autocomplete + chips、最大 3 件）
+- [ ] 実装: `apps/web/src/components/ThemePicker.tsx`（6 theme chips、toggle 1 選択）
+- [ ] 実装: `/plan/new` form に組み込み + zod schema 拡張
+- [ ] UI 耐久性: アンカー 3 つで崩れない、theme 6 個 chips が小画面で折り返し
+- [ ] 結合: ローカル `pnpm dev` で 3 モード触れて、各 mode で plan 生成が走ること
 
 ### 2.2 予算配分の制約化
 - [ ] テスト: スライダーの配分が LLM プロンプトに数値制約として渡される

@@ -24,6 +24,7 @@ from pathlib import Path
 import tiktoken
 
 from ..evidence.pack import EvidencePack, PlacePoint, TransitEdge
+from ..themes import get_label as _theme_label
 from .validator import ValidationIssue
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,9 @@ logger = logging.getLogger(__name__)
 PROMPT_VERSION_DEFAULT = "v2.0.0"
 _PROMPTS_ROOT = Path(__file__).parent / "prompts"
 _TOKEN_WARNING_THRESHOLD = 12_000
+
+# Phase 2.1: theme key → 日本語ラベルは src/themes.py の THEME_REGISTRY を参照
+# （Codex Minor 5）。`_theme_label(theme)` で str | None を取得。
 
 
 def load_prompt_version() -> str:
@@ -103,6 +107,7 @@ def build_user_prompt(
     temporal_json = _to_json(pack.temporal_constraints.model_dump(mode="json"))
     issues_json = _to_json([_issue_to_dict(i) for i in (previous_issues or [])])
     slot_catalog_json = _to_json(catalog)
+    mode_context_md = _build_mode_context_md(pack.query_context)
 
     return template.format(
         query_context_json=ctx_json,
@@ -112,6 +117,7 @@ def build_user_prompt(
         temporal_constraints_json=temporal_json,
         previous_issues_json=issues_json,
         slot_catalog_json=slot_catalog_json,
+        mode_context_md=mode_context_md,
     )
 
 
@@ -175,6 +181,43 @@ def _place_for_llm(place: PlacePoint) -> dict:
 def _edge_for_llm_v2(edge: TransitEdge) -> dict:
     """v2 用に TransitEdge を `{from, to}` 2 フィールドに縮小（LCaMO 介入カタログ縮小）。"""
     return {"from": edge.from_place_id, "to": edge.to_place_id}
+
+
+def _build_mode_context_md(query_context) -> str:
+    """Phase 2.1: start_mode に応じた追加指示を Markdown 文字列で返す。
+
+    - auto: 空文字（mode_context セクションは空）
+    - anchor: 必須 place_id を箇条書きし、必ず slot に割当てる旨明示
+    - theme: 日本語テーマ label と bias 指示を 1 行で
+    payload が壊れてる場合は安全側に倒して空文字を返す。
+    """
+    mode = query_context.start_mode
+    payload = query_context.mode_payload
+    if mode == "anchor":
+        if not isinstance(payload, dict):
+            return ""
+        ids = payload.get("anchor_place_ids")
+        if not isinstance(ids, list) or not ids:
+            return ""
+        bullets = "\n".join(f"- {pid}" for pid in ids if isinstance(pid, str))
+        if not bullets:
+            return ""
+        return (
+            "アンカー（必須スポット）: 以下の place_id を**必ず**いずれかの slot に割当てよ。"
+            "他の slot は通常通り選定。\n" + bullets
+        )
+    if mode == "theme":
+        if not isinstance(payload, dict):
+            return ""
+        theme = payload.get("theme")
+        if not isinstance(theme, str):
+            return ""
+        label = _theme_label(theme) or theme
+        return (
+            f"テーマ: {label}。slot 構成と place 選定をこのテーマ寄りに bias せよ。"
+            "ただし参加者の wishes / tags が衝突する場合は参加者希望を優先する。"
+        )
+    return ""
 
 
 def _issue_to_dict(issue: ValidationIssue) -> dict:

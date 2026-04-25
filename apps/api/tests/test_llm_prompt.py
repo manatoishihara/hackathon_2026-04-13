@@ -191,6 +191,63 @@ def test_build_user_prompt_v1_keeps_full_transit_edge(sample_pack):
     assert "duration_min" in prompt
 
 
+# ==============================
+# Phase 2.1: mode_context（出発モードに応じた追加指示）
+# ==============================
+
+
+def _pack_with_mode(sample_pack, start_mode, mode_payload):
+    """sample_pack の query_context だけ start_mode/mode_payload を差し替え。"""
+    return sample_pack.model_copy(
+        update={
+            "query_context": sample_pack.query_context.model_copy(
+                update={"start_mode": start_mode, "mode_payload": mode_payload}
+            )
+        }
+    )
+
+
+def test_build_user_prompt_v2_anchor_mode_includes_anchor_ids(sample_pack):
+    """anchor モード: 必須 place_id 一覧 が prompt に明示される。"""
+    pack = _pack_with_mode(
+        sample_pack,
+        "anchor",
+        {"anchor_place_ids": ["P_hakone_jinja", "anc2"]},
+    )
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    # 「必須」「アンカー」のいずれか + 各 place_id が現れる
+    assert "アンカー" in prompt or "必須" in prompt
+    assert "P_hakone_jinja" in prompt
+    assert "anc2" in prompt
+
+
+def test_build_user_prompt_v2_theme_mode_includes_theme_label(sample_pack):
+    """theme モード: テーマ名 (日本語ラベル) が prompt に明示される。"""
+    pack = _pack_with_mode(sample_pack, "theme", {"theme": "onsen"})
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    assert "テーマ" in prompt
+    assert "温泉" in prompt  # onsen の日本語ラベル
+
+
+def test_build_user_prompt_v2_auto_mode_no_extra_mode_section(sample_pack):
+    """auto モード: 追加 mode_context 出力なし（"アンカー" / "テーマ:" 等の見出しが出ない）。"""
+    pack = _pack_with_mode(sample_pack, "auto", None)
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    # mode_context 由来の見出しは含まれない
+    assert "アンカー" not in prompt
+    assert "テーマ:" not in prompt
+
+
+def test_build_user_prompt_v2_anchor_with_unknown_payload_skip(sample_pack):
+    """anchor モード payload が壊れてる場合、prompt は安全に空 mode_context で出力。"""
+    # mode_payload が anchor_place_ids を含まない
+    pack = _pack_with_mode(sample_pack, "anchor", {"unrelated": True})
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    # 「アンカー」「必須」見出しは出ない（payload 無効なため）
+    assert "アンカー" not in prompt
+    assert "必須スポット" not in prompt
+
+
 def test_count_prompt_tokens_returns_int(sample_pack):
     system = build_system_prompt()
     user = build_user_prompt(sample_pack, previous_issues=[])
