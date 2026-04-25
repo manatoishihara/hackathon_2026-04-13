@@ -11,8 +11,10 @@
 6. 時刻は必ず ISO 8601 + JST タイムゾーン（+09:00）を明示せよ（例: "2026-06-01T09:00:00+09:00"）。
 7. start_time < end_time を守れ。
 8. budget_constraints.breakdown_jpy を守れ（各カテゴリの合計は上限 +5% 以内）。
-9. 全 activity / meal の start_time は、opening_hours 内に配置すること。
-   opening_hours が空配列 or opening_hours_unknown_days に含まれる曜日は検証スキップ対象。
+9. 全 activity / meal の start_time は、必ず opening_hours 内に配置すること（**最頻出の違反**）。
+   - JST の曜日を確認し、その曜日の opening_hours 外なら別の時刻か別のスポットに差し替える。
+   - end_time が閉店時刻を超える場合、end_time を閉店時刻までに収める（item を短くする / 分割する）。
+   - opening_hours が空配列、もしくは opening_hours_unknown_days にその曜日が含まれる場合のみ検証スキップ（それ以外は絶対厳守）。
 10. item_type ごとの必須フィールド:
     - activity / meal / lodging: place_id 必須、transit_ref は null
     - transit: transit_ref 必須、place_id は null

@@ -1,22 +1,24 @@
 # DB / バックエンド 整理タスク — メンバー B 向け
 
-**前提**: Phase 1.3c（サーバー側 Transit Validator + `/api/plans/generate` 骨組み）までで、Supabase 連携と evidence_pack_sessions キャッシュは動作している。
-この資料は、**1.3d（LLM 接続）と完全に独立して進められる** DB / API 整理タスクと、**Phase 1.9 共有機能の前倒し**を列挙する。
+**前提（2026-04-25 更新）**: Phase 1.3a〜1.3d まで実装完了（LLM 生成 + ハルシネーション検出 + plan_items 保存 + RLS E2E + pg_cron）。
+ただし **Phase 1.3d 実環境検証は未達**（10 回生成でハルシネーション 10%、RLS integration は Supabase anon sign-in rate limit で 2〜3/8 しか通っていない）。
+これらは Manato の TODO に残すが、**DB 担当のタスクは完全に独立して進められる**ので、本資料の DB-1 / DB-4〜6 / DB-7 / DB-8 に集中してほしい。
 
-**1.3d と噛み合うタスク（DB-2 RLS E2E、DB-3 pg_cron クリーンアップ）は Manato が 1.3d 実装と一緒に対応する**ので、本資料からは除外した。メンバー B は下記タスクだけに集中してよい。
+**1.3d と噛み合うタスク（DB-2 RLS E2E、DB-3 pg_cron クリーンアップ）は Manato が Phase 1.3d Branch D で実装済み**（@supabase/migrations/20260424_03_cleanup_cron.sql、@apps/api/tests/test_rls.py）。本資料からは「done」として触らなくて OK。
 
 ## 担当範囲
 
-- **触ってよい**: `apps/api/src/routes/` / `apps/api/src/supabase_client.py` / Supabase ダッシュボード / `supabase/migrations/`（新設予定） / `apps/api/tests/`
-- **触らないでほしい**: `apps/api/src/evidence/` / `apps/api/src/llm/`（1.3d で新設予定） / `packages/shared-types/` / `docs/data-model.md`
+- **触ってよい**: `apps/api/src/routes/` / `apps/api/src/supabase_client.py` / `apps/api/src/config.py`（env 追加用）/ Supabase ダッシュボード / `supabase/migrations/` / `apps/api/tests/`
+- **触らないでほしい**: `apps/api/src/evidence/` / `apps/api/src/llm/` / `packages/shared-types/` / `docs/data-model.md` / `apps/api/src/schemas/__init__.py`
 
 型や Evidence Pack 仕様を変えたくなったら Manato に相談。
+**DB-4 / DB-5 のレスポンス型（ShareResponse / SharedPlanResponse 系）は 2026-04-25 に Manato が事前 3 点同期済み**なので、Flask 実装時は contract に沿うだけで OK（shared-types / schemas に追加は不要）。
 
-## 分業の前提（2026-04-24 整理）
+## 分業の前提（2026-04-25 整理）
 
 | 担当 | タスク |
 |---|---|
-| Manato（1.3d と合流） | Phase 1.3d 本体 / DB-2 RLS E2E テスト / DB-3 pg_cron クリーンアップ |
+| Manato | ✅ Phase 1.3d 実装本体 / ✅ DB-2 RLS E2E テスト / ✅ DB-3 pg_cron クリーンアップ。残: Phase 1.3d ハルシネーション率チューニング + integration テスト完走 |
 | **メンバー B（本資料）** | **DB-1 migrations / DB-4〜6 共有 API / DB-7 楽天 App ID / DB-8 Supabase ログ** |
 | メンバー C | フロント 1.4〜1.9 の見た目仕上げ（`tasks/handoff-frontend.md`） |
 
@@ -24,22 +26,33 @@
 
 ### 🔴 優先度 高: DB 運用の土台
 
-#### DB-1: Migrations ディレクトリ化
+#### DB-1: Migrations ディレクトリ化 ✅ **2026-04-25 に Manato 先行実施**
 
-**現状の課題**: DDL が `docs/data-model.md` にベタ書きで、Supabase SQL Editor に手で貼り付け運用。誰がどの順で実行したか不明、rollback も手動。
+既存 DDL は以下 5 ファイルに **冪等化して配置済み**（本番再適用しても何も壊れない）:
 
-**やること**:
-- `supabase/migrations/` ディレクトリを作成
-- 既存の DDL を `supabase/migrations/20260401_00_init.sql`, `20260419_01_evidence_pack_sessions.sql`, `20260424_02_plans_status.sql` のようにファイル分割（日付 + 連番）
-- 既存適用済み DDL（2026-04-24 時点の accumulated changes）:
-  - sessions / plans / participants / plan_items テーブル（初期）
-  - evidence_pack_sessions テーブル（1.3a で追加）
-  - plans.status カラム（1.3c+ で追加、`NEXT_PUBLIC_API_BASE_URL` 後に適用）
-- 今後の ALTER は新しいファイルで追加していく運用に
-- `docs/data-model.md` には「DDL の正典は `supabase/migrations/` 配下、ドキュメントは概念モデルのみ」と明記
-- （オプション）Supabase CLI (`supabase db push`) 導入を検討
+| 連番 | ファイル | 内容 |
+|---|---|---|
+| 00 | `20260401_00_init.sql` | sessions / plans / participants / plan_items + RLS policies + shared_plans view（Phase 0.2） |
+| 01 | `20260419_01_evidence_pack_sessions.sql` | evidence_pack_sessions テーブル + RLS（Phase 1.3a） |
+| 02 | `20260424_02_plans_status.sql` | plans.status カラム + CHECK + idx_plans_status（Phase 1.3c+） |
+| 03 | `20260424_03_cleanup_cron.sql` | pg_cron による定期クリーンアップ（Phase 1.3d Branch D） |
+| 04 | `20260424_04_plan_generation_rpcs.sql` | acquire_plan_generation_lock / mark_plan_failed / finalize_plan RPC（Phase 1.3d Branch B） |
 
-**完了条件**: 既存の本番スキーマを新規 Supabase プロジェクトに「migrations フォルダから順に実行」で再現できる
+冪等性の担保:
+- `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`
+- `pg_constraint` を参照して CHECK 制約の重複追加を回避
+- `DROP POLICY IF EXISTS` → `CREATE POLICY` で最新内容に上書き
+- `CREATE OR REPLACE VIEW` / `CREATE OR REPLACE FUNCTION`
+- `cron.unschedule` → `cron.schedule` で冪等登録
+
+**DB 担当に残っている仕事**:
+- [ ] 今後の DDL 変更は **新しい連番ファイル**（例: `20260501_05_xxx.sql`）を追加する運用を徹底する。既存 5 ファイルは履歴なので編集しない
+- [ ] （optional）Supabase CLI (`supabase db push`) の導入を検討。現状は SQL Editor 手動実行で運用
+- [ ] 新規 Supabase プロジェクト立ち上げ時（Phase 2 環境 or staging）は 00 → 04 の順に SQL Editor で実行すれば本番同等になることを確認
+
+**`docs/data-model.md` の位置づけ（2026-04-25 確定）**:
+- 概念モデル + TS/Pydantic 型の正典（3 点同期の中心）
+- 「PostgreSQL DDL」節は migrations の最新状態スナップショット（運用上の DDL 真実は `supabase/migrations/`）
 
 ### 🟡 優先度 中: Phase 1.9 プラン共有の前倒し
 
@@ -51,10 +64,12 @@
 - バックエンドで `POST /api/plans/:id/share` を実装:
   - 認証必須（`require_session`）、`plan_id` の owner 検証（`plans.session_id = g.owner_session_id`）
   - `secrets.token_urlsafe(16)` で 22 文字程度の共有トークン生成
-  - `UPDATE plans SET share_token = ... WHERE id = :id AND session_id = :owner`
+  - `UPDATE plans SET share_token = ... WHERE id = :id AND session_id = :owner`（service_role クライアント経由で）
   - 既に token があれば既存を返す（再生成は別エンドポイント `DELETE` 想定、今回スコープ外）
-- レスポンス: `{ share_token: string, share_url: string }`
-- **`packages/shared-types` に `ShareResponse` 型を追加する必要あり** → **Manato に相談**（型変更は Manato 管轄ルール）
+  - **`plans.status = 'succeeded'` のものだけ共有を許可**（draft / generating / failed は 409 or 404 を返す想定）
+- レスポンス型は **既に 3 点同期済み**: `ShareResponse = { share_token: string, share_url: string }`
+  - `packages/shared-types/src/index.ts` / `apps/api/src/schemas/__init__.py` / `docs/data-model.md` で定義済み
+  - `share_url` はサーバーで組み立てる（例: `f"{SITE_BASE_URL}/plan/shared/{token}"`、`SITE_BASE_URL` を `apps/api/src/config.py` に追加して env 経由で）
 
 #### DB-5: 共有閲覧 API — 認可方針: Flask + service role 経由に確定
 
@@ -75,7 +90,13 @@
 実装ファイル:
 - `apps/api/src/routes/share_routes.py`（新規）
 - `POST /api/plans/:id/share`（DB-4）と同じ blueprint でよい
-- Pydantic レスポンス `SharedPlanResponse = { plan, participants, plan_items }` を `shared-types` と 3 点同期
+- レスポンス型は **既に 3 点同期済み**:
+  - `SharedPlanSummary = Omit<Plan, "session_id" | "share_token">`
+  - `SharedParticipant = Omit<Participant, "plan_id">`
+  - `SharedPlanItem = Omit<PlanItem, "plan_id">`
+  - `SharedPlanResponse = { plan, participants, plan_items }`
+- **識別子漏洩防止のため、session_id / share_token / plan_id を公開ペイロードに含めない**（Pydantic で別クラスとして定義済み）。Flask 実装時は `model_dump(mode="json")` で JSON 化する
+- 返却時の整形: `plan_items` は `order_index` で昇順ソート、`participants` も `order_index` で昇順（フロント側の実装簡素化のため）
 
 #### DB-6: 共有用 RLS ポリシー監査 — RLS 追加不要の方針で確定
 
@@ -106,10 +127,16 @@ DB-5 を Flask + service role に固定したため、共有専用 RLS ポリシ
 タスク完了時は PR 説明に以下を書く:
 
 - [ ] `pnpm --filter api test`（unit）が通る
-- [ ] `pytest -m integration` も通る（自分のタスクに integration テストがある場合）
+- [ ] `pytest -m integration` も通る（自分のタスクに integration テストがある場合）。
+      **注意: Supabase anon sign-in は IP あたり 30 signups/hour の rate limit があるので、
+      integration テストを連続実行する場合は 1 時間のクールダウンを挟むか、テスト設計で
+      sign-in 回数を最小化する（既存 test_rls.py は per-test 2 sign-in で 8 件あるため
+      最悪 16 sign-in を消費する）**
 - [ ] `docs/data-model.md` / `docs/architecture.md` が実装と整合している
 - [ ] 新規 API を生やした場合は `docs/team-roles.md` の API エンドポイント表を更新
 - [ ] 型変更が必要になった場合は **Manato に相談してから** 3 点同期（docs / shared-types / Pydantic）
+      （DB-4 / DB-5 のレスポンス型は 2026-04-25 時点で Manato が事前に 3 点同期済み。
+      実装時は contract に沿って Flask ルート + Pydantic validate をつけるだけでよい）
 
 ## 困ったら
 
@@ -118,7 +145,7 @@ DB-5 を Flask + service role に固定したため、共有専用 RLS ポリシ
 - 認証フロー: `apps/api/src/auth.py`（JWT 検証 + `g.owner_session_id` セット）
 - キャッシュパターン: `apps/api/src/evidence/cache.py`（opportunistic cleanup + retry の実装例）
 
-## 現状の Supabase テーブル一覧（2026-04-24 時点）
+## 現状の Supabase テーブル一覧（2026-04-25 時点）
 
 - `sessions`（匿名セッション）
 - `plans`（旅行プラン、`status` カラム追加済み）
@@ -126,4 +153,14 @@ DB-5 を Flask + service role に固定したため、共有専用 RLS ポリシ
 - `plan_items`（時系列アイテム）
 - `evidence_pack_sessions`（Evidence Pack 短期キャッシュ、TTL 15 分）
 
-詳細は `docs/data-model.md` の DDL セクション参照。
+RPC（Phase 1.3d Branch B、`20260424_04_plan_generation_rpcs.sql`）:
+- `acquire_plan_generation_lock(plan_id, session_id) returns text` — draft → generating 遷移で排他制御
+- `mark_plan_failed(plan_id) returns void` — 失敗時の後始末
+- `finalize_plan(plan_id, items jsonb) returns void` — generating → succeeded + plan_items INSERT を 1 トランザクションで
+
+cron ジョブ（Phase 1.3d Branch D、`20260424_03_cleanup_cron.sql`）:
+- `cleanup-evidence-pack-sessions` — 1 時間毎、期限切れ pack 削除
+- `cleanup-stuck-plans` — 1 時間毎、`generating` のまま 1 時間超の plan を削除
+- `cleanup-abandoned-plans` — 1 日毎、`draft`/`failed` 状態で 24 時間超の plan を削除（`succeeded` は絶対に削除しない）
+
+詳細は `docs/data-model.md` の DDL セクション + `supabase/migrations/` 参照。

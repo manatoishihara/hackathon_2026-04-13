@@ -147,12 +147,19 @@ def test_build_user_prompt_empty_issues_shows_initial_run(sample_pack):
 
 
 def test_build_user_prompt_omits_server_only_fields(sample_pack):
-    """place に address / user_ratings_total など LLM に不要な冗長フィールドは渡さない（token 節約）。"""
+    """place に address / user_ratings_total / lat / lng / relevance_tags など LLM に不要な
+    冗長フィールドは渡さない（token 節約、@tasks/lessons.md 2026-04-25 方針）。
+    """
     prompt = build_user_prompt(sample_pack, previous_issues=[])
     # address は冗長なので含めない
     assert "神奈川県箱根町" not in prompt
     # user_ratings_total も不要
-    assert "1000" not in prompt or "user_ratings_total" not in prompt
+    assert "user_ratings_total" not in prompt
+    # lat / lng は LLM が使わないので含めない（空間判断は transit_matrix で間接）
+    assert '"lat"' not in prompt
+    assert '"lng"' not in prompt
+    # Phase 1.3 時点では空配列運用の relevance_tags も冗長
+    assert "relevance_tags" not in prompt
 
 
 def test_count_prompt_tokens_returns_int(sample_pack):

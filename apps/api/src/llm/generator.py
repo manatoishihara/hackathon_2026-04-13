@@ -30,9 +30,16 @@ import time
 from typing import TYPE_CHECKING
 
 from ..evidence.pack import EvidencePack
-from .prompt import build_system_prompt, build_user_prompt, count_prompt_tokens
-from .schema import LlmGeneratedPlan
-from .validator import ValidationIssue, validate_llm_output
+from .assembly import (
+    AssemblyError,
+    NoFeasibleTransitError,
+    UnknownPlaceInSlotError,
+    UnknownSlotIdError,
+    assemble_plan,
+)
+from .prompt import build_system_prompt, build_user_prompt, count_prompt_tokens, load_prompt_version
+from .schema import LlmGeneratedPlan, LlmGeneratedPlanV2
+from .validator import IssueKind, ValidationIssue, validate_llm_output
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -49,6 +56,18 @@ DEFAULT_MAX_FALLBACK_ATTEMPTS = 1  # attempt 4
 # 呼び出し前に「残 deadline がこれ未満なら意味のある応答が返らない」と判断する下限。
 # 短すぎると fallback 経路を無駄に 1 attempt 使うだけなので、early abort する。
 _MIN_USEFUL_TIMEOUT_SEC = 3.0
+
+
+def _assembly_error_to_issue_kind(err: AssemblyError) -> IssueKind:
+    """v2 assembly の例外を、既存 validator の IssueKind にマップして retry prompt に注入可能にする。"""
+    if isinstance(err, UnknownPlaceInSlotError):
+        return IssueKind.UNKNOWN_PLACE_ID
+    if isinstance(err, NoFeasibleTransitError):
+        return IssueKind.UNKNOWN_TRANSIT_EDGE
+    if isinstance(err, UnknownSlotIdError):
+        # slot_id は v1 にない概念なので MISSING_REQUIRED_FIELD 扱い
+        return IssueKind.MISSING_REQUIRED_FIELD
+    return IssueKind.MISSING_REQUIRED_FIELD
 
 
 class LlmGenerationError(Exception):
@@ -154,7 +173,10 @@ def generate_plan(
         client = OpenAI()
 
     deadline = time.monotonic() + global_deadline_sec
-    system_prompt = build_system_prompt()
+    prompt_version = load_prompt_version()
+    is_v2 = prompt_version.startswith("v2.")
+    response_format_cls = LlmGeneratedPlanV2 if is_v2 else LlmGeneratedPlan
+    system_prompt = build_system_prompt(version=prompt_version)
     previous_issues: list[ValidationIssue] = []
     last_transport_error: Exception | None = None
     reached_validation_at_least_once = False
@@ -179,7 +201,9 @@ def generate_plan(
             effective_timeout = min(per_call_timeout_sec, remaining)
 
             attempts += 1
-            user_prompt = build_user_prompt(pack, previous_issues=previous_issues)
+            user_prompt = build_user_prompt(
+                pack, previous_issues=previous_issues, version=prompt_version
+            )
             _ = count_prompt_tokens(system_prompt, user_prompt, model=model)  # warn log
 
             try:
@@ -189,7 +213,7 @@ def generate_plan(
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    response_format=LlmGeneratedPlan,
+                    response_format=response_format_cls,
                     timeout=effective_timeout,
                 )
             except Exception as e:
@@ -219,7 +243,34 @@ def generate_plan(
                 # safety refusal は retry 対象外
                 raise LlmRefusalError(str(choice.message.refusal))
 
-            parsed: LlmGeneratedPlan = choice.message.parsed
+            raw_parsed = choice.message.parsed
+
+            # v2 の場合は assembler で LlmGeneratedPlan に変換する。
+            # assembly 失敗は LLM の slot 割当が不整合（未知 slot/place、到達不能 transit）な
+            # ケースなので retry 対象の「validation issue」相当として扱う（prompt に injection して再試行）。
+            if is_v2:
+                assert isinstance(raw_parsed, LlmGeneratedPlanV2)
+                try:
+                    parsed: LlmGeneratedPlan = assemble_plan(raw_parsed, pack)
+                except AssemblyError as ae:
+                    kind = _assembly_error_to_issue_kind(ae)
+                    issue = ValidationIssue(
+                        kind=kind,
+                        message=f"assembly error: {ae}",
+                        item_index=None,
+                    )
+                    previous_issues = [issue]
+                    reached_validation_at_least_once = True
+                    logger.info(
+                        "LLM attempt %d (model=%s) assembly error (kind=%s), retrying: %s",
+                        attempts,
+                        model,
+                        kind.value,
+                        ae,
+                    )
+                    continue
+            else:
+                parsed = raw_parsed  # type: ignore[assignment]
             issues = validate_llm_output(parsed, pack)
             reached_validation_at_least_once = True
             if not issues:

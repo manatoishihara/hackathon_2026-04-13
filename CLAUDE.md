@@ -47,6 +47,14 @@ LLM呼び出し実装時: @.claude/rules/llm-rules.md
 テスト作成時: @.claude/rules/testing.md
 データモデル変更時: @.claude/rules/data-model-sync.md
 
+## 分業資料（自分の担当を先に特定してから読む）
+作業開始時はまず @tasks/todo.md の「進捗サマリ」節で **今どのフェーズにいるか / 自分の担当（Manato / メンバー B / メンバー C）** を確認し、該当するハンドオフ資料を読んでから実装に入る:
+- DB / バックエンド（メンバー B）: @tasks/handoff-db.md
+- フロント デザイン（メンバー C）: @tasks/handoff-frontend.md
+- Manato（統括 / LLM / 検証）: @tasks/todo.md 先頭の「次にやるべきタスク」
+
+役割定義とブランチ戦略は @docs/team-roles.md 参照。
+
 ## ドキュメント記述ルール
 todo.md の各タスクはTDD形式（テスト→Red→Green→Refactor→検証）で書け。
 lessons.md は「問題・原因・ルール」の3項目。2回目が来たら .claude/rules/ に昇格せよ。

@@ -26,6 +26,11 @@ from src.schemas import (
     PlanItem,
     RegenerateItemRequest,
     RegenerateItemResponse,
+    ShareResponse,
+    SharedParticipant,
+    SharedPlanItem,
+    SharedPlanResponse,
+    SharedPlanSummary,
     TransitToNext,
 )
 
@@ -126,6 +131,50 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
         "candidate_departures",
     },
     "PlanGenerationPayload": {"plan_id", "evidence_pack_id", "transit_matrix"},
+    # Phase 1.9 共有 API（DB-4 / DB-5）。session_id / share_token / plan_id は
+    # 意図的に公開レスポンスから除外しているので EXPECTED_FIELDS にも入れない。
+    "ShareResponse": {"share_token", "share_url"},
+    "SharedPlanSummary": {
+        "id",
+        "title",
+        "region",
+        "start_date",
+        "end_date",
+        "departure_point",
+        "budget_per_person_jpy",
+        "budget_breakdown",
+        "start_mode",
+        "mode_payload",
+        "status",
+        "created_at",
+        "updated_at",
+    },
+    "SharedParticipant": {
+        "id",
+        "display_name",
+        "avatar_color",
+        "wishes_text",
+        "tags",
+        "order_index",
+    },
+    "SharedPlanItem": {
+        "id",
+        "order_index",
+        "item_type",
+        "title",
+        "description",
+        "start_time",
+        "end_time",
+        "location",
+        "cost_jpy",
+        "cost_confidence",
+        "evidence",
+        "transit_to_next",
+        "notes",
+        "created_at",
+        "updated_at",
+    },
+    "SharedPlanResponse": {"plan", "participants", "plan_items"},
 }
 
 _MODELS = {
@@ -145,6 +194,11 @@ _MODELS = {
     "EvidencePlacesResponse": EvidencePlacesResponse,
     "ClientTransitEdge": ClientTransitEdge,
     "PlanGenerationPayload": PlanGenerationPayload,
+    "ShareResponse": ShareResponse,
+    "SharedPlanSummary": SharedPlanSummary,
+    "SharedParticipant": SharedParticipant,
+    "SharedPlanItem": SharedPlanItem,
+    "SharedPlanResponse": SharedPlanResponse,
 }
 
 
