@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Noto_Sans_JP, Zen_Kaku_Gothic_New } from "next/font/google";
+import { Noto_Sans_JP, Noto_Serif_JP } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 
@@ -9,10 +9,10 @@ const notoSansJP = Noto_Sans_JP({
   weight: ["400", "500", "700"],
 });
 
-const zenKakuGothic = Zen_Kaku_Gothic_New({
-  variable: "--font-zen-kaku-gothic",
+const notoSerifJP = Noto_Serif_JP({
+  variable: "--font-noto-serif-jp",
   subsets: ["latin"],
-  weight: ["500", "700"],
+  weight: ["400", "500", "700"],
 });
 
 export const metadata: Metadata = {
@@ -29,7 +29,7 @@ export default function RootLayout({
   return (
     <html lang="ja">
       <body
-        className={`${notoSansJP.variable} ${zenKakuGothic.variable} antialiased`}
+        className={`${notoSansJP.variable} ${notoSerifJP.variable} antialiased`}
       >
         <Providers>{children}</Providers>
       </body>

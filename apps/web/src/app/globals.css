@@ -6,21 +6,24 @@
 
 /*
  * Routeful Design Tokens — .claude/rules/frontend-design.md を正典とする。
- * 色・フォント・スペーシングの調整はここで行い、コンポーネント側は必ずこのトークンを参照する。
- * shadcn/ui は `:root` の CSS 変数経由で Routeful トークンを参照する（下の block）。
+ *
+ * 方針: "blue hour" 和モダン（対面 2〜5 人で 1 画面を囲む想定）。
+ * ディープネイビーの知性・コーラルの旅情・和紙クリームの落ち着きで、
+ * AI 感のある派手さを排し「合意の場」としての静けさを出す。
  */
 @theme {
   /* Colors（Routeful ブランド） */
-  --color-primary: #d97757;
-  --color-secondary: #2c5f5d;
-  --color-background: #faf7f2;
-  --color-surface: #ffffff;
-  --color-text-primary: #1a1a1a;
-  --color-text-secondary: #6b6b6b;
-  --color-text-tertiary: #9b9b9b;
-  --color-border: rgba(0, 0, 0, 0.08);
+  --color-primary: #042c53;        /* Deep Navy - 主役 CTA、見出し */
+  --color-accent: #f0997b;         /* Coral - アクセント、旅情 */
+  --color-secondary: #2c5f5d;      /* Deep Teal - 補助（旧 primary から降格、Evidence verified 近傍用途） */
+  --color-background: #f5efe6;     /* 和紙クリーム */
+  --color-surface: #ffffff;        /* カード背景 */
+  --color-text-primary: #042c53;   /* Deep Navy */
+  --color-text-secondary: #3c5b8f; /* Blue Gray */
+  --color-text-tertiary: #7a8aa8;  /* Lighter Blue Gray */
+  --color-border: rgba(4, 44, 83, 0.12);
 
-  /* Evidence バッジ専用 */
+  /* Evidence バッジ専用（機能色、ブランドと独立で維持） */
   --color-evidence-verified: #3a7d44;
   --color-evidence-estimated: #e8a951;
   --color-evidence-unknown: #c54b4b;
@@ -42,16 +45,18 @@
   --radius-md: 8px;
   --radius-lg: 12px;
 
-  /* Typography */
-  --font-heading: "Zen Kaku Gothic New", system-ui, sans-serif;
-  --font-body: "Noto Sans JP", system-ui, sans-serif;
+  /* Typography — next/font が注入する CSS 変数を優先、fallback はシステムフォント */
+  --font-heading: var(--font-noto-serif-jp), "Hiragino Mincho ProN", "Noto Serif JP", serif;
+  --font-body: var(--font-noto-sans-jp), "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
   --font-mono: "DM Sans", "JetBrains Mono", monospace;
+
+  /* Letter spacing（英字ラベル用） */
+  --tracking-label: 0.18em;
+  --tracking-wide: 0.08em;
 }
 
 /*
  * shadcn/ui 向けの @theme inline マッピング。
- * shadcn のコンポーネントは `--primary` / `--background` / `--radius` などの CSS 変数を参照する。
- * `:root` でこれらを Routeful Design Tokens の値に書き換えることで「デフォルトテーマ禁止」ルールを守る。
  */
 @theme inline {
   --color-sidebar-ring: var(--sidebar-ring);
@@ -93,65 +98,64 @@
 
 /*
  * Routeful Design Tokens を shadcn の CSS 変数にマッピング。
- * ここを書き換えれば shadcn のデフォルト（ニュートラルグレー）から Routeful のテラコッタ系に切り替わる。
  */
 :root {
-  --background: #faf7f2;                         /* color-background */
-  --foreground: #1a1a1a;                         /* color-text-primary */
-  --card: #ffffff;                               /* color-surface */
-  --card-foreground: #1a1a1a;
+  --background: #f5efe6;                         /* 和紙クリーム */
+  --foreground: #042c53;                         /* Deep Navy */
+  --card: #ffffff;                               /* surface */
+  --card-foreground: #042c53;
   --popover: #ffffff;
-  --popover-foreground: #1a1a1a;
-  --primary: #d97757;                            /* color-primary terracotta */
-  --primary-foreground: #ffffff;
-  --secondary: #2c5f5d;                          /* color-secondary deep teal */
-  --secondary-foreground: #ffffff;
-  --muted: #f0ede7;                              /* background を少し暗く */
-  --muted-foreground: #6b6b6b;                   /* color-text-secondary */
-  --accent: #f0ede7;
-  --accent-foreground: #1a1a1a;
-  --destructive: #c54b4b;                        /* color-danger */
-  --border: rgba(0, 0, 0, 0.08);                 /* color-border */
-  --input: rgba(0, 0, 0, 0.08);
-  --ring: #d97757;                               /* focus ring は primary */
-  --chart-1: #d97757;
-  --chart-2: #2c5f5d;
-  --chart-3: #3a7d44;
+  --popover-foreground: #042c53;
+  --primary: #042c53;                            /* Deep Navy - 主役 */
+  --primary-foreground: #f5efe6;                 /* 主役上のテキスト = クリーム */
+  --secondary: #f0997b;                          /* Coral - アクセント */
+  --secondary-foreground: #4a1b0c;               /* コーラルの暗色 */
+  --muted: #ece5d8;                              /* 背景より少し沈んだトーン */
+  --muted-foreground: #3c5b8f;                   /* Blue Gray */
+  --accent: #ece5d8;
+  --accent-foreground: #042c53;
+  --destructive: #c54b4b;                        /* danger */
+  --border: rgba(4, 44, 83, 0.12);
+  --input: rgba(4, 44, 83, 0.12);
+  --ring: #042c53;                               /* focus ring は primary */
+  --chart-1: #042c53;
+  --chart-2: #f0997b;
+  --chart-3: #3a7d44;                            /* Evidence verified 近傍 */
   --chart-4: #e8a951;
-  --chart-5: #9b9b9b;
+  --chart-5: #7a8aa8;
   --radius: 0.5rem;
   --sidebar: #ffffff;
-  --sidebar-foreground: #1a1a1a;
-  --sidebar-primary: #d97757;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #f0ede7;
-  --sidebar-accent-foreground: #1a1a1a;
-  --sidebar-border: rgba(0, 0, 0, 0.08);
-  --sidebar-ring: #d97757;
+  --sidebar-foreground: #042c53;
+  --sidebar-primary: #042c53;
+  --sidebar-primary-foreground: #f5efe6;
+  --sidebar-accent: #ece5d8;
+  --sidebar-accent-foreground: #042c53;
+  --sidebar-border: rgba(4, 44, 83, 0.12);
+  --sidebar-ring: #042c53;
 }
 
 /*
- * ダークモード（Phase 1 では未使用だが将来のためにトークンだけ定義）。
+ * ダークモード（Phase 1 では未使用、将来のトークン定義のみ）。
  */
 .dark {
-  --background: #1a1a1a;
-  --foreground: #faf7f2;
-  --card: #2a2a2a;
-  --card-foreground: #faf7f2;
-  --popover: #2a2a2a;
-  --popover-foreground: #faf7f2;
-  --primary: #e8a472;
-  --primary-foreground: #1a1a1a;
-  --secondary: #4a8783;
-  --secondary-foreground: #faf7f2;
-  --muted: #333333;
-  --muted-foreground: #9b9b9b;
-  --accent: #333333;
-  --accent-foreground: #faf7f2;
+  --background: #0a1829;
+  --foreground: #f5efe6;
+  --card: #122640;
+  --card-foreground: #f5efe6;
+  --popover: #122640;
+  --popover-foreground: #f5efe6;
+  --primary: #f5efe6;
+  --primary-foreground: #042c53;
+  --secondary: #f0997b;
+  --secondary-foreground: #4a1b0c;
+  --muted: #1d3354;
+  --muted-foreground: #a6b2c8;
+  --accent: #1d3354;
+  --accent-foreground: #f5efe6;
   --destructive: #d97575;
-  --border: rgba(255, 255, 255, 0.12);
-  --input: rgba(255, 255, 255, 0.15);
-  --ring: #e8a472;
+  --border: rgba(245, 239, 230, 0.14);
+  --input: rgba(245, 239, 230, 0.14);
+  --ring: #f0997b;
 }
 
 @layer base {
@@ -167,5 +171,7 @@
   }
   h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-heading);
+    font-weight: 500;
+    letter-spacing: 0.01em;
   }
 }
