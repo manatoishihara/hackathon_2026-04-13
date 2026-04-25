@@ -42,6 +42,7 @@ class IssueKind(str, Enum):
     OVERLAPPING_ITEMS = "overlapping_items"
     OUT_OF_TEMPORAL_RANGE = "out_of_temporal_range"
     MISSING_TIMEZONE = "missing_timezone"
+    ITEM_TYPE_CATEGORY_MISMATCH = "item_type_category_mismatch"
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,49 @@ class ValidationIssue:
 
 DURATION_TOLERANCE_MIN = 5
 BUDGET_TOLERANCE_RATIO = 0.05
+
+# meal slot の place が「飲食」を表す category を持つか判定するための allowlist。
+# Google Places API の細粒度 category（`japanese_restaurant` 等の `_restaurant` 接尾辞）も
+# 後段の suffix check で許容する。
+_MEAL_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "restaurant",
+        "food",
+        "cafe",
+        "bakery",
+        "bar",
+        "meal_takeaway",
+        "meal_delivery",
+    }
+)
+
+# lodging slot の place が「宿泊」を表す category を持つか判定するための allowlist。
+_LODGING_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "lodging",
+        "hotel",
+        "resort_hotel",
+        "ryokan",
+        "bed_and_breakfast",
+        "extended_stay_hotel",
+        "hostel",
+        "motel",
+        "guest_house",
+        "inn",
+    }
+)
+
+
+def _categories_indicate_meal(categories: list[str]) -> bool:
+    """category list に飲食を示すラベルが含まれるか。`*_restaurant` 接尾辞も許容。"""
+    for c in categories:
+        if c in _MEAL_CATEGORIES or c.endswith("_restaurant"):
+            return True
+    return False
+
+
+def _categories_indicate_lodging(categories: list[str]) -> bool:
+    return any(c in _LODGING_CATEGORIES for c in categories)
 
 
 def validate_llm_output(
@@ -81,6 +125,7 @@ def validate_llm_output(
         _check_temporal_range(issues, idx, item, start_dt, end_dt, pack)
         _check_opening_hours(issues, idx, item, start_dt, places_by_id)
         _check_transit_details(issues, idx, item, edges_by_key, start_dt, end_dt)
+        _check_item_type_category_consistency(issues, idx, item, places_by_id)
 
     _check_overlapping_items(issues, plan.items)
     _check_budget(issues, plan.items, pack)
@@ -278,6 +323,50 @@ def _check_opening_hours(
 
 def _hhmm_in_slot(hhmm: str, slot: OpeningHoursSlot) -> bool:
     return slot.open_hhmm <= hhmm <= slot.close_hhmm
+
+
+def _check_item_type_category_consistency(
+    issues: list[ValidationIssue],
+    idx: int,
+    item: LlmPlanItem,
+    places_by_id: dict[str, object],
+) -> None:
+    """item_type と place.category の整合性を確認する（Codex Minor、Phase 1.10）。
+
+    - meal slot に飲食 category を持たない place が割当てられたら mismatch issue
+    - lodging slot に宿泊 category を持たない place が割当てられたら mismatch issue
+    - activity / transit / 不明 place は permissive（check しない）
+    - category 空（pack 構築側の情報欠損）は penalize しない
+    """
+    from ..evidence.pack import PlacePoint
+
+    if item.item_type not in ("meal", "lodging"):
+        return
+    if not item.place_id or item.place_id not in places_by_id:
+        return  # place_id 不明は別 issue で扱う
+    place = places_by_id[item.place_id]
+    assert isinstance(place, PlacePoint)
+    if not place.category:
+        return  # 情報なし、judgement 保留
+
+    if item.item_type == "meal" and not _categories_indicate_meal(place.category):
+        issues.append(
+            ValidationIssue(
+                IssueKind.ITEM_TYPE_CATEGORY_MISMATCH,
+                f"meal item に飲食系 category を持たない place_id={item.place_id} "
+                f"を割当て（category={place.category}）",
+                idx,
+            )
+        )
+    elif item.item_type == "lodging" and not _categories_indicate_lodging(place.category):
+        issues.append(
+            ValidationIssue(
+                IssueKind.ITEM_TYPE_CATEGORY_MISMATCH,
+                f"lodging item に宿泊系 category を持たない place_id={item.place_id} "
+                f"を割当て（category={place.category}）",
+                idx,
+            )
+        )
 
 
 def _check_transit_details(

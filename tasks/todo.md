@@ -35,6 +35,16 @@
   - **次セッション候補（Codex 残課題）**: (latent) 営業時間 parser の日跨ぎ対応 / (Minor) item_type vs category 整合性 validator
   - 設計書 + 全 run 詳細 (run 4〜27) + Codex review 全文 + 工夫まとめは @tasks/plans/2026-04-25-structured-plan-assembly.md
 **Phase 1.4〜1.9 骨組み**: ✅ 完了（フロントの配線層、デザイナーへ引き渡し済み）
+
+**Phase 1.10 デプロイ準備（コード側）**: ✅ 2026-04-25 セッションで完了（`feat/deploy-prep` ブランチ、API unit 283 件 PASS / Web 61 件 PASS / gunicorn smoke OK）。デプロイ前ブロッカーをまとめて解消:
+  - **CORS 追加**: `flask-cors` 導入 + `apps/api/src/app.py` に `_resolve_cors_origins()` 実装。env `CORS_ALLOWED_ORIGINS`(CSV) 読み、未設定時 `http://localhost:3000` のみ。`Authorization` / `Content-Type` 許可、`GET/POST/OPTIONS` 許可。CORS テスト 6 件
+  - **gunicorn 追加**: `requirements.txt` に追加、`--workers 1 --timeout 180` で起動 smoke OK
+  - **render.yaml 新規作成**: Singapore region / healthCheckPath /healthz / 秘密値は `sync: false` で Dashboard 経由
+  - **PROMPT_VERSION_DEFAULT を v2.0.0 に昇格**: Phase 1.3e 実証版（hallucination 0% / success 100%）を本番 default に。env 設定漏れでも v1（10〜67% hallucination）にフォールバックしない安全配線
+  - **validator: item_type vs category 整合性チェック**（Codex Minor 残対応）: `IssueKind.ITEM_TYPE_CATEGORY_MISMATCH` 新設、`_MEAL_CATEGORIES`/`_LODGING_CATEGORIES` allowlist + Google Places `*_restaurant` 接尾辞許容。meal slot に観光地のみ・lodging slot にレストランのみ等の semantic mismatch を検出。テスト 10 件
+  - **docs/setup-guide.md** を Render Blueprint 経由フローと CORS env で刷新
+  - **デプロイ実施は user 作業**（Vercel/Render アカウント作成、env 入力、Settings UI で HTTP Timeout 180s）
+
 **分業土台**: ✅ 2026-04-25 整備完了。3 メンバー並行着手可能な状態:
   - 型 3 点同期済み（`ShareResponse` / `SharedPlanResponse` 系、Phase 1.9 DB-4/5 の契約確定）
   - `supabase/migrations/` 00〜04 が冪等で配置済み（DB-1 は Manato 先行実施、DB 担当は今後の新規 ALTER のみ）
@@ -63,7 +73,8 @@
     3. `cd apps/api && .venv/bin/pytest -m integration tests/test_routes_plans.py -x -v` で 3/3 PASS 確認（Supabase anon sign-in は 30/hour rate limit、直前に他 integration を多く回した直後は 1 時間クールダウン）
     4. PASS したら todo.md と lessons.md（drift 原因と修正の記録）を更新
 - [ ] **Manato**: Phase 1.10 デプロイ準備（Vercel + Render）。次セッション着手時の最初の一手は **CORS 追加 + gunicorn 追加 + render.yaml 作成** を `feat/deploy-prep` で実装。`apps/api/src/app.py` に CORS 設定なし / `requirements.txt` に gunicorn なしが本番ブロッカーとして 2026-04-25 セッションで判明。Vercel/Render アカウント作成と本番ドメイン方針の判断はユーザ側で必要（詳細は 1.10 節）
-- [ ] **Manato（残課題、優先度低）**: Codex 指摘の (latent) 営業時間 parser 日跨ぎ対応 / (Minor) item_type vs category 整合性 validator
+- [x] **Manato（Codex Minor、2026-04-25 完了）**: item_type vs category 整合性 validator を追加（`feat/deploy-prep` ブランチ）。`IssueKind.ITEM_TYPE_CATEGORY_MISMATCH` 新設、`_check_item_type_category_consistency` 実装、`_MEAL_CATEGORIES` / `_LODGING_CATEGORIES` allowlist + `*_restaurant` 接尾辞対応。テスト 10 件 PASS、unit 全 283 件 PASS
+- [ ] **Manato（残課題、優先度低、Phase 2 scope）**: Codex (latent) 営業時間 parser 日跨ぎ対応（"22:00-02:00" のような夜またぎ）。MVP 箱根デモは日中観光のみで影響なし
 - [ ] **メンバー B**: DB-4〜6 共有 API（型は 2026-04-25 に同期済み、Flask 実装すれば通る） / DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
 - [ ] **メンバー C**: 1.4〜1.9 の見た目仕上げ（@tasks/handoff-frontend.md）
 

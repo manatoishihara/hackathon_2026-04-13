@@ -470,3 +470,141 @@ def test_validation_issue_has_kind_and_message_and_item_index():
     issue = next(i for i in issues if i.kind == IssueKind.UNKNOWN_PLACE_ID)
     assert issue.message  # 非空文字列
     assert issue.item_index == 0
+
+
+# ==============================
+# item_type vs category 整合性（Codex Minor、Phase 1.10）
+#
+# meal / lodging slot は対応 category を含む place を選ばないと意味的に破綻する。
+# activity は permissive（観光・公園・店なんでも入りうる）。category 空は情報なし扱い skip。
+# ==============================
+
+
+def _meal_item(place_id: str = "A") -> LlmPlanItem:
+    return LlmPlanItem(
+        order_index=0,
+        item_type="meal",
+        title="昼食",
+        description=None,
+        start_time="2026-06-01T12:00:00+09:00",
+        end_time="2026-06-01T13:00:00+09:00",
+        place_id=place_id,
+        cost_jpy=2000,
+        cost_confidence="estimated",
+        transit_ref=None,
+    )
+
+
+def _lodging_item(place_id: str = "A") -> LlmPlanItem:
+    return LlmPlanItem(
+        order_index=0,
+        item_type="lodging",
+        title="宿泊",
+        description=None,
+        start_time="2026-06-01T18:00:00+09:00",
+        end_time="2026-06-02T08:00:00+09:00",
+        place_id=place_id,
+        cost_jpy=12000,
+        cost_confidence="estimated",
+        transit_ref=None,
+    )
+
+
+def _place_with_categories(place_id: str, categories: list[str]) -> PlacePoint:
+    return PlacePoint(
+        place_id=place_id,
+        name=f"p-{place_id}",
+        category=categories,
+        lat=35.0,
+        lng=139.0,
+        address="addr",
+        opening_hours=[],
+        opening_hours_unknown_days=[],
+        price_level=None,
+        rating=None,
+        user_ratings_total=None,
+    )
+
+
+def test_meal_with_restaurant_category_no_issue():
+    pack = _pack(places=[_place_with_categories("A", ["restaurant", "food"])])
+    plan = _plan(_meal_item(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    assert not any(i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH for i in issues)
+
+
+def test_meal_with_japanese_restaurant_subtype_no_issue():
+    """`japanese_restaurant` / `yakiniku_restaurant` 等の Google Places 細粒度 category も meal と整合。"""
+    pack = _pack(places=[_place_with_categories("A", ["japanese_restaurant", "point_of_interest"])])
+    plan = _plan(_meal_item(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    assert not any(i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH for i in issues)
+
+
+def test_meal_with_cafe_category_no_issue():
+    pack = _pack(places=[_place_with_categories("A", ["cafe"])])
+    plan = _plan(_meal_item(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    assert not any(i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH for i in issues)
+
+
+def test_meal_with_tourist_attraction_only_is_issue():
+    """meal slot に観光地 only の place を割当てたら mismatch issue。"""
+    pack = _pack(places=[_place_with_categories("A", ["tourist_attraction", "park"])])
+    plan = _plan(_meal_item(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    mismatches = [i for i in issues if i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH]
+    assert len(mismatches) == 1
+    assert mismatches[0].item_index == 0
+    assert "meal" in mismatches[0].message
+
+
+def test_meal_with_empty_category_skips_check():
+    """category 空（pack 構築側の情報欠損）は penalize しない。"""
+    pack = _pack(places=[_place_with_categories("A", [])])
+    plan = _plan(_meal_item(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    assert not any(i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH for i in issues)
+
+
+def test_lodging_with_lodging_category_no_issue():
+    pack = _pack(places=[_place_with_categories("A", ["lodging", "establishment"])])
+    plan = _plan(_lodging_item(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    assert not any(i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH for i in issues)
+
+
+def test_lodging_with_ryokan_category_no_issue():
+    pack = _pack(places=[_place_with_categories("A", ["ryokan"])])
+    plan = _plan(_lodging_item(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    assert not any(i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH for i in issues)
+
+
+def test_lodging_with_restaurant_only_is_issue():
+    """lodging slot にレストランのみの place を割当てたら mismatch issue。"""
+    pack = _pack(places=[_place_with_categories("A", ["restaurant", "food"])])
+    plan = _plan(_lodging_item(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    mismatches = [i for i in issues if i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH]
+    assert len(mismatches) == 1
+    assert "lodging" in mismatches[0].message
+
+
+def test_activity_with_any_category_no_issue():
+    """activity は permissive。観光地でも飲食店でも宿でも check しない。"""
+    pack = _pack(places=[_place_with_categories("A", ["restaurant"])])
+    plan = _plan(_activity(place_id="A"))
+    issues = validate_llm_output(plan, pack)
+    assert not any(i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH for i in issues)
+
+
+def test_transit_skips_check():
+    """transit は place_id=None なので check 対象外。"""
+    pack = _pack(
+        places=[_place_with_categories("A", ["x"]), _place_with_categories("B", ["y"])],
+        transit_matrix=[_edge("A", "B")],
+    )
+    plan = _plan(_transit_item())
+    issues = validate_llm_output(plan, pack)
+    assert not any(i.kind == IssueKind.ITEM_TYPE_CATEGORY_MISMATCH for i in issues)

@@ -246,6 +246,20 @@
   - CI で走らせる場合は IP 当たりの rate limit を気にせず済むよう **ローカル Supabase（`supabase start`）を用意**するか、テスト用の別プロジェクトを切る運用を検討
 - → 2 回目が来たら `.claude/rules/testing.md` の「integration テスト」節に昇格（今は 1 回目）
 
+## 2026-04-25: validator の semantic check は「allowlist + 接尾辞パターン」の二段で Google Places の細粒度 category を吸収できる
+- 問題: Codex Minor 指摘「item_type vs category 整合性 validator 未実装」を実装する際、Google Places API は `restaurant` だけでなく `japanese_restaurant` / `yakiniku_restaurant` / `taiwanese_restaurant` / `seafood_restaurant` 等の細粒度 category を返す。素朴な `category in {"restaurant", "food", ...}` 厳密一致だと**ほとんどの実 place を mismatch と誤判定**する（Phase 1.3e の `_find_alternate_place` で同じ罠にハマった経験あり = `category[0]` 厳密一致だと candidate 枯渇）
+- 対応: 二段判定で吸収:
+  - **第 1 段（exact allowlist）**: `_MEAL_CATEGORIES = {restaurant, food, cafe, bakery, bar, meal_takeaway, meal_delivery}` / `_LODGING_CATEGORIES = {lodging, hotel, resort_hotel, ryokan, bed_and_breakfast, ...}`
+  - **第 2 段（接尾辞パターン）**: meal は `c.endswith("_restaurant")` も許容。Google の動的 subtype に追従できる（新しい cuisine subtype が増えても allowlist 更新不要）
+- 設計原則:
+  - **activity / transit は permissive**: activity の category 範囲は広すぎる（観光地 / 公園 / 店 / 自然 / 体験）ため check しない。validator の責務を「明確に意味的に間違いと言える case のみ catch」に絞る
+  - **category 空 = judgement 保留**: pack 構築側の情報欠損で penalize しない。validator 自身が完璧な情報を要求するな
+  - **allowlist は frozenset**: 不変性とハッシュ化高速化、import-time 構築コストゼロ
+- ルール:
+  - **第三者 API（Google Places 等）の細粒度 category を扱う時は、allowlist + パターン抽象化の二段で吸収せよ**。allowlist 単独では新 subtype 追加に脆弱
+  - validator の semantic check は「明確な間違い」だけ捕捉。曖昧な case は permissive 側に倒して LLM の判断を尊重（誤検出で retry 浪費を避ける）
+- → 2 回目が来たら `.claude/rules/llm-rules.md` の「validator 設計原則」節に昇格（今は 1 回目）
+
 ## 2026-04-25: setup-guide.md と requirements.txt / app.py が整合しないまま Phase 1.10 直前に来た
 - 問題: Phase 1.10 デプロイ準備のため現状調査したところ、本番が動かない 2 件のコード/設定漏れを発見:
   - `apps/api/src/app.py` に CORS 設定がゼロ（Vercel→Render は cross-origin で全 fetch がプリフライト段階で blocked）
