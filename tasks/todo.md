@@ -298,6 +298,15 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 
 #### メンバー B 担当（1.3d と完全独立、並行可）
 - [x] DB-1: `supabase/migrations/` 冪等 5 連番ファイル配置（2026-04-25 Manato 先行実施）。DB 担当は今後の DDL 変更時に新規連番ファイルを追加する運用を維持
+- [x] **DB インデックス最適化（2026-04-25 メンバー B 実施）**: `supabase/migrations/20260425_05_index_optimization.sql` を新規作成。cron クリーンアップクエリと DB-5 共有閲覧 API の ORDER BY を複合インデックスで高速化:
+  - `idx_plans_status_updated_at(status, updated_at)` — stuck-plans cron の Seq Scan 排除
+  - `idx_plans_status_created_at(status, created_at)` — abandoned-plans cron の Seq Scan 排除
+  - `idx_participants_plan_order(plan_id, order_index)` — DB-5 の Sort ステップを Index Only Scan に昇格
+  - **Supabase SQL Editor での適用が必要**（冪等設計、何度実行しても安全）
+- [x] **DB 最適化 ⑫⑬（2026-04-25 メンバー B 実施）**:
+  - **⑫ コネクションプール**: `apps/api/src/supabase_client.py` をシングルトン化。毎リクエスト `create_client()` → httpx.Client 都度生成だったのを、double-checked locking でプロセス内の接続を再利用する設計に変更。テスト用 `_reset_client()` も追加
+  - **⑬ 非同期バッチ化**: `supabase/migrations/20260425_06_shared_plan_rpc.sql` を新規作成。`get_shared_plan(token)` RPC で plan + participants + plan_items を 1 本の SQL に集約し、DB-5 のラウンドトリップを 3 回 → 1 回に削減。`share_token IS NOT NULL` を SQL 内にハードコードして Flask 経由でのみアクセス可能な設計を維持
+  - **Supabase SQL Editor で `20260425_06_shared_plan_rpc.sql` を適用後、DB-5 の `share_routes.py` 実装で `client.rpc("get_shared_plan", ...)` を使う**
 - [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備、申請に時間がかかるので今すぐ）
 - [ ] DB-8: Supabase Row-Level Logging（pg_stat_statements など、Phase 1.3d の RPC + plan_items INSERT が稼働し始めるのでログ観測基盤を用意）
 - [ ] 1.9 共有 API は上の「1.9 共有 API 実装」セクションで DB-4/5/6 として別管理
