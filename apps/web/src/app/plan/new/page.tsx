@@ -13,13 +13,22 @@ import {
   postEvidencePlaces,
   updatePlanStatus,
 } from "@/lib/api";
+import { formatJpy } from "@/lib/format";
 import { planFormSchema, type PlanFormValues } from "@/lib/schemas/planForm";
 import { ensureAnonymousSession, getCurrentUserId } from "@/lib/supabase";
 import { BudgetBreakdownSlider } from "@/components/BudgetBreakdownSlider";
 import { ParticipantTabs } from "@/components/ParticipantTabs";
+import { StepProgressRunway } from "@/components/plan-new/StepProgressRunway";
 import { useGenerationSessionStore } from "@/stores/generationSessionStore";
 
-const PARTICIPANT_COLORS = ["#d97757", "#2c5f5d", "#3a7d44", "#e8a951", "#9b6fa8"];
+// blue hour 配色（5 人を区別する色パレット、どれもブランドトーンに沿う）
+const PARTICIPANT_COLORS = [
+  "#042C53", // Deep Navy
+  "#F0997B", // Coral
+  "#2C5F5D", // Deep Teal
+  "#3C5B8F", // Blue Gray
+  "#C49C82", // Sand Coral
+];
 
 const DEFAULT_VALUES: PlanFormValues = {
   title: "",
@@ -77,7 +86,30 @@ export default function NewPlanPage() {
   });
   const { control, register, handleSubmit, watch, setValue, formState } = form;
   const participants = watch("participants");
+  const watched = watch();
   const isSubmitting = formState.isSubmitting;
+
+  // 入力埋まり率（飛行機の進行に使う）
+  const baseFields: Array<string | undefined> = [
+    watched.title,
+    watched.region,
+    watched.departure_point,
+    watched.start_date,
+    watched.end_date,
+  ];
+  const baseFilled = baseFields.filter(
+    (v) => typeof v === "string" && v.trim().length > 0,
+  ).length;
+  const budgetFilled = (watched.budget_per_person_jpy ?? 0) > 0 ? 1 : 0;
+  const participantFilled = participants.reduce(
+    (sum, p) =>
+      sum +
+      (p.display_name?.trim() ? 1 : 0) +
+      (p.wishes_text?.trim() ? 1 : 0),
+    0,
+  );
+  const totalFields = 5 + 1 + participants.length * 2;
+  const progress = (baseFilled + budgetFilled + participantFilled) / totalFields;
 
   const handleAddParticipant = () => {
     if (participants.length >= 5) return;
@@ -156,17 +188,17 @@ export default function NewPlanPage() {
   };
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-12">
-      <header className="flex flex-col gap-2">
-        <p className="text-sm font-medium tracking-widest text-[color:var(--color-primary)]">
-          STEP 1 / 2
-        </p>
-        <h1 className="text-2xl font-bold text-[color:var(--color-text-primary)] sm:text-3xl">
-          どこへ、誰と、どんな旅にしますか？
-        </h1>
-        <p className="text-sm text-[color:var(--color-text-secondary)]">
-          参加者 2〜5 人の希望と予算配分を入力してください。LLM がその場で合意案を組み立てます。
-        </p>
+    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-12">
+      <header className="flex flex-col gap-6">
+        <StepProgressRunway progress={progress} isSubmitting={isSubmitting} />
+        <div className="flex flex-col gap-3">
+          <h1 className="font-heading text-3xl leading-[1.4] text-[color:var(--color-text-primary)] sm:text-4xl lg:text-[40px]">
+            どこへ、誰と、どんな旅にしますか？
+          </h1>
+          <p className="max-w-xl text-sm leading-[1.85] text-[color:var(--color-text-primary)] opacity-80">
+            参加者 2〜5 人の希望と予算配分を入力してください。LLM がその場で合意案を組み立てます。
+          </p>
+        </div>
       </header>
 
       <form className="flex flex-col gap-8" onSubmit={handleSubmit(onSubmit)}>
@@ -180,7 +212,7 @@ export default function NewPlanPage() {
               {...register("title")}
             />
             {formState.errors.title ? (
-              <p className="text-xs text-[color:var(--color-danger)]">
+              <p className="flex items-start gap-2 border-l-2 border-[color:var(--color-accent)] pl-2 text-xs leading-relaxed text-[color:var(--color-text-primary)]">
                 {formState.errors.title.message}
               </p>
             ) : null}
@@ -209,13 +241,18 @@ export default function NewPlanPage() {
             <Label htmlFor="end_date">終了日</Label>
             <Input id="end_date" type="date" {...register("end_date")} />
             {formState.errors.end_date ? (
-              <p className="text-xs text-[color:var(--color-danger)]">
+              <p className="flex items-start gap-2 border-l-2 border-[color:var(--color-accent)] pl-2 text-xs leading-relaxed text-[color:var(--color-text-primary)]">
                 {formState.errors.end_date.message}
               </p>
             ) : null}
           </div>
-          <div className="flex flex-col gap-2 sm:col-span-2">
-            <Label htmlFor="budget_per_person_jpy">1 人あたり予算（円）</Label>
+          <div className="flex flex-col gap-3 sm:col-span-2">
+            <div className="flex items-baseline justify-between">
+              <Label htmlFor="budget_per_person_jpy">1 人あたり予算</Label>
+              <span className="font-mono text-xl tabular-nums text-[color:var(--color-primary)]">
+                {formatJpy(watched.budget_per_person_jpy ?? 0)}
+              </span>
+            </div>
             <Input
               id="budget_per_person_jpy"
               type="number"
@@ -224,6 +261,30 @@ export default function NewPlanPage() {
               step={1000}
               {...register("budget_per_person_jpy", { valueAsNumber: true })}
             />
+            <div className="flex flex-wrap gap-2">
+              {[10000, 20000, 30000, 50000, 100000].map((amount) => {
+                const active = watched.budget_per_person_jpy === amount;
+                return (
+                  <button
+                    type="button"
+                    key={amount}
+                    onClick={() =>
+                      setValue("budget_per_person_jpy", amount, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      })
+                    }
+                    className={`rounded-full px-4 py-1.5 text-xs font-medium transition-colors ${
+                      active
+                        ? "bg-[color:var(--color-primary)] text-[color:var(--color-background)]"
+                        : "border border-[color:var(--color-border)] bg-[color:var(--color-surface)] text-[color:var(--color-text-secondary)] hover:border-[color:var(--color-primary)] hover:text-[color:var(--color-primary)]"
+                    }`}
+                  >
+                    {formatJpy(amount)}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </section>
 
@@ -285,16 +346,16 @@ export default function NewPlanPage() {
         </section>
 
         {submitError ? (
-          <div className="rounded-md border border-[color:var(--color-danger)]/30 bg-[color:var(--color-danger)]/5 p-3 text-sm text-[color:var(--color-danger)]">
+          <div className="rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/5 p-4 text-sm leading-relaxed text-[color:var(--color-danger)]">
             {submitError}
           </div>
         ) : null}
 
-        <div className="flex items-center justify-end gap-3">
+        <div className="flex items-center justify-end gap-3 pt-2">
           <button
             type="submit"
             disabled={isSubmitting}
-            className="inline-flex items-center gap-2 rounded-md bg-[color:var(--color-primary)] px-6 py-3 text-base font-medium text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-full bg-[color:var(--color-primary)] px-7 py-3.5 text-base font-medium text-[color:var(--color-background)] shadow-[0_8px_24px_rgba(4,44,83,0.18)] transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {isSubmitting ? (
               <>

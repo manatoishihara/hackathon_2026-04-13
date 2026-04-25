@@ -65,7 +65,7 @@ export function MapView({ items }: Props) {
   }
 
   return (
-    <div className="h-[480px] w-full overflow-hidden rounded-lg border border-[color:var(--color-border)]">
+    <div className="h-full min-h-[200px] w-full overflow-hidden rounded-md border border-[color:var(--color-border)]">
       <Map
         mapboxAccessToken={token}
         initialViewState={initialView}

@@ -1,27 +1,27 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Calendar, MapPin, Users, Wallet } from "@phosphor-icons/react/dist/ssr";
 
 import { getParticipants, getPlan, getPlanItems } from "@/lib/api";
-import { BudgetSummary } from "@/components/BudgetSummary";
+import { groupByDate, PlanTimeline } from "@/components/PlanTimeline";
 import { MapView } from "@/components/MapView";
-import { PlanTimeline } from "@/components/PlanTimeline";
+import { DayTabs } from "@/components/plan-view/DayTabs";
+import { PlanHeader } from "@/components/plan-view/PlanHeader";
+import { StatsCard } from "@/components/plan-view/StatsCard";
+import { SuggestionCard } from "@/components/plan-view/SuggestionCard";
 import { LoadingState } from "@/components/ui/states/LoadingState";
 import { ErrorState } from "@/components/ui/states/ErrorState";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
-import { formatDateRange } from "@/lib/format";
+import { formatMonthDay } from "@/lib/format";
 
 /**
- * 1.7 プラン閲覧画面 (06)。
+ * 1.7 プラン閲覧画面 (06)。HTML モック "blue hour" 準拠の構成:
+ *   - PlanHeader: ロゴ + 参加者アバター + 英字ラベル + 明朝大見出し + メタ
+ *   - DayTabs: 日ごとの切替
+ *   - 2 カラム (1.35fr / 1fr): 左 PlanTimeline、右 Map + StatsCard + SuggestionCard
  *
- * タイムライン（主役）/ 予算サマリ（脇役）/ マップ（脇役、Branch 4 で差し込み） の 3 カラム。
- * 「タイムライン / マップ / 予算」タブで切り替え可能。
- *
- * データ取得は lib/api.ts 経由（USE_MOCKS=1 なら fixture、それ以外は Supabase 直接）。
- * デザイナーは className / レイアウト / Motion を触ってよい。ロジックは触らない。
+ * データ取得は lib/api.ts 経由（USE_MOCKS=1 なら fixture）。ロジックは触らない。
  */
 export default function PlanPage() {
   const params = useParams<{ id: string }>();
@@ -43,6 +43,14 @@ export default function PlanPage() {
     enabled: Boolean(planId),
   });
 
+  const groups = useMemo(
+    () => (itemsQuery.data ? groupByDate(itemsQuery.data) : []),
+    [itemsQuery.data],
+  );
+  const [activeDateKey, setActiveDateKey] = useState<string | null>(null);
+  const effectiveActiveKey =
+    activeDateKey ?? groups[0]?.dateKey ?? null;
+
   const isLoading =
     planQuery.isPending || itemsQuery.isPending || participantsQuery.isPending;
   const error = planQuery.error ?? itemsQuery.error ?? participantsQuery.error;
@@ -55,7 +63,12 @@ export default function PlanPage() {
     );
   }
 
-  if (error || !planQuery.data || !itemsQuery.data || !participantsQuery.data) {
+  if (
+    error ||
+    !planQuery.data ||
+    !itemsQuery.data ||
+    !participantsQuery.data
+  ) {
     return (
       <main className="mx-auto min-h-screen max-w-6xl px-6 py-12">
         <ErrorState
@@ -79,113 +92,37 @@ export default function PlanPage() {
   }
 
   const plan = planQuery.data;
-  const items = itemsQuery.data;
   const participants = participantsQuery.data;
 
-  return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-6 py-8">
-      <PlanHeader plan={plan} participantCount={participants.length} />
-      <Tabs defaultValue="timeline" className="flex flex-col gap-4">
-        <TabsList>
-          <TabsTrigger value="timeline" className="gap-2">
-            <Calendar size={14} weight="duotone" />
-            タイムライン
-          </TabsTrigger>
-          <TabsTrigger value="map" className="gap-2">
-            <MapPin size={14} weight="duotone" />
-            マップ
-          </TabsTrigger>
-          <TabsTrigger value="budget" className="gap-2">
-            <Wallet size={14} weight="duotone" />
-            予算
-          </TabsTrigger>
-        </TabsList>
+  const activeGroup =
+    groups.find((g) => g.dateKey === effectiveActiveKey) ?? groups[0];
+  const activeItems = activeGroup?.items ?? [];
 
-        {/* デスクトップ: タイムラインが主役、予算サマリを右サイドに */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-          <TabsContent value="timeline" className="m-0">
-            <PlanTimeline items={items} />
-          </TabsContent>
-          <TabsContent value="map" className="m-0">
-            <MapView items={items} />
-          </TabsContent>
-          <TabsContent value="budget" className="m-0 lg:hidden">
-            <BudgetSummary plan={plan} items={items} />
-          </TabsContent>
-          <aside className="hidden flex-col gap-4 lg:flex">
-            <BudgetSummary plan={plan} items={items} />
-            <ParticipantList participants={participants} />
-          </aside>
-        </div>
-      </Tabs>
+  const days = groups.map((g) => ({
+    dateKey: g.dateKey,
+    label: formatMonthDay(g.items[0].start_time),
+  }));
+
+  return (
+    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-6 py-8">
+      <PlanHeader plan={plan} participants={participants} />
+
+      <DayTabs
+        days={days}
+        activeDateKey={effectiveActiveKey ?? ""}
+        onChange={setActiveDateKey}
+      />
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.35fr_1fr]">
+        <PlanTimeline items={activeItems} />
+        <aside className="flex flex-col gap-3">
+          <div className="h-[200px]">
+            <MapView items={activeItems} />
+          </div>
+          <StatsCard items={activeItems} />
+          <SuggestionCard />
+        </aside>
+      </div>
     </main>
   );
 }
-
-function PlanHeader({
-  plan,
-  participantCount,
-}: {
-  plan: Awaited<ReturnType<typeof getPlan>>;
-  participantCount: number;
-}) {
-  return (
-    <header className="flex flex-col gap-3">
-      <div className="flex items-center gap-2 text-sm text-[color:var(--color-text-secondary)]">
-        <MapPin size={14} weight="duotone" />
-        <span>{plan.region}</span>
-        <Separator orientation="vertical" className="mx-1 h-3" />
-        <Calendar size={14} weight="duotone" />
-        <span>{formatDateRange(plan.start_date, plan.end_date)}</span>
-        <Separator orientation="vertical" className="mx-1 h-3" />
-        <Users size={14} weight="duotone" />
-        <span>
-          {participantCount} 人
-        </span>
-      </div>
-      <h1 className="text-2xl font-bold text-[color:var(--color-text-primary)] sm:text-3xl">
-        {plan.title}
-      </h1>
-      {plan.status === "generating" ? (
-        <p className="inline-flex w-fit items-center gap-1 rounded-full bg-[color:var(--color-primary)]/10 px-2 py-0.5 text-xs font-medium text-[color:var(--color-primary)]">
-          生成中
-        </p>
-      ) : null}
-      {plan.status === "failed" ? (
-        <p className="inline-flex w-fit items-center gap-1 rounded-full bg-[color:var(--color-danger)]/10 px-2 py-0.5 text-xs font-medium text-[color:var(--color-danger)]">
-          生成失敗
-        </p>
-      ) : null}
-    </header>
-  );
-}
-
-function ParticipantList({
-  participants,
-}: {
-  participants: Awaited<ReturnType<typeof getParticipants>>;
-}) {
-  if (participants.length === 0) return null;
-  return (
-    <section className="flex flex-col gap-3 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] p-4">
-      <h3 className="text-sm font-semibold text-[color:var(--color-text-secondary)]">
-        参加者
-      </h3>
-      <ul className="flex flex-col gap-2">
-        {participants.map((p) => (
-          <li key={p.id} className="flex items-center gap-2 text-sm">
-            <span
-              className="inline-block h-3 w-3 shrink-0 rounded-full"
-              style={{ backgroundColor: p.avatar_color }}
-              aria-hidden="true"
-            />
-            <span className="truncate text-[color:var(--color-text-primary)]">
-              {p.display_name}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
