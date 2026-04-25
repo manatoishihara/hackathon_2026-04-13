@@ -1,5 +1,7 @@
 # Team Roles & Interface Spec
 
+**運用の入口**: 各メンバー（の Claude Code）は作業前にまず @tasks/todo.md の「進捗サマリ」節で現状と担当を確認し、担当別のハンドオフ資料（@tasks/handoff-db.md / @tasks/handoff-frontend.md）を読んでから実装に入る。
+
 ## 役割分担
 
 ### Manato（全体統括 + AI/LLM 担当）
@@ -48,15 +50,15 @@ Pydantic スキーマ（`apps/api/src/schemas/`）はこれと一対一対応。
 ### 2. API エンドポイント
 
 ```
-POST   /api/sessions                     セッション作成
-POST   /api/evidence/places              Evidence Pack の places のみ取得、evidence_pack_id 発行 (Phase 1.3)
-POST   /api/plans/generate               evidence_pack_id + フロント取得 transit_matrix を受けて LLM → Plan 生成 (Phase 1.3)
-GET    /api/plans/:id                    プラン取得
-PATCH  /api/plans/:id/items/:item_id     アイテム編集
-POST   /api/plans/:id/items/:item_id/regenerate  部分再生成 (Phase 2)
-POST   /api/plans/:id/items/reorder      並び替え (Phase 2)
-POST   /api/plans/:id/share              共有トークン発行
-GET    /api/plans/shared/:token          共有閲覧（編集不可）
+POST   /api/sessions                     セッション作成                                      [TBD]
+POST   /api/evidence/places              Evidence Pack の places のみ + evidence_pack_id 発行 [✅ Phase 1.3a]
+POST   /api/plans/generate               evidence_pack_id + transit_matrix → LLM 生成         [✅ Phase 1.3c/d]
+GET    /api/plans/:id                    プラン取得（anon + RLS 経由）                          [フロント直 Supabase]
+PATCH  /api/plans/:id/items/:item_id     アイテム編集                                        [Phase 2]
+POST   /api/plans/:id/items/:item_id/regenerate  部分再生成                                 [Phase 2]
+POST   /api/plans/:id/items/reorder      並び替え                                            [Phase 2]
+POST   /api/plans/:id/share              共有トークン発行                                    [Phase 1.9 / DB-4、型 3 点同期済み]
+GET    /api/plans/shared/:token          共有閲覧（編集不可、Flask + service_role）          [Phase 1.9 / DB-5、型 3 点同期済み]
 ```
 
 ※ `/api/plans/generate` が 2 段階になっている理由は `tasks/lessons.md` と

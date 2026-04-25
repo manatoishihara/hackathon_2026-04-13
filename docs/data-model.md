@@ -1,6 +1,10 @@
 # Data Model
 
-このドキュメントは**正典**。データ構造の変更はまずここを更新し、その後に実装を修正せよ。
+このドキュメントはデータ構造の**概念モデル + TS/Pydantic 型の正典**。
+
+**SQL DDL の正典は `supabase/migrations/` 配下の連番ファイル**（2026-04-25 以降）。
+本ドキュメントの「PostgreSQL DDL」節は migrations ファイルのスナップショット（最新状態）を貼っているだけで、変更は migrations に新しい連番ファイルを追加する形で行う。
+既存 DDL を移植した本番 Supabase には migrations 20260401_00 / 20260419_01 / 20260424_02 / 20260424_03 / 20260424_04 が適用済み（冪等設計なので再適用しても安全）。
 
 ## 概念モデル
 
@@ -153,12 +157,12 @@ CREATE POLICY "Participants of own plans" ON participants
 CREATE POLICY "PlanItems of own plans" ON plan_items
   FOR ALL USING (plan_id IN (SELECT id FROM plans WHERE session_id = auth.uid()));
 
--- 共有トークン経由の読み取りは別途 View で提供
-CREATE VIEW shared_plans AS
-  SELECT p.*, pa.*, pi.*
+-- 共有トークン経由の読み取り用 view（Phase 1.9 の実装は Flask + service_role 経由を
+-- 採用したため、view 利用は optional）。
+-- plans / participants / plan_items を単一行に flatten しない（カラム名衝突するため）。
+CREATE OR REPLACE VIEW shared_plans AS
+  SELECT p.*
   FROM plans p
-  LEFT JOIN participants pa ON pa.plan_id = p.id
-  LEFT JOIN plan_items pi ON pi.plan_id = p.id
   WHERE p.share_token IS NOT NULL;
 ```
 
@@ -328,6 +332,30 @@ export type PlanGenerationPayload = {
   plan_id: string; // UUID 文字列（フロント発行、plans テーブルに存在済み）
   evidence_pack_id: string; // UUID 文字列
   transit_matrix: ClientTransitEdge[];
+};
+
+// POST /api/plans/:id/share レスポンス（Phase 1.9 DB-4）。
+// 既存 share_token があれば再生成せず同一値を返す（実装側でハンドリング）。
+// share_url はサーバーで URL を組み立てて返す（フロントで hard-code しない）。
+export type ShareResponse = {
+  share_token: string;
+  share_url: string;
+};
+
+// GET /api/plans/shared/:token レスポンス（Phase 1.9 DB-5）。
+// Flask + service role で RLS を跨いで読み、クエリ側で share_token 一致必須 + NULL 除外
+// を Flask のコードで強制する（handoff-db.md の方針）。
+// 公開レスポンスには session_id / share_token / plan_id を含めない（識別子漏洩防止）。
+// plan / participants / plan_items の 3 つ組を返して、フロントは通常 Plan と同じ
+// レンダリングロジックで処理できる（欠損フィールドはフロントで補う設計）。
+export type SharedPlanSummary = Omit<Plan, 'session_id' | 'share_token'>;
+export type SharedParticipant = Omit<Participant, 'plan_id'>;
+export type SharedPlanItem = Omit<PlanItem, 'plan_id'>;
+
+export type SharedPlanResponse = {
+  plan: SharedPlanSummary;
+  participants: SharedParticipant[];
+  plan_items: SharedPlanItem[];
 };
 ```
 

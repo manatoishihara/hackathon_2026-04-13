@@ -224,6 +224,89 @@ class PlanGenerationPayload(_StrictBase):
     transit_matrix: list[ClientTransitEdge] = Field(max_length=200)
 
 
+# ==============================
+# Phase 1.9 共有 API（DB-4 / DB-5）
+# ==============================
+
+
+class ShareResponse(_StrictBase):
+    """POST /api/plans/:id/share レスポンス（DB-4）。
+
+    既存 share_token があれば再生成せず同一値を返す（実装側でハンドリング）。
+    share_url はサーバーで組み立てて返す（フロントで base URL を hard-code させない）。
+    """
+
+    share_token: str
+    share_url: str
+
+
+class SharedPlanSummary(_StrictBase):
+    """GET /api/plans/shared/:token のレスポンス plan 部分（DB-5）。
+
+    Plan から session_id と share_token を除外した公開版（TS 側 `Omit<Plan, "session_id" | "share_token">`）。
+    識別子漏洩を防ぐため、別クラスとして明示的にフィールドを列挙する。
+    """
+
+    id: str
+    title: str
+    region: str
+    start_date: date
+    end_date: date
+    departure_point: str
+    budget_per_person_jpy: int
+    budget_breakdown: BudgetBreakdown
+    start_mode: StartMode
+    mode_payload: dict[str, Any] | None
+    status: PlanStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class SharedParticipant(_StrictBase):
+    """GET /api/plans/shared/:token の participants 要素（DB-5）。
+
+    Participant から plan_id を除外した公開版（TS 側 `Omit<Participant, "plan_id">`）。
+    """
+
+    id: str
+    display_name: str
+    avatar_color: str
+    wishes_text: str
+    tags: list[str]
+    order_index: int
+
+
+class SharedPlanItem(_StrictBase):
+    """GET /api/plans/shared/:token の plan_items 要素（DB-5）。
+
+    PlanItem から plan_id を除外した公開版（TS 側 `Omit<PlanItem, "plan_id">`）。
+    """
+
+    id: str
+    order_index: int
+    item_type: ItemType
+    title: str
+    description: str | None
+    start_time: datetime
+    end_time: datetime
+    location: Location
+    cost_jpy: int | None
+    cost_confidence: CostConfidence
+    evidence: Evidence
+    transit_to_next: TransitToNext | None
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SharedPlanResponse(_StrictBase):
+    """GET /api/plans/shared/:token レスポンス全体（DB-5）。"""
+
+    plan: SharedPlanSummary
+    participants: list[SharedParticipant]
+    plan_items: list[SharedPlanItem]
+
+
 __all__ = [
     # enums
     "StartMode",
@@ -249,4 +332,10 @@ __all__ = [
     "GeneratePlanResponse",
     "RegenerateItemRequest",
     "RegenerateItemResponse",
+    # share api (Phase 1.9 DB-4 / DB-5)
+    "ShareResponse",
+    "SharedPlanSummary",
+    "SharedParticipant",
+    "SharedPlanItem",
+    "SharedPlanResponse",
 ]

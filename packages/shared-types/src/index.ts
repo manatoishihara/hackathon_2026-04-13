@@ -172,6 +172,27 @@ export type PlanGenerationPayload = {
   transit_matrix: ClientTransitEdge[];
 };
 
+// POST /api/plans/:id/share レスポンス（Phase 1.9 DB-4）。
+// 既存 share_token があれば再生成せず同一値を返す。
+// share_url はサーバーで URL を組み立てて返す（フロントで hard-code しない）。
+export type ShareResponse = {
+  share_token: string;
+  share_url: string;
+};
+
+// GET /api/plans/shared/:token レスポンス（Phase 1.9 DB-5）。
+// Flask + service role で RLS を跨いで読む（tasks/handoff-db.md の方針）。
+// 公開レスポンスには session_id / share_token / plan_id を含めない（識別子漏洩防止）。
+export type SharedPlanSummary = Omit<Plan, "session_id" | "share_token">;
+export type SharedParticipant = Omit<Participant, "plan_id">;
+export type SharedPlanItem = Omit<PlanItem, "plan_id">;
+
+export type SharedPlanResponse = {
+  plan: SharedPlanSummary;
+  participants: SharedParticipant[];
+  plan_items: SharedPlanItem[];
+};
+
 // ==============================
 // UI ヘルパー（Phase 1.7 の Evidence バッジ表示用）
 // ==============================

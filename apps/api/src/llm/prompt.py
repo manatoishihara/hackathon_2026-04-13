@@ -50,6 +50,14 @@ def build_user_prompt(
     previous_issues: list[ValidationIssue] | None = None,
     version: str | None = None,
 ) -> str:
+    """v1 / v2 共通の user prompt builder。
+
+    v2 template は `{slot_catalog_json}` を追加で使い、`{temporal_constraints_json}` は
+    使わない（slot_catalog に包含）。format の未使用引数は無視されるので、常に全引数を渡す。
+    """
+    # assembly は v1 路でも利用（スロット情報は v1 LLM には見せないが、引数は無視される）
+    from .assembly import generate_slot_catalog
+
     version = version or load_prompt_version()
     template_path = _PROMPTS_ROOT / version / "user_template.md"
     if not template_path.exists():
@@ -62,6 +70,9 @@ def build_user_prompt(
     budget_json = _to_json(pack.budget_constraints.model_dump(mode="json"))
     temporal_json = _to_json(pack.temporal_constraints.model_dump(mode="json"))
     issues_json = _to_json([_issue_to_dict(i) for i in (previous_issues or [])])
+    slot_catalog_json = _to_json(
+        generate_slot_catalog(pack.temporal_constraints.total_days)
+    )
 
     return template.format(
         query_context_json=ctx_json,
@@ -70,6 +81,7 @@ def build_user_prompt(
         budget_constraints_json=budget_json,
         temporal_constraints_json=temporal_json,
         previous_issues_json=issues_json,
+        slot_catalog_json=slot_catalog_json,
     )
 
 
@@ -113,19 +125,20 @@ def _default(obj: object):
 def _place_for_llm(place: PlacePoint) -> dict:
     """LLM プロンプト用に PlacePoint から冗長フィールドを落とす。
 
-    address / user_ratings_total はプランニングに不要、トークン節約のため除外。
+    除外:
+      - address / user_ratings_total: プランニングに不要
+      - lat / lng: LLM が直接使わない（空間判断は transit_matrix で間接参照）
+      - relevance_tags: Phase 1.3 時点で空配列運用、冗長
+    これでトークン数を約 20〜30% 圧縮できる想定（@tasks/lessons.md 2026-04-25）。
     """
     return {
         "place_id": place.place_id,
         "name": place.name,
         "category": place.category,
-        "lat": place.lat,
-        "lng": place.lng,
         "opening_hours": [s.model_dump() for s in place.opening_hours],
         "opening_hours_unknown_days": place.opening_hours_unknown_days,
         "price_level": place.price_level,
         "rating": place.rating,
-        "relevance_tags": place.relevance_tags,
     }
 
 

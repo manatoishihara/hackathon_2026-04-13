@@ -54,3 +54,38 @@ class LlmGeneratedPlan(_LlmBase):
     """`client.chat.completions.parse(response_format=LlmGeneratedPlan)` で受け取るルート。"""
 
     items: list[LlmPlanItem]
+
+
+# ==============================
+# v2 (Structured Plan Assembly, LCaMO 論文応用、Phase 1.3e)
+# ==============================
+# LLM の役割を「slot_id と place_id の割当 + 選定理由」のみに縮小。
+# start_time / end_time / transit_ref / cost_jpy はサーバ側の assembler が決定論的に埋める。
+# 論文: 石原・中村 2026「LLM-guided Causal Multi-objective Optimizer」
+# 詳細: tasks/plans/2026-04-25-structured-plan-assembly.md
+
+
+class LlmSlotAssignment(_LlmBase):
+    """LLM が 1 slot に割り当てる place 情報（LlmGeneratedPlanV2 の要素）。
+
+    slot_id は assembly.SLOT_CATALOG のキーに限定される（prompt で提示、LLM は列挙型として選択）。
+    place_id は pack.places に含まれる id のみ有効。非存在は assembler が構造エラーとして raise。
+    """
+
+    slot_id: str = Field(min_length=1, max_length=40)
+    place_id: str = Field(min_length=1)
+    rationale: str = Field(
+        min_length=10,
+        max_length=80,
+        description="20〜60 文字推奨、参加者希望との接続を示す短文",
+    )
+
+
+class LlmGeneratedPlanV2(_LlmBase):
+    """v2 LLM 出力ルート（Structured Plan Assembly）。
+
+    `items` のような時刻・transit・cost を LLM に吐かせない。全ては slot 割当から
+    assembler が決定論的に組み立てる。
+    """
+
+    slots: list[LlmSlotAssignment]

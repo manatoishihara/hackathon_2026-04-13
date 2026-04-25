@@ -5,18 +5,30 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-24 更新）
+## 🏁 進捗サマリ（2026-04-25 更新）
 
 **Phase 0**: ✅ 完了
-**Phase 1.1〜1.3d**: ✅ 完了（バック: データモデル、Evidence Pack Builder、Transit Validator、LLM 生成 + ハルシネーション検出 + plan_items 保存、RLS E2E、pg_cron）
-**Phase 1.4〜1.9 骨組み**: ✅ 完了（フロントの配線層、デザイナーへ引き渡し済み）
+**Phase 1.1〜1.3d (実装)**: ✅ コード完了（バック: データモデル、Evidence Pack Builder、Transit Validator、LLM 生成 + ハルシネーション検出 + plan_items 保存、RLS E2E、pg_cron）
+**Phase 1.3d (実環境検証)**: ⚠️ **未達**。2026-04-25 に `verify_hallucination_rate.py` を計 3 回実行。10 runs × 2 回は hallucination 10%（`unknown_place_id` 主因）、その後 prompt token 圧縮（22,385→11,645、-48%）+ opening_hours 強調 + transit trim を施した 5 runs は hallucination 20% に悪化（`unknown_transit_edge` 7 件が新規噴出、**制約押し出し現象**）。詳細は @tasks/lessons.md 2026-04-25 エントリ
 
-**次にやるべきタスク（ブロッカーなし、並列可能）:**
-- [ ] **Manato 次タスク候補**:
-  - (A) Phase 1.3d 残検証: rate limit リセット後 `pytest -m integration` で RLS 8 件 + /api/plans/generate integration 3 件を完走させる
-  - (B) Phase 1.3d 残検証: 10 回生成して架空スポット出力率 0%（ハルシネーション対策の効果測定、コスト $1-3）
-  - (C) Phase 1.10 デプロイ準備（Vercel + Render）
-- [ ] **メンバー B**: DB-1 migrations ディレクトリ化 / DB-4〜6 共有 API / DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
+**Phase 1.3e (Structured Plan Assembly, LCaMO 応用)**: 🟡 **基盤完成・運用安定化は次セッションへ**。ブランチ `feat/structured-plan-assembly`、develop 未マージ。schema v2 + assembly + prompts v2 + generator v2 分岐 + 代替選定第 1〜2 弾（category 共通集合 + 自己ループ回避）+ `_pick_departure_time` + opening_hours 閾値撤廃 + verify スクリプト transit_matrix 強化（candidate 10 点）+ unit test 16 件 + 全 250 件 PASS。`verify --runs 3` 4 回反復:
+  - run 1〜2: hallucination=0%、unknown_transit_edge=3/3（assembler stub）
+  - run 3: hallucination=0%、unknown_transit_edge=0%（構造解消）、新たに departure_mismatch=18 + opening_hours=6
+  - run 4: hallucination **悪化 66.7%**（candidate 10 点拡充で prompt 12k→14.6k、LLM 注意散漫）
+
+**主目的「hallucination 構造的 0%」は 1〜3 回目で達成済み**、副次調整で悪化したのは tuning スイートスポット未到達。**次セッションの最初の一手**: candidate_departures を 10 → 3〜5 に絞って prompt token を 12k 以下に戻す。設計書 + 実装状況は @tasks/plans/2026-04-25-structured-plan-assembly.md
+**Phase 1.4〜1.9 骨組み**: ✅ 完了（フロントの配線層、デザイナーへ引き渡し済み）
+**分業土台**: ✅ 2026-04-25 整備完了。3 メンバー並行着手可能な状態:
+  - 型 3 点同期済み（`ShareResponse` / `SharedPlanResponse` 系、Phase 1.9 DB-4/5 の契約確定）
+  - `supabase/migrations/` 00〜04 が冪等で配置済み（DB-1 は Manato 先行実施、DB 担当は今後の新規 ALTER のみ）
+  - `.claude/settings.json` に `git add/commit/merge/push/rebase/reset` 系 deny、型 3 点同期対象ファイル編集時の PreToolUse 警告、セッション終了時の todo/lessons 反映 Stop hook を追加（Claude Code 横断で効く）
+  - CLAUDE.md → tasks/todo.md → tasks/handoff-*.md の動線を明示、`docs/team-roles.md` / `handoff-frontend.md` も 2026-04-25 の状況で更新
+
+**次にやるべきタスク:**
+- [ ] **Manato（最優先）**: Phase 1.3d プロンプト/validator チューニング再挑戦（@tasks/lessons.md の次イテレーション案 a〜d）。目標: `verify_hallucination_rate.py --runs 10` で hallucination = 0
+- [ ] **Manato（新規）**: `test_routes_plans.py::test_integration_end_to_end_plan_generation` と `::test_integration_lock_conflict_returns_409` の RLS violation (42501) 解消。Supabase SQL Editor で `SELECT * FROM pg_policies WHERE tablename='plans';` して現状 policy を確認、必要なら `supabase/migrations/20260401_00_init.sql` を本番再適用で最新 policy に揃える（冪等 DROP → CREATE）。詳細は Phase 1.3d 検証ブロック参照
+- [ ] **Manato**: Phase 1.10 デプロイ準備（Vercel + Render）—1.3d チューニング後
+- [ ] **メンバー B**: DB-4〜6 共有 API（型は 2026-04-25 に同期済み、Flask 実装すれば通る） / DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
 - [ ] **メンバー C**: 1.4〜1.9 の見た目仕上げ（@tasks/handoff-frontend.md）
 
 詳細は下の各セクション参照。
@@ -142,6 +154,33 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 
 **検証**: `pytest -m "not integration"` 234 件 PASS。integration は rate limit リセット後に `pytest -m integration` で再確認推奨。
 
+**実環境検証（2026-04-25 更新）**:
+- [x] `pytest -m integration tests/test_rls.py`（8 件）: **2026-04-25 00:49 JST に全 8 件 PASS（10.5 秒）**。rate limit は 1 時間クールダウンで回復した
+- [ ] `pytest -m integration tests/test_routes_plans.py`（3 件）: **1/3 PASS（`test_integration_invalid_transit_returns_400` のみ）**。残 2 件（`test_integration_end_to_end_plan_generation` / `test_integration_lock_conflict_returns_409`）は anon client から `plans` への INSERT 時に **RLS violation (code=42501, "new row violates row-level security policy for table plans")** で失敗。rate limit ではなく RLS policy 側の問題
+  - **原因仮説**: 本番 Supabase の "Plans of own session" policy が `FOR ALL USING (session_id = auth.uid())` だが WITH CHECK が事実上効かず anon INSERT を deny している。または本番 policy が migrations ファイルと drift している可能性
+  - **推奨対応（次セッション）**: (a) `supabase/migrations/20260401_00_init.sql` を本番に再適用して DROP POLICY IF EXISTS → CREATE POLICY で最新に揃える、(b) もしくは test 側を service_role 経由の INSERT に書き換える（フロント 1.5 の実挙動は anon INSERT なので (a) が本筋）、(c) Supabase SQL Editor で `SELECT * FROM pg_policies WHERE tablename='plans';` を実行して現在の policy を確認
+  - **今回は「検証と記録のみ」指示のためコード修正なし**。次の Manato 作業で吸収
+- [ ] `apps/api/scripts/verify_hallucination_rate.py --runs 10`: 2 run（OpenAI 合計 ~$4-6）いずれも hallucination 1/10 = **10%**。詳細 issue breakdown は @tasks/lessons.md 2026-04-25 エントリ。次イテレーション案 (a)〜(d) に従い prompt token / validator retry / fixture を見直す
+  - **閉塞原因の仮説（lessons.md 参照）**: prompt 22k tokens、opening_hours retry の効きが弱い、transit_matrix 拡張による places 情報の埋没
+  - **2026-04-25 着手済みの改善（Step 1-2、再検証未実施）**:
+    - (Step 1) `verify_hallucination_rate.py::_build_transit_matrix` を「各 place から最近傍 5 edges、hard_cap=100」に変更。14km 全ペア 160 edges → 75 edges（-53%）で実運用密度（フロント SDK 実測 ~40 edges）に近づけた
+    - (Step 2) `src/llm/prompt.py::_place_for_llm` から `lat` / `lng` / `relevance_tags` を除外（token 節約）。system prompt ルール 9（opening_hours 遵守）を「最頻出の違反」として強調
+    - **効果（計測値）**: prompt token 22,385 → **11,645（-48%）**。evidence-pack.md 目安 10k 内は届かず、12k warning threshold は +350 で僅か超
+    - unit テスト 60 件 (LLM 関連) PASS、regression なし
+  - **Step 3 実施（2026-04-25 夜、`--runs 5`、OpenAI ~$1）**: 結果 **悪化**。success 0/5、hallucination 1/5 = **20%**。内訳: `unknown_transit_edge=7`（新規大量発生）/ `outside_opening_hours=5`（前回 12 から激減）/ `budget_exceeded=1` / `unknown_place_id=1`
+    - opening_hours 違反は system prompt 強調で激減できたが、transit_matrix を 160→75 に攻めすぎて **LLM が pack にない edge を hallucinate する新しい失敗モード** が噴出
+    - validator 的には「制約違反の押し出し」現象。片方を締めるともう片方が開く
+  - **次イテレーション仮説（未実施、Manato 次セッション）**:
+    - (a') transit_matrix を最近傍 5 → 8 に戻す（75 → ~120 edges、prompt ~13k tokens 想定）
+    - (b') system prompt に「transit_matrix に該当 edge がなければ経路を使わず別 places を選び直す」と明示
+    - (e') **LCaMO 論文（石原・中村 2026）思想の適用、本命候補**: LLM の役割を「pack 内 place_id の順列選定 + slot 指定」に限定し、`start_time` / `transit_ref` / `cost_jpy` はサーバ決定論で埋める設計改修。5 種の validator issue を構造的に 0 化できる想定。詳細と選択肢は @tasks/lessons.md「2026-04-25 深夜: LCaMO 論文からの構造的知見」エントリ参照
+    - MVP 合格条件を「hallucination + unknown_transit_edge ≤ 10%」に下げる判断もあり（ハッカソン提出優先、Manato 次セッションで判断）
+  - **進め方の選択肢（Manato 次セッションで判断）**:
+    - (A) 設計 plan ファイル（`tasks/plans/2026-04-25-lcamo-inspired-plan-generation.md`）を先に書き、実装は次々セッション
+    - (B) Phase 1.3e 新ブランチで骨組みだけ実装（schema + slot テンプレ + transit 自動挿入 stub）、動作確認は次
+    - (C) ハッカソン提出優先で MVP 合格条件を緩和、LCaMO 応用は Phase 2 以降
+  - **再現手順**: `cd apps/api && .venv/bin/python scripts/verify_hallucination_rate.py --runs 10`（env: OPENAI_API_KEY / GOOGLE_MAPS_API_KEY 必須）
+
 ### 1.4〜1.9: **フロント骨組み + デザイン引き渡し**（並列 3 トラック運用）
 
 1.3c マージ後、Manato/Claude がフロントの「骨組み」を `feat/frontend-skeleton` で一括実装し、
@@ -186,24 +225,24 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] Design Tokens の最終調整（`globals.css` + `.claude/rules/frontend-design.md` 更新）
 
 #### 1.9 共有 API 実装（メンバー B 担当、@tasks/handoff-db.md の DB-4/5/6）
-- [ ] `POST /api/plans/:id/share`（share_token 生成）
-- [ ] `GET /api/plans/shared/:token`（read-only、RLS バイパス経路）
-- [ ] 共有用 RLS ポリシー監査
-- [ ] 型 `ShareResponse` を shared-types/Pydantic に追加（Manato と調整）
+- [x] 型 `ShareResponse` / `SharedPlanResponse` を docs / shared-types / Pydantic / parity に 3 点同期（2026-04-25 Manato、DB 担当の実装は contract 通りに通せば OK）
+- [ ] `POST /api/plans/:id/share`（share_token 生成、owner 検証、`plans.status='succeeded'` 限定）
+- [ ] `GET /api/plans/shared/:token`（Flask + service_role、RLS バイパス経路、handoff-db.md 参照）
+- [ ] 共有用 RLS ポリシー監査（handoff-db.md の DB-6 に要件整理）
 
 ### 1.x: **DB 整理タスク**
 
-詳細は @tasks/handoff-db.md 参照。2026-04-24 整理で **Manato（1.3d と合流）** と **メンバー B（独立）** に分業。
+詳細は @tasks/handoff-db.md 参照。2026-04-25 時点で **Manato 担当分は完了**、**メンバー B 担当分が残り**。
 
-#### Manato 担当（1.3d と合流して対応） ✅ 完了（Branch D で実装済み）
-- [x] DB-2: RLS の E2E テスト（`apps/api/tests/test_rls.py`、他セッションからのアクセス遮断検証）
-- [x] DB-3: 定期クリーンアップ（pg_cron）: (a) `evidence_pack_sessions` の期限切れ、(b) `plans WHERE status='generating' AND updated_at < now() - INTERVAL '1 hour'`、(c) `plans WHERE status IN ('draft','failed') AND created_at < now() - INTERVAL '24 hours'`。`succeeded` は保全
+#### Manato 担当（1.3d と合流して対応） ✅ 完了
+- [x] DB-2: RLS の E2E テスト（`apps/api/tests/test_rls.py`、他セッションからのアクセス遮断検証。integration は rate limit 回復後に完走確認）
+- [x] DB-3: 定期クリーンアップ（`supabase/migrations/20260424_03_cleanup_cron.sql`）: (a) `evidence_pack_sessions` の期限切れ、(b) `plans WHERE status='generating' AND updated_at < now() - INTERVAL '1 hour'`、(c) `plans WHERE status IN ('draft','failed') AND created_at < now() - INTERVAL '24 hours'`。`succeeded` は保全
 
 #### メンバー B 担当（1.3d と完全独立、並行可）
-- [ ] DB-1: `supabase/migrations/` ディレクトリ化（DDL 分割 + 連番管理）
+- [x] DB-1: `supabase/migrations/` 冪等 5 連番ファイル配置（2026-04-25 Manato 先行実施）。DB 担当は今後の DDL 変更時に新規連番ファイルを追加する運用を維持
 - [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備、申請に時間がかかるので今すぐ）
-- [ ] DB-8: Supabase Row-Level Logging（1.3d 着手前に整備、pg_stat_statements など）
-- [ ] （1.9 共有 API は上の「1.9 共有 API 実装」セクションで DB-4/5/6 として別管理）
+- [ ] DB-8: Supabase Row-Level Logging（pg_stat_statements など、Phase 1.3d の RPC + plan_items INSERT が稼働し始めるのでログ観測基盤を用意）
+- [ ] 1.9 共有 API は上の「1.9 共有 API 実装」セクションで DB-4/5/6 として別管理
 
 <details>
 <summary>（旧）1.4 ランディングページ (01) — 骨組みタスクへ吸収済み</summary>

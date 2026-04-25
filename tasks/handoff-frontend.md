@@ -1,7 +1,12 @@
 # フロント引き継ぎ資料 — デザイン担当向け
 
-**ステータス（2026-04-24 更新）**: Phase 1.4〜1.9 の**骨組み実装は develop にマージ完了**。
-デザイン作業を開始できる状態です。骨組みは以下の 6 ブランチに分けて順次実装されました:
+**ステータス（2026-04-25 更新）**: Phase 1.4〜1.9 の**骨組み実装は develop にマージ完了**。
+デザイン作業を開始できる状態です。
+骨組み時点からの主な追加情報:
+- `/api/plans/generate` は Phase 1.3d で本配線完了（LLM 生成 → plan_items 保存まで動く）。ただし実環境検証でハルシネーション 10% 発生中、Manato がプロンプトチューニング予定（デザイン作業と独立、UI の動作確認には影響なし）
+- `POST /api/plans/:id/share` と `GET /api/plans/shared/:token` の契約型（`ShareResponse` / `SharedPlanResponse`）は shared-types / Pydantic に **3 点同期済み**。DB 担当が Flask 実装すれば 1.9 共有画面がフル機能になる
+
+骨組みは以下の 6 ブランチに分けて順次実装されました:
 
 1. `feat/plan-generation-plan-id` — `PlanGenerationPayload.plan_id` + `plans.status` 追加
 2. `feat/frontend-foundation` — 依存導入 + shadcn/ui + API クライアント + Zustand + zod + 共通コンポーネント
@@ -26,7 +31,7 @@ API や型を変えたい場合は **Manato に相談**。`docs/data-model.md` �
 | プラン生成中 | `/plan/[id]/generating` | ✅ 配線済み | Zustand から session 取得 → transit 取得 → `/api/plans/generate` kick → 完了時 `/plan/[id]` へ遷移（成功時 session を clear） |
 | プラン閲覧 | `/plan/[id]` | ✅ データ取得配線完了 | タイムライン / 予算 / マップの 3 カラム、shadcn Tabs で切替 |
 | 地図ビュー | プラン閲覧のマップタブ | ✅ Mapbox 初期化済み | マーカー表示、ポリラインは Phase 1.8 本実装で追加 |
-| プラン共有 | `/plan/[id]/share` | 🟡 UI のみ | QR + URL コピー表示。`POST /api/plans/:id/share` は DB 担当が実装中（`tasks/handoff-db.md` DB-4） |
+| プラン共有 | `/plan/[id]/share` | 🟡 UI のみ | QR + URL コピー表示。`POST /api/plans/:id/share`（DB-4）と `GET /api/plans/shared/:token`（DB-5）は DB 担当実装待ち。契約型は 2026-04-25 に 3 点同期済みなのでフロント側の `lib/api.ts` 追加は contract 通りに書けば通る |
 
 **plan_id のライフサイクル**: フロントが `crypto.randomUUID()` で発行し、`/plan/new` submit 時に Supabase の `plans` テーブルへ INSERT する。Flask の `/api/plans/generate` は payload.plan_id をそのまま使い、1.3d で `plan_items` を後から INSERT する。詳細は @docs/architecture.md / @docs/data-model.md 参照。
 
