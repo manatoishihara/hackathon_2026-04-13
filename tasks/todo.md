@@ -86,6 +86,7 @@
 - [x] **Manato（Codex Minor、2026-04-25 完了）**: item_type vs category 整合性 validator を追加（`feat/deploy-prep` ブランチ）。`IssueKind.ITEM_TYPE_CATEGORY_MISMATCH` 新設、`_check_item_type_category_consistency` 実装、`_MEAL_CATEGORIES` / `_LODGING_CATEGORIES` allowlist + `*_restaurant` 接尾辞対応。テスト 10 件 PASS、unit 全 283 件 PASS
 - [ ] **Manato（残課題、優先度低、Phase 2 scope）**: Codex (latent) 営業時間 parser 日跨ぎ対応（"22:00-02:00" のような夜またぎ）。MVP 箱根デモは日中観光のみで影響なし
 - [ ] **メンバー B**: DB-4〜6 共有 API（型は 2026-04-25 に同期済み、Flask 実装すれば通る） / DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
+  - **2026-04-25 メンバー B 着手前確認完了**: handoff-db.md / migrations 00〜04 / schemas.__init__ / supabase_client.py を読み込み済み。DB-4/5 の実装に必要な contract（ShareResponse / SharedPlanResponse）・service_role クライアント・RPC 関数はすべて把握済み。次セッションで `apps/api/src/routes/share_routes.py` の実装に入れる状態
 - [ ] **メンバー C**: 1.4〜1.9 の見た目仕上げ（@tasks/handoff-frontend.md）
 
 詳細は下の各セクション参照。
