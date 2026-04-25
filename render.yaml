@@ -1,0 +1,43 @@
+# Render Blueprint — Routeful バックエンド (Phase 1.10)
+# =====================================================
+# Render Dashboard で「New > Blueprint」→ GitHub repo を接続してこの YAML を読ませる。
+# 値の sync: false な env は dashboard 経由で個別に入力する（秘密値はここに置かない）。
+#
+# 注意:
+#   - Free plan は `--workers 1` 推奨（メモリ 512MB）
+#   - LLM 生成は最悪 ~150s かかる（per-call 35s × 4 attempts + overhead）ため
+#     gunicorn の `--timeout 180` を設定。Render の HTTP proxy timeout は
+#     dashboard の Settings > HTTP Timeout で 180s に明示的に上げる必要がある
+#     （Free plan が無料枠で 100s 上限の場合は Starter plan へ移行）
+#   - `healthCheckPath: /healthz` は cold start 復帰の判定にも使われる
+#
+services:
+  - type: web
+    name: routeful-api
+    runtime: python
+    plan: free
+    region: singapore # JP からの latency 最小（oregon との二択）
+    rootDir: apps/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn 'src.app:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180 --access-logfile -
+    healthCheckPath: /healthz
+    autoDeploy: true # main / develop push で自動デプロイ
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      # 秘密値は Render Dashboard で入力（リポジトリには置かない）
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # 任意: フロント本番ドメインを CSV で指定（未設定なら localhost のみ許可）
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      # 任意: LLM プロンプト切替（未設定 = code default = v2.0.0 LCaMO 構造化版）。
+      # legacy v1.0.0 を試したい時のみセットする。
+      - key: PROMPT_VERSION
+        sync: false

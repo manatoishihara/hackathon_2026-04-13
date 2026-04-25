@@ -2,6 +2,11 @@
 
 OpenAI SDK をモックして retry / fallback / deadline の挙動を検証する。
 実 API は叩かないのでコスト ゼロ。実経路の確認は Branch C の integration テストで行う。
+
+本ファイルは v1 schema (`LlmGeneratedPlan`) でモックを組んでいる。
+v1 / v2 で retry / fallback / deadline のロジックは共通なので、構造は v1 で代表させ、
+v2 (LCaMO) の assembly 経路は `test_llm_assembly.py` で別途網羅する。
+そのため `PROMPT_VERSION=v1.0.0` を autouse fixture で固定する。
 """
 
 from __future__ import annotations
@@ -10,6 +15,13 @@ from datetime import date
 from unittest.mock import MagicMock
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _force_prompt_v1(monkeypatch):
+    """default は v2.0.0 (Phase 1.10 切替済) なので、v1 mock を使う本ファイルでは
+    PROMPT_VERSION=v1.0.0 を明示する。"""
+    monkeypatch.setenv("PROMPT_VERSION", "v1.0.0")
 
 from src.evidence.pack import (
     BudgetBreakdownJPY,

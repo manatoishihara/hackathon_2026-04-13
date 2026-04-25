@@ -5,7 +5,9 @@
   placeholder を JSON で埋めて返す。previous_issues は issue list を JSON 化して LLM に
   自己訂正させる
 - `count_prompt_tokens(system, user)`: tiktoken で gpt-4o のエンコーダを使ってトークン数を数える
-- `load_prompt_version()`: 環境変数 PROMPT_VERSION、なければ v1.0.0
+- `load_prompt_version()`: 環境変数 PROMPT_VERSION、なければ v2.0.0
+  （Phase 1.3e で実証された hallucination 0% / success 100% の構造化版。
+   v1.0.0 は legacy 検証用に残しているのみ）
 
 prompt のテキスト自体は `prompts/<version>/system.md` / `user_template.md` にある。diff レビュー
 しやすいよう Python リテラルに埋め込まず外部ファイルにしている（将来の A/B テストにも有利）。
@@ -26,13 +28,13 @@ from .validator import ValidationIssue
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION_DEFAULT = "v1.0.0"
+PROMPT_VERSION_DEFAULT = "v2.0.0"
 _PROMPTS_ROOT = Path(__file__).parent / "prompts"
 _TOKEN_WARNING_THRESHOLD = 12_000
 
 
 def load_prompt_version() -> str:
-    """環境変数 PROMPT_VERSION、なければ v1.0.0。"""
+    """環境変数 PROMPT_VERSION、なければ v2.0.0（Phase 1.3e で実証された構造化版）。"""
     return os.environ.get("PROMPT_VERSION", PROMPT_VERSION_DEFAULT)
 
 

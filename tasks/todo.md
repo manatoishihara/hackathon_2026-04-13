@@ -43,8 +43,26 @@
 
 **次にやるべきタスク:**
 - [x] **Manato**: Phase 1.3e すべて完遂（hallucination 0% / success 100%、run 27 ベースライン）
-- [ ] **Manato（新規）**: `test_routes_plans.py::test_integration_end_to_end_plan_generation` と `::test_integration_lock_conflict_returns_409` の RLS violation (42501) 解消。Supabase SQL Editor で `SELECT * FROM pg_policies WHERE tablename='plans';` して現状 policy を確認、必要なら `supabase/migrations/20260401_00_init.sql` を本番再適用で最新 policy に揃える（冪等 DROP → CREATE）
-- [ ] **Manato**: Phase 1.10 デプロイ準備（Vercel + Render）
+- [ ] **Manato（保留中、Supabase SQL Editor アクセス可能になったら再開）**: `test_routes_plans.py::test_integration_end_to_end_plan_generation` と `::test_integration_lock_conflict_returns_409` の RLS violation (42501) 解消。
+  - 2026-04-25 セッションでコード側の調査は完了。`test_rls.py` のコメントに「実 DB の RLS 設定上は挙動が docs/data-model.md 通りになっていない」と既に明記済み = production drift 確定
+  - migrations 側は `FOR ALL USING (session_id = auth.uid())` のみで `WITH CHECK` 暗黙、PostgreSQL default で USING と同じになるはず → production policy は何かしら drift している
+  - 再開時の手順:
+    1. Supabase SQL Editor で下記 2 クエリを実行して現状を確認:
+       ```sql
+       SELECT tablename, policyname, cmd, permissive, roles, qual, with_check
+       FROM pg_policies
+       WHERE tablename IN ('plans','participants','plan_items','sessions','evidence_pack_sessions')
+       ORDER BY tablename, policyname;
+
+       SELECT c.relname AS tablename, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public'
+         AND c.relname IN ('plans','participants','plan_items','sessions','evidence_pack_sessions');
+       ```
+    2. drift がある場合は `supabase/migrations/20260401_00_init.sql` を本番に再適用（冪等 DROP → CREATE で安全）
+    3. `cd apps/api && .venv/bin/pytest -m integration tests/test_routes_plans.py -x -v` で 3/3 PASS 確認（Supabase anon sign-in は 30/hour rate limit、直前に他 integration を多く回した直後は 1 時間クールダウン）
+    4. PASS したら todo.md と lessons.md（drift 原因と修正の記録）を更新
+- [ ] **Manato**: Phase 1.10 デプロイ準備（Vercel + Render）。次セッション着手時の最初の一手は **CORS 追加 + gunicorn 追加 + render.yaml 作成** を `feat/deploy-prep` で実装。`apps/api/src/app.py` に CORS 設定なし / `requirements.txt` に gunicorn なしが本番ブロッカーとして 2026-04-25 セッションで判明。Vercel/Render アカウント作成と本番ドメイン方針の判断はユーザ側で必要（詳細は 1.10 節）
 - [ ] **Manato（残課題、優先度低）**: Codex 指摘の (latent) 営業時間 parser 日跨ぎ対応 / (Minor) item_type vs category 整合性 validator
 - [ ] **メンバー B**: DB-4〜6 共有 API（型は 2026-04-25 に同期済み、Flask 実装すれば通る） / DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
 - [ ] **メンバー C**: 1.4〜1.9 の見た目仕上げ（@tasks/handoff-frontend.md）
@@ -321,10 +339,22 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 </details>
 
 ### 1.10 デプロイと初回公開
-- [ ] フロント: Vercel に `apps/web` をデプロイ（環境変数設定）
-- [ ] バック: Render に `apps/api` をデプロイ（無料プラン）
-- [ ] 本番環境の E2E テスト（1つのデモシナリオを最初から最後まで）
-- [ ] パフォーマンス: プラン生成が 60 秒以内
+
+#### デプロイ前に必須のコード修正（`feat/deploy-prep` ブランチで実装、2026-04-25 完了）
+- [x] **🔴 CORS 設定追加**: `flask-cors>=5.0,<7.0` を requirements 追加、`apps/api/src/app.py` に `_resolve_cors_origins()` + `CORS(app, ...)` を実装。env `CORS_ALLOWED_ORIGINS`（CSV）読み込み、未設定時は `http://localhost:3000` のみ許可。`Authorization` / `Content-Type` ヘッダ + `GET/POST/OPTIONS` メソッド許可。CORS unit テスト 6 件 PASS（`tests/test_cors.py`）
+- [x] **🔴 `gunicorn>=22.0,<24.0` を requirements に追加**: ローカル smoke test で `gunicorn 'src.app:create_app()'` boot 成功 + `/healthz` 200 OK + ACAO ヘッダ付与確認済
+- [x] **🟡 `render.yaml` 作成**: `singapore` region / `--workers 1 --timeout 180` / `healthCheckPath: /healthz` / env var 宣言（秘密値は `sync: false` で Dashboard 経由）
+- [x] **🟡 `PROMPT_VERSION_DEFAULT = "v2.0.0"` に変更**: 本番デプロイ時に env 設定を忘れても Phase 1.3e で実証された LCaMO 構造化版（hallucination 0% / success 100%）が走るように。test_llm_prompt の default 期待値も v2 に更新、test_llm_generator は v1 schema mock のため `autouse fixture` で `PROMPT_VERSION=v1.0.0` を明示
+- [x] **🟡 `docs/setup-guide.md` のデプロイ節を更新**: render.yaml Blueprint 経由のフロー、CORS_ALLOWED_ORIGINS の必須化、env 一覧の刷新
+- [x] **検証**: API unit 273 件 PASS / Web 61 件 PASS / Web tsc PASS / gunicorn smoke OK / CORS ヘッダ実出力確認
+
+#### デプロイ実施
+- [ ] フロント: Vercel に `apps/web` をデプロイ（env 5 件: `NEXT_PUBLIC_API_BASE_URL` / `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` / `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `NEXT_PUBLIC_MAPBOX_TOKEN`）
+- [ ] バック: Render に `apps/api` をデプロイ（env 4 件必須: `GOOGLE_MAPS_API_KEY` / `OPENAI_API_KEY` / `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`、任意で `PROMPT_VERSION`）。HTTP Timeout 180s 必須
+- [ ] Google Maps Console: ブラウザキーの HTTP referrer 制限に Vercel 本番ドメインを追加 / サーバキーの IP 制限に Render outbound IP を追加（Render の固定 IP は有料 plan 機能なので無料 plan は IP 制限スキップ可）
+- [ ] Supabase: 匿名認証が production で有効か確認。RLS 42501 残課題（test_routes_plans 2 件）はデプロイ後の本番動作に直接影響しないが、anon plans INSERT が必要なので結局解決必要
+- [ ] 本番環境の E2E テスト（1つのデモシナリオを最初から最後まで、希望入力 → 生成 → 閲覧 → 共有）
+- [ ] パフォーマンス: プラン生成が 60 秒以内（Phase 1.3e で 4.4s/run 達成済、Render cold start を考慮しても余裕あり）
 - [ ] 検証: 3人（チーム全員）で実機テスト
 
 ---

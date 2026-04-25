@@ -141,27 +141,36 @@ pnpm dev
 
 1. https://vercel.com/ で新規プロジェクト作成、GitHub リポジトリを接続
 2. Root Directory に `apps/web` を指定
-3. Environment Variables に `.env.local` の `NEXT_PUBLIC_*` 系と `NEXT_PUBLIC_API_BASE_URL`（Render の URL）を設定
+3. Environment Variables に以下を設定:
+   - `NEXT_PUBLIC_API_BASE_URL` — Render の URL（例: `https://routeful-api.onrender.com`）
+   - `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` — HTTP referrer 制限を `https://<your-vercel>.vercel.app/*` と `http://localhost:3000/*` に
+   - `NEXT_PUBLIC_MAPBOX_TOKEN`
 4. Deploy
 
 ### 7.2 Render（バック）
 
-1. https://render.com/ で新規 Web Service 作成、GitHub リポジトリを接続
-2. Root Directory: `apps/api`
-3. Runtime: Python 3
-4. Build Command: `pip install -r requirements.txt`
-5. Start Command: `gunicorn 'src.app:create_app()' --bind 0.0.0.0:$PORT`
-6. Environment Variables に `.env.local` の非 `NEXT_PUBLIC_*` 系を設定
-7. **HTTP Request Timeout を 180 秒に引き上げる**（Settings → HTTP Timeout）
-   → Phase 1.3d の LLM 生成は最悪 150 秒かかる（per-call 35s × 4 attempts + overhead）。
-     Render のデフォルト 100 秒だと途中で切られる
-8. Deploy
+**推奨: `render.yaml` Blueprint を使う**（リポジトリ root に配置済み）。
+
+1. https://render.com/ で「New > Blueprint」→ GitHub リポジトリ接続
+2. `render.yaml` が自動認識され、`routeful-api` サービスが作成される
+3. Dashboard で env 値を入力（`render.yaml` の `sync: false` 項目）:
+   - `OPENAI_API_KEY` / `GOOGLE_MAPS_API_KEY`（サーバキー、Render の outbound IP で referrer 制限不要に設定）
+   - `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`
+   - `CORS_ALLOWED_ORIGINS` — Vercel 本番ドメインを CSV 指定（例: `https://routeful.vercel.app,https://routeful-git-main-xxx.vercel.app`）
+   - （任意）`PROMPT_VERSION` — code default が v2.0.0、legacy v1 を試したい時のみセット
+4. **HTTP Request Timeout を 180 秒に引き上げる**（Settings → HTTP Timeout、`render.yaml` では指定不可な Service-level 設定）
+   → LLM 生成は最悪 ~150 秒（per-call 35s × 4 attempts + overhead）。Render の Free plan は 100 秒上限のため、Starter plan へ移行が必要な場合あり
+5. Deploy
+
+**手動セットアップする場合（Blueprint を使わない）**: Root Directory `apps/api` / Runtime Python 3.12 / Build `pip install -r requirements.txt` / Start `gunicorn 'src.app:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
 
 ### 7.3 環境変数（追加）
 
-Phase 1.3d で以下の変数が利用可能（任意）:
+Phase 1.10 で以下の変数が利用可能:
 
-- `PROMPT_VERSION`（optional、デフォルト `v1.0.0`）: LLM プロンプトの切替。未設定なら `apps/api/src/llm/prompts/v1.0.0/` が使われる。将来 A/B テストする時に差し替え用
+- `CORS_ALLOWED_ORIGINS`（**本番では必須**）: Flask が CORS の `Access-Control-Allow-Origin` をエコーバックする allowlist。CSV 指定。未設定だとローカル開発用 `http://localhost:3000` のみ許可される
+- `PROMPT_VERSION`（optional、code default `v2.0.0`）: LLM プロンプトの切替。Phase 1.3e で実証された LCaMO 構造化版（hallucination 0% / success 100%）が default。`v1.0.0` は legacy
 
 ## トラブルシュート
 
