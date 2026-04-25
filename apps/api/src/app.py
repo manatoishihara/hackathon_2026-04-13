@@ -4,6 +4,7 @@ import os
 
 from dotenv import find_dotenv, load_dotenv
 from flask import Flask, jsonify
+from flask_compress import Compress
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
@@ -35,6 +36,15 @@ def create_app() -> Flask:
     """
     app = Flask(__name__)
 
+    # gzip 圧縮: 1KB 以上の JSON レスポンスに自動適用（⑤ 軽量化）
+    app.config["COMPRESS_ALGORITHM"] = "gzip"
+    app.config["COMPRESS_MIN_SIZE"] = 1024
+    Compress(app)
+
+    # レート制限（⑭ フォールバック設計 / 公開エンドポイント保護）
+    from .extensions import limiter
+    limiter.init_app(app)
+
     # CORS: フロント (Vercel) → バック (Render) は cross-origin。`Authorization` ヘッダ
     # を送るためプリフライト OPTIONS が走る。allowlist 指定で credentials は使わない。
     origins = _resolve_cors_origins()
@@ -58,8 +68,10 @@ def create_app() -> Flask:
     # Blueprints
     from .routes.evidence_routes import bp as evidence_bp
     from .routes.plan_routes import bp as plan_bp
+    from .routes.share_routes import bp as share_bp
     app.register_blueprint(evidence_bp)
     app.register_blueprint(plan_bp)
+    app.register_blueprint(share_bp)
 
     # HTTPException（404 / 405 / 413 など）は Flask 標準のステータス・メッセージを維持。
     # これを先に分岐しないと下の Exception ハンドラが全部 500 に潰してしまう。

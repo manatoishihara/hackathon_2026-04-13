@@ -307,9 +307,17 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
   - **⑫ コネクションプール**: `apps/api/src/supabase_client.py` をシングルトン化。毎リクエスト `create_client()` → httpx.Client 都度生成だったのを、double-checked locking でプロセス内の接続を再利用する設計に変更。テスト用 `_reset_client()` も追加
   - **⑬ 非同期バッチ化**: `supabase/migrations/20260425_06_shared_plan_rpc.sql` を新規作成。`get_shared_plan(token)` RPC で plan + participants + plan_items を 1 本の SQL に集約し、DB-5 のラウンドトリップを 3 回 → 1 回に削減。`share_token IS NOT NULL` を SQL 内にハードコードして Flask 経由でのみアクセス可能な設計を維持
   - **Supabase SQL Editor で `20260425_06` → `20260425_07` の順で適用後、DB-5 の `share_routes.py` で `client.rpc("get_shared_plan", ...)` を使う**
-- [ ] **パフォーマンス最適化（詳細は @tasks/plans/2026-04-25-performance-optimization.md）**:
-  - [ ] Step 1（DB-5 実装と同時）: インメモリ TTL キャッシュ / Cache-Control ヘッダー / MapView dynamic import / React Query staleTime 設定
-  - [ ] Step 2（Step 1 完了後）: Flask-Limiter / Flask-Compress / SkeletonTimeline
+- [x] **パフォーマンス最適化 Step 1+2（2026-04-20 メンバー B 実施）**（詳細は @tasks/plans/2026-04-25-performance-optimization.md）:
+  - [x] インメモリ TTL キャッシュ（`apps/api/src/cache/plan_cache.py`、60s TTL、threading.Lock）
+  - [x] Cache-Control ヘッダー（`get_shared_plan` に `public, max-age=60, stale-while-revalidate=300`）
+  - [x] Flask-Limiter（`apps/api/src/extensions.py` + share_routes に `@limiter.limit("60 per minute")`）
+  - [x] Flask-Compress（gzip、1KB以上に自動適用、`app.py` で Compress(app)）
+  - [x] MapView dynamic import（ssr:false、~300KB バンドル削減、`plan/[id]/page.tsx`）
+  - [x] React Query staleTime/gcTime/retry/placeholderData 設定（`providers.tsx`）
+  - [x] SkeletonTimeline / SkeletonPlanItem コンポーネント（`ui/states/SkeletonPlanItem.tsx`）
+  - [x] MapErrorBoundary クラスコンポーネント（`ui/MapErrorFallback.tsx`）
+  - [x] gunicorn --keep-alive 5 --worker-connections 100（`render.yaml`）
+  - [x] コネクションプールシングルトン（`supabase_client.py` double-checked locking）
   - [ ] Step 3（提出前余裕があれば）: Service Worker（オフライン対応）
 - [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備、申請に時間がかかるので今すぐ）
 - [ ] DB-8: Supabase Row-Level Logging（pg_stat_statements など、Phase 1.3d の RPC + plan_items INSERT が稼働し始めるのでログ観測基盤を用意）
