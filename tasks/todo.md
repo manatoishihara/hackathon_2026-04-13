@@ -306,7 +306,11 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [x] **DB 最適化 ⑫⑬（2026-04-25 メンバー B 実施）**:
   - **⑫ コネクションプール**: `apps/api/src/supabase_client.py` をシングルトン化。毎リクエスト `create_client()` → httpx.Client 都度生成だったのを、double-checked locking でプロセス内の接続を再利用する設計に変更。テスト用 `_reset_client()` も追加
   - **⑬ 非同期バッチ化**: `supabase/migrations/20260425_06_shared_plan_rpc.sql` を新規作成。`get_shared_plan(token)` RPC で plan + participants + plan_items を 1 本の SQL に集約し、DB-5 のラウンドトリップを 3 回 → 1 回に削減。`share_token IS NOT NULL` を SQL 内にハードコードして Flask 経由でのみアクセス可能な設計を維持
-  - **Supabase SQL Editor で `20260425_06_shared_plan_rpc.sql` を適用後、DB-5 の `share_routes.py` 実装で `client.rpc("get_shared_plan", ...)` を使う**
+  - **Supabase SQL Editor で `20260425_06` → `20260425_07` の順で適用後、DB-5 の `share_routes.py` で `client.rpc("get_shared_plan", ...)` を使う**
+- [ ] **パフォーマンス最適化（詳細は @tasks/plans/2026-04-25-performance-optimization.md）**:
+  - [ ] Step 1（DB-5 実装と同時）: インメモリ TTL キャッシュ / Cache-Control ヘッダー / MapView dynamic import / React Query staleTime 設定
+  - [ ] Step 2（Step 1 完了後）: Flask-Limiter / Flask-Compress / SkeletonTimeline
+  - [ ] Step 3（提出前余裕があれば）: Service Worker（オフライン対応）
 - [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備、申請に時間がかかるので今すぐ）
 - [ ] DB-8: Supabase Row-Level Logging（pg_stat_statements など、Phase 1.3d の RPC + plan_items INSERT が稼働し始めるのでログ観測基盤を用意）
 - [ ] 1.9 共有 API は上の「1.9 共有 API 実装」セクションで DB-4/5/6 として別管理
