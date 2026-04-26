@@ -106,6 +106,24 @@
   - CLAUDE.md → tasks/todo.md → tasks/handoff-*.md の動線を明示、`docs/team-roles.md` / `handoff-frontend.md` も 2026-04-25 の状況で更新
 
 **次にやるべきタスク:**
+
+> ## 🔴 **最優先 (hackathon 提出ブロッカー)**: プラン生成が本番 / ローカル両方で動かない
+>
+> Phase 2.5 / 2.2 / 1.10 Evidence Pack 多様性 / migration 04+05 / Vercel key / フロント PATCH fix を全部適用しても、**最終的に LLM 生成が 422 で失敗**してプラン生成画面に到達しない。
+>
+> **真因（2026-04-26 ローカル Run 8 で判明）**: フロント `apps/web/src/lib/transit.ts:333` が `travelMode: "TRANSIT"` 固定で、Maps Directions が「観光地ペア」（彫刻の森美術館 ⇄ 箱根食堂 等）に対して **ZERO_RESULTS を 40 ペア全部で返す**。Maps Directions の TRANSIT は「駅・停留所間の公共交通機関」を返す SDK で、観光地のような徒歩アクセス前提の地点間では機能しない。Phase 1.10 fix で places を多様化した結果、この限界が顕在化（皮肉にも旧版は places が駅前飲食店ばかりだったので TRANSIT が成功していた）。
+>
+> **次セッション最初のタスク（branch `fix/transit-fallback-walking-driving`）**:
+> 1. `apps/web/src/lib/transit.ts:333` の `travelMode: "TRANSIT"` 固定を **TRANSIT → WALKING → DRIVING フォールバック chain** に変更
+> 2. 各 mode で per-call 2s timeout、全体 deadline 10s 維持、`mapVehicleToMode` を WALKING / DRIVING ケースに拡張
+> 3. test (`apps/web/src/lib/transit.test.ts`) に「TRANSIT が ZERO_RESULTS なら WALKING を試す」test 追加
+> 4. ローカル `pnpm dev` で verify → 本番 deploy → 最終 E2E
+> 5. これが解消すれば Phase 2.2 budget context の効果も観察できる（現在は LLM 422 で見えない）
+>
+> 規模: 実装 ~50 LOC、test ~30 LOC、1〜2 時間。詳細は次セッションで plan + Codex review → 実装。
+> 再会用プロンプト: `tasks/handoff-next-session.md` 参照。
+
+
 - [x] **Manato**: Phase 1.3e すべて完遂（hallucination 0% / success 100%、run 27 ベースライン）
 - [x] **Manato（2026-04-26 完了）**: Phase 2.5 Evidence 詳細モーダル（バッジクリック → modal、5 フィールド + Google Maps リンク、Codex 2 回 review 反映、test 130/130 PASS、develop マージ済）
 - [x] **Manato（2026-04-26 完了 → user push 待ち）**: Phase 2.2 予算配分の制約化（prompt v2 に絶対制約 Markdown 注入、Codex 2 回 review 反映、API test 27/27 PASS）。`feat/budget-constraint` ブランチに 4 ファイル変更、commit 提案済
