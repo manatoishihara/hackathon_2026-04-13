@@ -43,7 +43,7 @@
   - **debug log に key / token / secret が出たら、絶対にそのまま docs に貼るな**。記録するなら「prefix 4 chars `AIza...`」だけにする、もしくは `<env: NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY>` のような env 変数名で参照
   - Public repo に push する commit を作る前に、**`git diff --staged | rg 'AIzaSy|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9]'` で必ず secret pattern check**
   - GitHub Secret Scanning は **Public repo + 主要パートナー pattern (Google / OpenAI / AWS / Stripe / Slack) のみ自動 alert**。Private repo でも漏洩の可能性はあるので同じ rule を適用
-- → 2 回目が来たら `.claude/rules/external-api-rules.md` の「鍵運用」節に「commit 前 secret grep」を昇格（今は 1 回目）
+- → ~~2 回目が来たら~~ **public repo に実害（GitHub Secret Scanning 検出 + Google アラート送信）が出たため 1 回目で `.claude/rules/external-api-rules.md` 「⛔ 最優先: commit 提案前の secret プリフライト」節に即昇格、CLAUDE.md「Do NOT」と「ワークフロー」にも明文化済（毎セッション自動ロード）**
 
 ## 2026-04-26: migration 適用漏れは「複数ファイル同日 merge」で起きやすい — 本番デプロイ前に migrations 全件の適用 checklist を作る運用が必要
 - 状況: Phase 1.10 本番 E2E verify で 4 連続の Run（Run 1〜4）を実行する過程で、**migration 適用漏れに 2 度連続で遭遇**:

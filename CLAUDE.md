@@ -15,6 +15,8 @@ Next.js 15 / TypeScript / Tailwind v4 / shadcn/ui / Flask / Supabase (DB+匿名A
 
 ## Do NOT（compaction後も絶対に守れ）
 - `git commit` / `git add` / `git merge` / `git push` を絶対に自分で実行するな。コミット・マージ・プッシュは必ずユーザが手動で行う。Claude はコミットメッセージ案と対象ファイル一覧を提示するだけ
+- **commit 提案を user に出す前に、必ず secret pattern grep を実施し、結果（0 hit / N hit）を提示せよ**。1 件でも hit したら add コマンドを絶対に出さず、redact を先に提案する。検出 pattern の最低限は `AIzaSy[A-Za-z0-9_-]{30,}` / `sk-[A-Za-z0-9]{20,}` / `eyJ[A-Za-z0-9_]{8,}\.eyJ[A-Za-z0-9_]{8,}` / `service_role`。詳細は @.claude/rules/external-api-rules.md「commit 提案前の secret プリフライト」節
+- **debug log / docs (lessons.md / todo.md / plans/) に API key / token / secret の生文字列を書くな**。env 変数名（`NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` 等）か prefix 4 chars 以内（`AIza...`）で参照する。8+8 chars の省略形も禁止
 - Codexレビューを勝手に起動するな。ユーザが「Codexに見せて」等と明示的に依頼した時のみ実行
 - LLMに外部データを渡さず推論させるな。必ずEvidence Pack経由
 - 架空の場所・架空の時刻を出力するな。Places API / Routes APIで検証せよ
@@ -27,8 +29,9 @@ Next.js 15 / TypeScript / Tailwind v4 / shadcn/ui / Flask / Supabase (DB+匿名A
 計画 → feature ブランチで実装 → テスト → コミット提案 → （ユーザが手動でコミット）→ develop へマージ（これもユーザが手動）
 
 コミット提案時は必ず以下の形式でユーザに渡す:
-1. 提案コミットメッセージ（複数コミットに分けるべきなら分割案も添える）
-2. 対象ファイル一覧（`git add` するパス）
+1. **secret プリフライト結果**（`git diff -- <files> | rg <patterns>` の hit 件数）。0 hit でなければ commit 提案を停止
+2. 提案コミットメッセージ（複数コミットに分けるべきなら分割案も添える）
+3. 対象ファイル一覧（`git add` するパス）
 
 ブランチ戦略: `main`（本番、直接 push しない）/ `develop`（開発統合先）/ `feat/<短い説明>` `fix/<説明>` `chore/<説明>`（タスク用、develop から生やす、kebab-case、Phase 番号は入れない）。詳細は @docs/team-roles.md。
 

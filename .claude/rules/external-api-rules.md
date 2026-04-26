@@ -3,6 +3,44 @@
 外部 API（Google Cloud / Maps Platform / OpenAI / Supabase / 楽天 / Mapbox 等）を新規導入・新規 SDK class を呼び出す前に必ず守ること。
 2 回以上同種の失敗が発生した運用ルールが昇格して定着している。失敗の系譜は `tasks/lessons.md` を参照。
 
+## ⛔ 最優先: commit 提案前の secret プリフライト（毎回・例外なし）
+
+**Public / Private を問わず、`git add` を含む commit コマンドを user に提示する前に、必ず以下を実施せよ。**
+
+### 必須手順
+
+1. **対象ファイルを stage 候補として認識した時点で（`git add` コマンドを user に出すより前に）以下を実行**:
+   ```bash
+   git diff -- <staging 候補ファイル全部> | rg -nE 'AIzaSy[A-Za-z0-9_-]{30,}|sk-[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_]{8,}\.eyJ[A-Za-z0-9_]{8,}|service_role|GOOGLE_MAPS_API_KEY=|OPENAI_API_KEY=|SUPABASE_SERVICE_ROLE_KEY='
+   ```
+2. **1 件でも hit したら commit 提案を即停止**。user に redact を提案し、redact が完了するまで `git add` コマンドは絶対に提示しない
+3. 0 件であることを user 向けメッセージに明示する（例: 「secret pattern grep: 0 hit、commit OK」）。これを書かずに add コマンドを出すのは禁止
+
+### 検出対象 pattern（最低限）
+
+| API | regex | 備考 |
+|---|---|---|
+| Google API key | `AIzaSy[A-Za-z0-9_-]{30,}` | Maps / Places / Geocoding 全部共通 |
+| OpenAI key | `sk-[A-Za-z0-9]{20,}` | sk-proj- も含む |
+| Supabase JWT (service_role / anon) | `eyJ[A-Za-z0-9_]{8,}\.eyJ[A-Za-z0-9_]{8,}` | 3 セグメント JWT の前半 2 セグメント |
+| env var name + literal value | `^[+]\s*(GOOGLE_MAPS_API_KEY\|OPENAI_API_KEY\|SUPABASE_SERVICE_ROLE_KEY)\s*=` | docs / .env サンプル誤コミット検出 |
+
+**追加で疑わしい場合**は user に確認、ただし上記 4 種は **絶対に commit させない**。
+
+### 文字列を docs に書きたい時の代替表記
+
+debug log や lessons.md / todo.md に key 文脈を残したい時、**生文字列は絶対に書かない**:
+
+| 用途 | 代わりに書くもの |
+|---|---|
+| 「このキーが原因」と特定したい | 「ブラウザキー（Vercel env: `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY`）」と env 変数名で参照 |
+| 「prefix だけ残したい」 | `AIza...`（4 chars 以内）以下は全省略。`AIzaSyDq...3y4` のような 8+8 chars も検索可能性が増えるので **禁止** |
+| 「Render の何の key か特定したい」 | env 変数名（`OPENAI_API_KEY` 等）+ Cloud Console の credentials ページ ID（任意） |
+
+### 過去の失敗
+
+- 2026-04-26: `tasks/todo.md` に Google Maps ブラウザキー全文を書いて push、GitHub Secret Scanning が即検出 + Google にアラート送信。**「1 回目だから lessons 止まり」と判断したのが誤り**で、本ルールに即昇格。詳細は lessons.md「docs / todo に API key 文字列を貼ったら...」エントリ
+
 ## Google Cloud SDK 4 階層 checklist
 
 Maps Platform / Places / Routes / Directions / Cloud Storage / 等を含む、Google Cloud のあらゆる API を **JS SDK / Python SDK / 直 fetch 経由で呼ぶ前**に必ず以下 4 階層を全部 ✅ してから実装着手せよ。
