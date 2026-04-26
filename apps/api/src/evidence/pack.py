@@ -149,11 +149,13 @@ class TemporalConstraints(_PackBase):
 
 
 class LodgingOption(_PackBase):
-    """宿泊候補。Phase 2 で実装する（現状は型のみ）。"""
+    """宿泊候補（楽天トラベル API から取得）。"""
 
     place_id: str
     name: str
     price_jpy_per_night: int
+    lat: float | None = None
+    lng: float | None = None
     url: str | None = None
 
 

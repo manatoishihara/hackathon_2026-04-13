@@ -26,11 +26,13 @@ from .pack import (
     BudgetConstraints,
     BudgetBreakdownJPY,
     EvidencePack,
+    LodgingOption,
     PlacePoint,
     QueryContext,
     QueryContextParticipant,
     TemporalConstraints,
 )
+from .lodging import RakutenLodgingError, fetch_lodging_options
 from .places import PlacesError, fetch_place_details, search_by_text
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -128,13 +130,17 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
         raise AnchorFetchError(missing_anchors)
 
     places = _merge_anchors_and_search(anchor_places, search_results, MAX_PLACES)
+    temporal = _compute_temporal_constraints(request)
+    budget = _compute_budget_constraints(request)
+    lodging_options = _fetch_lodging_safe(ctx, request, temporal, budget)
 
     return EvidencePack(
         query_context=ctx,
         places=places,
         transit_matrix=[],  # Phase 1.3 でフロントが埋める
-        budget_constraints=_compute_budget_constraints(request),
-        temporal_constraints=_compute_temporal_constraints(request),
+        lodging_options=lodging_options if lodging_options else None,
+        budget_constraints=budget,
+        temporal_constraints=temporal,
     )
 
 
@@ -307,6 +313,41 @@ def _merge_anchors_and_search(
                 continue
             unique[p.place_id] = p
     return list(unique.values())[:cap]
+
+
+# ==============================
+# 楽天トラベル宿泊候補取得
+# ==============================
+
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
+
+def _fetch_lodging_safe(
+    ctx: QueryContext,
+    request: "GeneratePlanRequest",
+    temporal: TemporalConstraints,
+    budget: BudgetConstraints,
+) -> list[LodgingOption]:
+    """楽天トラベル API で宿泊候補を取得する。失敗時は空リストを返す（fail-soft）。"""
+    # 日帰り（1 泊なし）なら宿泊不要
+    if temporal.total_days <= 1:
+        return []
+    try:
+        checkin = request.start_date.isoformat()
+        checkout = request.end_date.isoformat()
+        adult_num = max(1, len(request.participants))
+        max_charge = budget.breakdown_jpy.lodging
+        return fetch_lodging_options(
+            region=ctx.region,
+            checkin_date=checkin,
+            checkout_date=checkout,
+            adult_num=adult_num,
+            max_charge_per_night=max_charge,
+        )
+    except RakutenLodgingError as e:
+        _logger.warning("rakuten lodging fetch skipped: %s", e)
+        return []
 
 
 # ==============================

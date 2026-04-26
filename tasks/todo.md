@@ -5,6 +5,12 @@
 
 ---
 
+## 🏁 進捗サマリ（2026-04-26 更新）
+
+**DB-4/DB-5 テスト**: ✅ 2026-04-26 完了。`apps/api/tests/test_share_routes.py` を新規作成（11 件）。share_routes.py / plan_cache.py / extensions.py の実装は既完成済みで、テストのみ追加。全 unit テスト 332 件 PASS（既存 2 件の env 依存失敗は本変更と無関係）。
+
+**楽天トラベルAPI連携 (DB-7)**: ✅ 2026-04-26 実装完了。`apps/api/src/evidence/lodging.py` 新規作成（`RAKUTEN_APPLICATION_ID` / `RAKUTEN_AFFILIATE_ID` 環境変数から読み込み、ホテル名・料金・緯度経度・URL を `LodgingOption` で返す、fail-soft 設計）。`pack.py` に `lat`/`lng` フィールド追加、`builder.py` に組み込み（日帰りスキップ）。`tests/test_lodging.py` 5 件 PASS。
+
 ## 🏁 進捗サマリ（2026-04-25 更新）
 
 **Phase 0**: ✅ 完了
@@ -113,8 +119,7 @@
 - [ ] **Manato**: Phase 1.10 デプロイ準備（Vercel + Render）。次セッション着手時の最初の一手は **CORS 追加 + gunicorn 追加 + render.yaml 作成** を `feat/deploy-prep` で実装。`apps/api/src/app.py` に CORS 設定なし / `requirements.txt` に gunicorn なしが本番ブロッカーとして 2026-04-25 セッションで判明。Vercel/Render アカウント作成と本番ドメイン方針の判断はユーザ側で必要（詳細は 1.10 節）
 - [x] **Manato（Codex Minor、2026-04-25 完了）**: item_type vs category 整合性 validator を追加（`feat/deploy-prep` ブランチ）。`IssueKind.ITEM_TYPE_CATEGORY_MISMATCH` 新設、`_check_item_type_category_consistency` 実装、`_MEAL_CATEGORIES` / `_LODGING_CATEGORIES` allowlist + `*_restaurant` 接尾辞対応。テスト 10 件 PASS、unit 全 283 件 PASS
 - [ ] **Manato（残課題、優先度低、Phase 2 scope）**: Codex (latent) 営業時間 parser 日跨ぎ対応（"22:00-02:00" のような夜またぎ）。MVP 箱根デモは日中観光のみで影響なし
-- [ ] **メンバー B**: DB-4〜6 共有 API（型は 2026-04-25 に同期済み、Flask 実装すれば通る） / DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
-  - **2026-04-25 メンバー B 着手前確認完了**: handoff-db.md / migrations 00〜04 / schemas.__init__ / supabase_client.py を読み込み済み。DB-4/5 の実装に必要な contract（ShareResponse / SharedPlanResponse）・service_role クライアント・RPC 関数はすべて把握済み。次セッションで `apps/api/src/routes/share_routes.py` の実装に入れる状態
+- [x] **メンバー B**: DB-4/DB-5 共有 API 実装 + テスト完了（2026-04-26）。`share_routes.py` / `plan_cache.py` / `extensions.py` 実装済み、`tests/test_share_routes.py` 11 件 PASS。残: DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
 - [ ] **メンバー C**: 1.4〜1.9 の見た目仕上げ（@tasks/handoff-frontend.md）
 
 詳細は下の各セクション参照。
@@ -144,7 +149,7 @@
 - [x] Google Cloud Console で Places / Routes / Geocoding API を有効化
 - [x] OpenAI API キー取得
 - [x] Mapbox トークン取得（`.env` に `NEXT_PUBLIC_MAPBOX_TOKEN` セット済、Phase 1.8 で実戦確認）
-- [ ] 楽天トラベル App ID 取得（Phase 2 用、早めに申請）
+- [x] 楽天トラベル App ID 取得（2026-04-27 完了）
 - [x] バック側に疎通テスト実装（`apps/api/src/external/health.py` に Google Places / Routes / Geocoding / OpenAI の4チェック）
 - [x] 検証: 全 API のヘルスチェックテストがパス（`pytest -m integration` で 4/4 PASS、5.66秒）
 
@@ -312,9 +317,9 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 
 #### 1.9 共有 API 実装（メンバー B 担当、@tasks/handoff-db.md の DB-4/5/6）
 - [x] 型 `ShareResponse` / `SharedPlanResponse` を docs / shared-types / Pydantic / parity に 3 点同期（2026-04-25 Manato、DB 担当の実装は contract 通りに通せば OK）
-- [ ] `POST /api/plans/:id/share`（share_token 生成、owner 検証、`plans.status='succeeded'` 限定）
-- [ ] `GET /api/plans/shared/:token`（Flask + service_role、RLS バイパス経路、handoff-db.md 参照）
-- [ ] 共有用 RLS ポリシー監査（handoff-db.md の DB-6 に要件整理）
+- [x] `POST /api/plans/:id/share`（share_token 生成、owner 検証、`plans.status='succeeded'` 限定）
+- [x] `GET /api/plans/shared/:token`（Flask + service_role、RLS バイパス経路、handoff-db.md 参照）
+- [x] 共有用 RLS ポリシー監査（handoff-db.md の DB-6 に要件整理）— 監査完了、追加ポリシー不要（Flask + service_role で十分）
 
 ### 1.x: **DB 整理タスク**
 
@@ -347,8 +352,8 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
   - [x] gunicorn --keep-alive 5 --worker-connections 100（`render.yaml`）
   - [x] コネクションプールシングルトン（`supabase_client.py` double-checked locking）
   - [ ] Step 3（提出前余裕があれば）: Service Worker（オフライン対応）
-- [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備、申請に時間がかかるので今すぐ）
-- [ ] DB-8: Supabase Row-Level Logging（pg_stat_statements など、Phase 1.3d の RPC + plan_items INSERT が稼働し始めるのでログ観測基盤を用意）
+- [x] DB-7: 楽天トラベル API App ID 取得 + 連携実装完了（2026-04-26）。`evidence/lodging.py` 新規作成、`builder.py` に組み込み済み。テスト 5 件 PASS
+- [x] DB-8: Supabase Row-Level Logging（2026-04-26 完了）— `supabase/migrations/20260426_08_logging_setup.sql` を新規作成。pg_stat_statements 有効化 + `routeful_query_stats` / `routeful_slow_queries` ビュー + `reset_routeful_query_stats()` 関数。Supabase SQL Editor で適用後、ダッシュボードから観測可能
 - [ ] 1.9 共有 API は上の「1.9 共有 API 実装」セクションで DB-4/5/6 として別管理
 
 <details>
@@ -482,9 +487,9 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 設計詳細: `tasks/plans/2026-04-26-budget-constraint.md`（Codex review 1+2 回目で Blocker 0 / Major 3 / Minor 5 を全反映）
 
 ### 2.3 宿泊費 API 連携
-- [ ] テスト: 楽天トラベル API で「箱根」「2025-10-18〜20」の検索結果が返る
-- [ ] 実装: `apps/api/src/evidence/lodging.py`
-- [ ] 実装: 予算配分の宿泊枠に収まる宿を候補提示
+- [x] テスト: 楽天トラベル API で「箱根」「2025-10-18〜20」の検索結果が返る（test_lodging.py 5件 PASS）
+- [x] 実装: `apps/api/src/evidence/lodging.py`
+- [x] 実装: 予算配分の宿泊枠に収まる宿を候補提示
 - [ ] 実装: プラン内の宿泊 PlanItem に楽天トラベル URL を付与
 - [ ] UI: 宿泊選択モーダル（3〜5件の候補）
 
