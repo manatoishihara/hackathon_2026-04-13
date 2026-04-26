@@ -23,6 +23,7 @@ from src.evidence.pack import (
 )
 from src.llm.prompt import (
     PROMPT_VERSION_DEFAULT,
+    _build_budget_context_md,
     build_system_prompt,
     build_user_prompt,
     count_prompt_tokens,
@@ -246,6 +247,153 @@ def test_build_user_prompt_v2_anchor_with_unknown_payload_skip(sample_pack):
     # 「アンカー」「必須」見出しは出ない（payload 無効なため）
     assert "アンカー" not in prompt
     assert "必須スポット" not in prompt
+
+
+# =================================================================
+# Phase 2.2: 予算配分の制約化（_build_budget_context_md）
+# =================================================================
+
+
+def _budget_constraints(
+    *,
+    total: int = 30000,
+    pct: tuple[int, int, int, int] = (40, 30, 20, 10),
+    jpy: tuple[int, int, int, int] = (12000, 9000, 6000, 3000),
+) -> BudgetConstraints:
+    return BudgetConstraints(
+        total_jpy_per_person=total,
+        breakdown_percent=BudgetBreakdown(
+            lodging=pct[0], meal=pct[1], activity=pct[2], transit=pct[3]
+        ),
+        breakdown_jpy=BudgetBreakdownJPY(
+            lodging=jpy[0], meal=jpy[1], activity=jpy[2], transit=jpy[3]
+        ),
+    )
+
+
+def test_build_budget_context_md_standard_distribution():
+    """標準配分 40/30/20/10、3 桁区切りで 4 行のリストを出す。"""
+    md = _build_budget_context_md(_budget_constraints())
+    # 各カテゴリ行が含まれる
+    assert "宿泊" in md and "40%" in md and "12,000" in md
+    assert "食事" in md and "30%" in md and "9,000" in md
+    assert "観光" in md and "20%" in md and "6,000" in md
+    assert "交通" in md and "10%" in md and "3,000" in md
+    # 「絶対制約」「validator」「+5%」などの強調語が含まれる
+    assert "絶対制約" in md
+    assert "validator" in md
+    assert "+5%" in md or "5%" in md
+    # 1 人あたり総予算も入る
+    assert "30,000" in md
+
+
+def test_build_budget_context_md_skewed_lodging_heavy():
+    """偏り配分（宿泊 80%）でも数値が正しく反映される。"""
+    md = _build_budget_context_md(
+        _budget_constraints(
+            total=50000,
+            pct=(80, 10, 5, 5),
+            jpy=(40000, 5000, 2500, 2500),
+        )
+    )
+    assert "宿泊" in md and "80%" in md and "40,000" in md
+    assert "食事" in md and "10%" in md and "5,000" in md
+    assert "観光" in md and "5%" in md and "2,500" in md
+    assert "交通" in md and "5%" in md and "2,500" in md
+
+
+def test_build_budget_context_md_zero_categories_kept_explicit():
+    """0% カテゴリは行ごと消さず「0%（¥0 以内）」で明示する（Codex OK 反映）。"""
+    md = _build_budget_context_md(
+        _budget_constraints(
+            total=30000,
+            pct=(50, 50, 0, 0),
+            jpy=(15000, 15000, 0, 0),
+        )
+    )
+    # 4 行とも残る
+    assert "宿泊" in md and "50%" in md
+    assert "食事" in md and "50%" in md
+    assert "観光" in md and "0%" in md
+    assert "交通" in md and "0%" in md
+    # 0 表記
+    assert "¥0" in md or "0 円" in md
+
+
+def test_build_budget_context_md_jpy_thousands_separator():
+    """3 桁区切りで整形（Intl 風、漢字「円」前 or `¥` prefix）。"""
+    md = _build_budget_context_md(
+        _budget_constraints(
+            total=10000,
+            pct=(33, 33, 17, 17),
+            jpy=(3300, 3300, 1700, 1700),
+        )
+    )
+    # 4 桁の数値が 3 桁区切りで表示
+    assert "3,300" in md
+    assert "1,700" in md
+    # 整数化済（小数点なし）
+    assert "3,300.0" not in md
+
+
+def test_build_budget_context_md_includes_slot_guidance():
+    """LLM の slot 配分への指示文が含まれる（Phase 1.3e cost_jpy 決定論との整合）。"""
+    md = _build_budget_context_md(_budget_constraints())
+    # 「slot 配分で守れ」「上限目標」など key word が文中にある
+    assert "slot" in md or "枠" in md  # slot 配分言及
+    # tolerance の文言（+5% allowance を明示）
+    assert "+5%" in md or "5%" in md
+
+
+# =================================================================
+# build_user_prompt 統合テスト（Phase 2.2）
+# =================================================================
+
+
+def test_build_user_prompt_v2_includes_budget_context_md(sample_pack):
+    """v2 prompt に予算絶対制約 Markdown が展開されて含まれる。"""
+    prompt = build_user_prompt(sample_pack, previous_issues=[], version="v2.0.0")
+    assert "予算配分の絶対制約" in prompt
+    # placeholder が残ってない
+    assert "{budget_context_md}" not in prompt
+
+
+def test_build_user_prompt_v2_budget_context_after_mode_context(sample_pack):
+    """挿入順検証: 予算絶対制約は mode_context_md の **後** + previous_issues の **前**。
+
+    Codex review 2 回目 Minor 2 反映: 「mode より後」だけでなく「issues より前」まで担保する。
+    """
+    prompt = build_user_prompt(sample_pack, previous_issues=[], version="v2.0.0")
+    mode_idx = prompt.index("出発モード補足")
+    budget_idx = prompt.index("予算配分の絶対制約")
+    issues_idx = prompt.index("前回の生成で失敗した検証項目")
+    assert mode_idx < budget_idx < issues_idx, (
+        "budget_context_md は mode_context_md と previous_issues の間に来るべき"
+    )
+
+
+def test_build_user_prompt_v2_budget_context_with_anchor_mode(sample_pack):
+    """anchor モードでも budget_context_md と mode_context_md が両立して含まれる。"""
+    pack = _pack_with_mode(
+        sample_pack, "anchor", {"anchor_place_ids": ["P_hakone_jinja"]}
+    )
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    assert "予算配分の絶対制約" in prompt
+    assert "アンカー" in prompt or "必須" in prompt
+
+
+def test_build_user_prompt_v2_budget_context_with_theme_mode(sample_pack):
+    """theme モードでも両立。"""
+    pack = _pack_with_mode(sample_pack, "theme", {"theme": "onsen"})
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    assert "予算配分の絶対制約" in prompt
+    assert "テーマ" in prompt
+
+
+def test_build_user_prompt_v1_does_not_include_budget_absolute_constraint(sample_pack):
+    """v1 prompt は変更しないので「予算配分の絶対制約」は出ない（後方互換）。"""
+    prompt = build_user_prompt(sample_pack, previous_issues=[], version="v1.0.0")
+    assert "予算配分の絶対制約" not in prompt
 
 
 def test_count_prompt_tokens_returns_int(sample_pack):

@@ -27,6 +27,21 @@
 
 ## ログ
 
+## 2026-04-26: prompt 拡張は「placeholder helper」パターンの再利用で最小変更が成立する（Phase 2.2 で実証）
+- 状況: Phase 2.2「予算配分の制約化」で LLM プロンプトに「宿泊は予算の 40%（¥12,000 以内）」のような絶対制約 Markdown を注入したかった。Explore agent で現状調査したところ、Phase 2.1 で既に `_build_mode_context_md(query_context)` + `{mode_context_md}` placeholder の枠組みが実装されていた。同じ pattern（**helper 関数 + template placeholder + build_user_prompt 内で format_kwargs に追加**）で `_build_budget_context_md(budget_constraints)` を追加することで、validator / assembly / フロント / 3 点同期の変更ゼロで機能拡張完了
+- 効果:
+  - 実装 LOC は plan / impl / test 合わせて ~250 行（うち plan 文書 ~200 行、コード ~50 行、test ~120 行）
+  - prompt token 増加 +216（実測、警告閾値 12k 内）
+  - Phase 1.3e の hallucination 0% / success 100% に regression リスクほぼゼロ（prompt 構造の **追加** のみで既存セクションは不変）
+- 学び:
+  - **既存 pattern を踏襲する判断は、Explore agent で現状の関連コードを 5 軸（データ流れ / prompt / validator / assembly / 既存 pattern 再利用性）で見渡してから決める**と精度が高い。今回は Explore の調査レポートに「mode_context_md パターン再利用可能性」を含めたのが効いた
+  - **prompt の Markdown 注入は v2 のみで OK**（v1 は legacy 検証用で template に placeholder なし）。`build_user_prompt` 内で `version.startswith("v2")` 分岐で `format_kwargs` に追加するか除外するかを切り替える形が最も安全（v1 で `KeyError` を起こさない）
+  - validator にハードコードされた tolerance 定数（`BUDGET_TOLERANCE_RATIO = 0.05`）を prompt 文言で参照するなら **`from .validator import BUDGET_TOLERANCE_RATIO` で動的に取得**せよ（Codex review 2 回目 Minor 1 反映）。ハードコード `+5%` だと validator 側の変更で文言と挙動が drift する
+- ルール:
+  - 同じ prompt に追加 context を注入したい時、新規 placeholder を増やすか既存の `mode_context_md` 等の helper パターンに乗せるかは、**用途が直交していれば独立 placeholder、用途が重なるなら既存 helper の出力を拡張**を選ぶ。今回は用途が独立（出発モード vs 予算）なので独立 placeholder
+  - prompt 拡張時は **挿入順テスト**（`prompt.index("A") < prompt.index("B") < prompt.index("C")`）を必ず書く。helper の format 順は format_kwargs の dict 順序ではなく template 側の placeholder 順なので、test なしには気付かない drift が起きる
+- → 2 回目が来たら `.claude/rules/llm-rules.md` の「プロンプト拡張」節に「helper pattern 再利用 + 挿入順 test」を昇格（今は 1 回目）
+
 ## 2026-04-26: docs / todo に API key 文字列を貼ったら Public repo の Secret Scanning が即検出した
 - 状況: Phase 1.10 本番 E2E debug を todo.md / lessons.md に詳細記録する際、**Playwright の console error から拾った Google Maps ブラウザキー** をそのまま `tasks/todo.md` line 44 に文字列として埋め込み、commit 215570e で develop に push。GitHub Secret Scanning が **API key pattern** (`AIzaSy[A-Za-z0-9_-]{33}`) を検出して Google にアラート送信、user に通知が来た
 - 原因:
