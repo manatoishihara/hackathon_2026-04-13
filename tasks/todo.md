@@ -9,6 +9,8 @@
 
 **DB-4/DB-5 テスト**: ✅ 2026-04-26 完了。`apps/api/tests/test_share_routes.py` を新規作成（11 件）。share_routes.py / plan_cache.py / extensions.py の実装は既完成済みで、テストのみ追加。全 unit テスト 332 件 PASS（既存 2 件の env 依存失敗は本変更と無関係）。
 
+**楽天トラベルAPI連携 (DB-7)**: ✅ 2026-04-26 実装完了。`apps/api/src/evidence/lodging.py` 新規作成（`RAKUTEN_APPLICATION_ID` / `RAKUTEN_AFFILIATE_ID` 環境変数から読み込み、ホテル名・料金・緯度経度・URL を `LodgingOption` で返す、fail-soft 設計）。`pack.py` に `lat`/`lng` フィールド追加、`builder.py` に組み込み（日帰りスキップ）。`tests/test_lodging.py` 5 件 PASS。
+
 ## 🏁 進捗サマリ（2026-04-25 更新）
 
 **Phase 0**: ✅ 完了
@@ -347,7 +349,7 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
   - [x] gunicorn --keep-alive 5 --worker-connections 100（`render.yaml`）
   - [x] コネクションプールシングルトン（`supabase_client.py` double-checked locking）
   - [ ] Step 3（提出前余裕があれば）: Service Worker（オフライン対応）
-- [ ] DB-7: 楽天トラベル API の App ID 取得（Phase 2 事前準備、申請に時間がかかるので今すぐ）
+- [x] DB-7: 楽天トラベル API App ID 取得 + 連携実装完了（2026-04-26）。`evidence/lodging.py` 新規作成、`builder.py` に組み込み済み。テスト 5 件 PASS
 - [x] DB-8: Supabase Row-Level Logging（2026-04-26 完了）— `supabase/migrations/20260426_08_logging_setup.sql` を新規作成。pg_stat_statements 有効化 + `routeful_query_stats` / `routeful_slow_queries` ビュー + `reset_routeful_query_stats()` 関数。Supabase SQL Editor で適用後、ダッシュボードから観測可能
 - [ ] 1.9 共有 API は上の「1.9 共有 API 実装」セクションで DB-4/5/6 として別管理
 
