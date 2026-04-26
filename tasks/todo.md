@@ -146,7 +146,7 @@
 - [x] Google Cloud Console で Places / Routes / Geocoding API を有効化
 - [x] OpenAI API キー取得
 - [x] Mapbox トークン取得（`.env` に `NEXT_PUBLIC_MAPBOX_TOKEN` セット済、Phase 1.8 で実戦確認）
-- [ ] 楽天トラベル App ID 取得（Phase 2 用、早めに申請）
+- [x] 楽天トラベル App ID 取得（2026-04-27 完了）
 - [x] バック側に疎通テスト実装（`apps/api/src/external/health.py` に Google Places / Routes / Geocoding / OpenAI の4チェック）
 - [x] 検証: 全 API のヘルスチェックテストがパス（`pytest -m integration` で 4/4 PASS、5.66秒）
 
@@ -480,9 +480,9 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] 検証: 配分を極端に変える（宿泊80%など）と出力が追従する
 
 ### 2.3 宿泊費 API 連携
-- [ ] テスト: 楽天トラベル API で「箱根」「2025-10-18〜20」の検索結果が返る
-- [ ] 実装: `apps/api/src/evidence/lodging.py`
-- [ ] 実装: 予算配分の宿泊枠に収まる宿を候補提示
+- [x] テスト: 楽天トラベル API で「箱根」「2025-10-18〜20」の検索結果が返る（test_lodging.py 5件 PASS）
+- [x] 実装: `apps/api/src/evidence/lodging.py`
+- [x] 実装: 予算配分の宿泊枠に収まる宿を候補提示
 - [ ] 実装: プラン内の宿泊 PlanItem に楽天トラベル URL を付与
 - [ ] UI: 宿泊選択モーダル（3〜5件の候補）
 
