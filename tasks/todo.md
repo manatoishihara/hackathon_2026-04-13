@@ -64,6 +64,22 @@
       - 仮説 (c): フロント logic bug（places 配列が空のまま渡してる、submit 時の race 等）
       - 問題 (i) 解消後に LLM 生成側で `transit_matrix=[]` を許容するか、validator で 422 reject になるかで切り分けやすくなる
   - **次のアクション（user 作業）**: `supabase/migrations/20260424_04_plan_generation_rpcs.sql` を Supabase SQL Editor で実行（冪等、既に適用済みでも害なし）。実行後に再度 auto モードで Playwright submit して、エラーが「failed to acquire plan lock」から別エラーに変わるか確認
+  - **Run 5（migration 04 未適用のまま、Phase 2.2 + Vercel key 更新後）**: 依然 `failed to acquire plan lock` 500、ただし Vercel 新 key は反映済み（REQUEST_DENIED 0 件、`/api/evidence/places → 200`）。migration 04 適用が次の必須作業
+  - **Run 6（user が migration 04 を SQL Editor で適用後）**: エラーが 500 → **409 `plan is already being generated`** に変化。**migration 04 RPC 動作確認**。ただし新たな**フロント設計バグ**が浮上: フロント `apps/web/src/app/plan/new/page.tsx` line 232 の `updatePlanStatus(planId, "generating")` が `/api/plans/generate` 呼び出しの **前**に走り、サーバ `acquire_plan_generation_lock` の compare-and-set (`status IN ('draft', 'failed')` のときのみ acquire) を破壊。Phase 1.3d Branch C と整合していなかった
+  - **fix/plan-status-lock-mismatch ブランチで対応** (2026-04-26、`b97567b` で develop merge): フロントの `updatePlanStatus(generating)` 削除、サーバ acquire_lock が draft→generating 遷移する設計に統一。failed PATCH は維持。web test 130/130 PASS / tsc clean / build PASS
+  - **Run 7（fix 全反映後、2026-04-26）**: **Vercel 新 key + migration 04 + フロント fix 全部効く**:
+    - ✅ PATCH status='generating' が消えた
+    - ✅ サーバ acquire_lock 成功 (draft→generating)
+    - ✅ LLM 生成試行（Phase 2.2 prompt 含む）
+    - ❌ **`/api/plans/generate → 422 "plan generation failed after retries"`** = LlmGenerationError、3 回 retry 後も validator reject
+    - ❌ **transit_matrix=[] のまま**（Run 4 から続く謎）
+  - **Run 7 で transit_matrix=[] の真因を突き止め**: `/api/evidence/places` を直接叩いて検証 → **places 10 件全部が箱根湯本駅周辺の飲食店ばかり**（HAKONE PICNIC / 箱根食堂 / 肉のKINOSUKE / 箱根BOOTEA / BOX BURGER / 森メシ / 日清亭 / Funny's 等）、互いの距離 0.01〜0.26 km（100m 以内）、観光地・宿泊・温泉施設 0 件。Maps Directions の TRANSIT が至近距離で `ZERO_RESULTS` を返す → transit_matrix=[] → LLM がプランを組めず 422
+  - **次のアクション（Manato）**: `apps/api/src/evidence/places.py` の text search keyword 生成ロジックを確認し、`region: '箱根'` で **観光地 / 温泉宿 / 食事処の混合**になる候補生成に修正。Phase 2.3 楽天連携の builder.py 変更は places 検索を触っていないので無関係
+  - **Run 8（ローカル、Phase 1.10 Evidence Pack 多様性 fix 後、2026-04-26）**: `feat/evidence-pack-diversity` で `_generate_keywords` 4 軸拡張 + `_classify_bucket` + bucket quota + 距離ガード + MIN_PLACES 補填を実装、ローカル `pnpm dev` で verify。**Phase 1.10 fix の効果は完璧に確認**:
+    - places **12 件**（旧 10）、観光地 7（彫刻の森美術館 / 箱根神社 / 強羅公園 / 関所 / 園 / 飛竜の滝 / 玉簾の瀧）+ 飲食 5（喜之助 / 箱根食堂 / 森メシ / 銀の穂 / いろり茶屋）の多様な構成
+    - 互いの距離 **0.64〜9.57 km**（旧 0.01〜0.26 km）、66 ペア全て 10km 以内 = フロント transit fetch の対象
+    - **しかし新ブロッカー (Run 8 で発見)**: フロント `fetchTransitMatrix` の stats が `{attempted: 40, succeeded: 0, errors: 40, timedOut: 0, deadlineReached: false}` で、**Maps Directions の TRANSIT モードが 40 ペア全部 ZERO_RESULTS を返す**。これは Maps Directions の TRANSIT が「観光地間の公共交通機関経路」を返さない（観光地は徒歩 / 車アクセスが基本で、駅から駅の TRANSIT データセット圏外）という構造的問題で、Phase 1.10 多様性 fix とは別軸の課題
+  - **次のアクション (`fix/transit-fallback-walking-driving` ブランチで対応予定)**: `apps/web/src/lib/transit.ts:333` の `travelMode: "TRANSIT"` 固定を **TRANSIT → WALKING → DRIVING のフォールバック** に変更。TRANSIT が ZERO_RESULTS でも WALKING / DRIVING でなんらかの経路を返す前提（同じ街中で徒歩 5km は十分歩ける、車なら確実）。実装 ~50 LOC + test ~30 LOC、Phase 1.10 fix と独立 commit
   - **並行発見**: `supabase/migrations/` に `20260425_05_*` ファイルが **2 つ** (`auth_user_sessions_mirror` / `index_optimization`) 存在する連番衝突。`all_migrations.sql` の sort 順が曖昧になるので、適用後に `index_optimization` を 06 にリネーム or 連番ルールの再整理を別タスク化推奨。詳細は @tasks/lessons.md 2026-04-26 エントリ + @.claude/rules/external-api-rules.md（2 回目から rule 昇格）参照
 
 **Phase 1.10 Vercel 設定とビルド修正**: 🟡 2026-04-25 セッションで Vercel ビルド成功まで到達（`pnpm --filter web build` ローカル PASS / Web test 61/61 PASS）、本番 deploy は user push 後に確認。経緯:

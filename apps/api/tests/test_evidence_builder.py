@@ -14,8 +14,12 @@ from unittest.mock import patch
 import pytest
 
 from src.evidence.builder import (
+    _bucket_quota,
+    _classify_bucket,
     _dedupe_and_cap,
+    _distance_ok_for_bucket,
     _generate_keywords,
+    _merge_anchors_and_search,
     build_evidence_pack,
 )
 from src.evidence.pack import PlacePoint, QueryContext, QueryContextParticipant
@@ -85,46 +89,474 @@ def _place(
 # ==============================
 
 
-def test_generate_keywords_includes_region_and_tags():
-    ctx = QueryContext(
+def _make_ctx(*, mode="auto", payload=None, tags_per_participant=None) -> QueryContext:
+    """test 用 QueryContext factory（短縮）。"""
+    if tags_per_participant is None:
+        tags_per_participant = [[]]
+    return QueryContext(
         region="箱根",
         start_date=date(2026, 6, 1),
         end_date=date(2026, 6, 2),
         departure_point="新宿駅",
-        start_mode="auto",
-        mode_payload=None,
+        start_mode=mode,
+        mode_payload=payload,
         participants=[
-            QueryContextParticipant(name="太郎", wishes="w", tags=["温泉", "和食"]),
-            QueryContextParticipant(name="花子", wishes="w", tags=["カフェ"]),
+            QueryContextParticipant(name=f"P{i}", wishes="w", tags=t)
+            for i, t in enumerate(tags_per_participant)
         ],
     )
+
+
+def test_generate_keywords_auto_no_tags_returns_4_base_axes():
+    ctx = _make_ctx(tags_per_participant=[[]])
     keywords = _generate_keywords(ctx)
-    assert "箱根 観光" in keywords
-    assert "箱根 飲食" in keywords
-    assert "箱根 温泉" in keywords
+    assert keywords == [
+        "箱根 観光地",
+        "箱根 温泉",
+        "箱根 神社 寺",
+        "箱根 食事処",
+    ]
+
+
+def test_generate_keywords_auto_with_unique_tag_appends_one():
+    ctx = _make_ctx(tags_per_participant=[["写真映え"]])
+    keywords = _generate_keywords(ctx)
+    assert len(keywords) == 5
+    assert "箱根 写真映え" in keywords
+    # 基本 4 軸が先頭にある
+    assert keywords[:4] == [
+        "箱根 観光地",
+        "箱根 温泉",
+        "箱根 神社 寺",
+        "箱根 食事処",
+    ]
+
+
+def test_generate_keywords_auto_with_duplicate_tag_skips():
+    ctx = _make_ctx(tags_per_participant=[["温泉"]])
+    keywords = _generate_keywords(ctx)
+    # 「箱根 温泉」は基本 4 軸に既に含まれるので tag からは追加されない
+    assert len(keywords) == 4
+    assert keywords.count("箱根 温泉") == 1
+
+
+def test_generate_keywords_auto_caps_tag_at_one():
+    ctx = _make_ctx(
+        tags_per_participant=[["温泉", "和食", "写真映え", "茶道", "着物"]]
+    )
+    keywords = _generate_keywords(ctx)
+    # 基本 4 軸 + tag 最大 1 個（"温泉" は重複 skip → "和食" が採用）
+    assert len(keywords) == 5
     assert "箱根 和食" in keywords
-    assert "箱根 カフェ" in keywords
-    assert len(keywords) == 5
+    assert "箱根 写真映え" not in keywords  # 1 個目で打ち切り
 
 
-def test_generate_keywords_caps_tags_at_3():
-    ctx = QueryContext(
-        region="京都",
-        start_date=date(2026, 6, 1),
-        end_date=date(2026, 6, 2),
-        departure_point="東京駅",
-        start_mode="auto",
-        mode_payload=None,
-        participants=[
-            QueryContextParticipant(
-                name="A",
-                wishes="w",
-                tags=["神社", "和菓子", "紅葉", "茶道", "着物"],
-            )
-        ],
+def test_generate_keywords_theme_mode_adds_theme_words_within_cap():
+    ctx = _make_ctx(
+        mode="theme",
+        payload={"theme": "onsen"},
+        tags_per_participant=[[]],
     )
     keywords = _generate_keywords(ctx)
+    # 基本 4 軸 + theme 語彙 1 個（合計 5 で打ち切り）
     assert len(keywords) == 5
+    assert keywords[:4] == [
+        "箱根 観光地",
+        "箱根 温泉",
+        "箱根 神社 寺",
+        "箱根 食事処",
+    ]
+
+
+def test_generate_keywords_anchor_mode_returns_base_4_axes():
+    ctx = _make_ctx(
+        mode="anchor",
+        payload={"anchor_place_ids": ["place_X"]},
+        tags_per_participant=[[]],
+    )
+    keywords = _generate_keywords(ctx)
+    # anchor mode でも基本 4 軸（anchor は別経路で fetch）
+    assert keywords == [
+        "箱根 観光地",
+        "箱根 温泉",
+        "箱根 神社 寺",
+        "箱根 食事処",
+    ]
+
+
+def test_generate_keywords_theme_with_tag_keeps_theme_word():
+    """Codex review 2 Major 2 反映: theme + tag 入力で theme 語彙が tag より先に入る。"""
+    ctx = _make_ctx(
+        mode="theme",
+        payload={"theme": "onsen"},
+        tags_per_participant=[["写真映え"]],
+    )
+    keywords = _generate_keywords(ctx)
+    # 基本 4 軸 + theme 語彙 1 個（合計 5 で打ち切り）。tag の "写真映え" は入らない（枠なし）
+    assert len(keywords) == 5
+    assert "箱根 写真映え" not in keywords
+    # 基本 4 軸以外で theme bias が反映されている（onsen 系語彙）
+    extra = [k for k in keywords if k not in {"箱根 観光地", "箱根 温泉", "箱根 神社 寺", "箱根 食事処"}]
+    assert len(extra) == 1
+
+
+def test_generate_keywords_max_5_regardless_of_input():
+    """mode 別キーワード回帰: いかなる入力でも合計 5 を超えない。"""
+    for mode, payload in [
+        ("auto", None),
+        ("theme", {"theme": "onsen"}),
+        ("anchor", {"anchor_place_ids": ["X", "Y"]}),
+    ]:
+        ctx = _make_ctx(
+            mode=mode,
+            payload=payload,
+            tags_per_participant=[["温泉", "和食", "写真"]],
+        )
+        keywords = _generate_keywords(ctx)
+        assert len(keywords) <= 5, f"{mode} mode produced {len(keywords)} keywords"
+
+
+# =================================================================
+# Phase 1.10 fix: bucket 分類 + quota + 距離ガード + MIN_PLACES 補填
+# (tasks/plans/2026-04-26-evidence-pack-diversity.md)
+# =================================================================
+
+
+def test_classify_bucket_lodging_takes_priority_over_attraction():
+    """混合 category で lodging が attraction より優先されることを確認（Codex review 2 Minor 1 反映、
+    `tourist_attraction` (attraction allowlist) と `lodging` の真の競合を test）。"""
+    place = _place(
+        "p_onsen_ryokan",
+        "温泉旅館",
+        0,
+        0,
+        category=["lodging", "tourist_attraction"],
+    )
+    assert _classify_bucket(place) == "lodging"
+
+
+def test_classify_bucket_lodging_takes_priority_over_meal():
+    place = _place("p_hotel_with_restaurant", "ホテル", 0, 0, category=["lodging", "restaurant"])
+    assert _classify_bucket(place) == "lodging"
+
+
+def test_classify_bucket_attraction_when_no_lodging():
+    place = _place("p_museum", "美術館", 0, 0, category=["museum", "tourist_attraction"])
+    assert _classify_bucket(place) == "attraction"
+
+
+def test_classify_bucket_attraction_with_meal_returns_attraction():
+    """lodging なし、attraction と meal 両方 → attraction が勝つ。"""
+    place = _place("p_park_cafe", "公園内カフェ", 0, 0, category=["park", "cafe"])
+    assert _classify_bucket(place) == "attraction"
+
+
+def test_classify_bucket_temple_via_place_of_worship():
+    place = _place("p_temple", "寺", 0, 0, category=["place_of_worship", "tourist_attraction"])
+    assert _classify_bucket(place) == "attraction"
+
+
+def test_classify_bucket_meal_via_restaurant():
+    place = _place("p_restaurant", "和食店", 0, 0, category=["restaurant", "food"])
+    assert _classify_bucket(place) == "meal"
+
+
+def test_classify_bucket_meal_via_restaurant_suffix():
+    """`*_restaurant` 接尾辞（japanese_restaurant 等）で meal 判定。"""
+    place = _place("p_yakiniku", "焼肉", 0, 0, category=["yakiniku_restaurant", "food"])
+    assert _classify_bucket(place) == "meal"
+
+
+def test_classify_bucket_lodging_via_ryokan():
+    place = _place("p_ryokan", "旅館", 0, 0, category=["ryokan"])
+    assert _classify_bucket(place) == "lodging"
+
+
+def test_classify_bucket_other_for_unknown_category():
+    place = _place("p_mall", "ショッピング", 0, 0, category=["shopping_mall"])
+    assert _classify_bucket(place) == "other"
+
+
+def test_classify_bucket_other_for_empty_category():
+    place = _place("p_unknown", "unknown", 0, 0, category=[])
+    assert _classify_bucket(place) == "other"
+
+
+# --- _bucket_quota ---
+
+
+def test_bucket_quota_day_trip_zero_lodging():
+    quota = _bucket_quota(1)
+    assert quota["lodging"] == 0
+    assert sum(quota.values()) == 15
+
+
+def test_bucket_quota_one_night():
+    quota = _bucket_quota(2)
+    assert quota["lodging"] == 1
+    assert sum(quota.values()) == 15
+
+
+def test_bucket_quota_two_nights():
+    quota = _bucket_quota(3)
+    assert quota["lodging"] == 2
+    assert sum(quota.values()) == 15
+
+
+# --- _distance_ok_for_bucket（bucket 別境界、Codex Major 5）---
+
+
+def test_distance_ok_meal_bucket_excludes_at_threshold():
+    """meal bucket の距離閾値 300m。同距離の境界以下は skip（<=）。"""
+    a = _place("p_a", "A", 35.2, 139.0)
+    # 緯度 0.001° ≒ 111m
+    near = _place("p_near", "near", 35.2 + 0.0024, 139.0)  # ~267m → skip
+    far = _place("p_far", "far", 35.2 + 0.0030, 139.0)  # ~334m → ok
+    assert _distance_ok_for_bucket(near, [a], "meal") is False
+    assert _distance_ok_for_bucket(far, [a], "meal") is True
+
+
+def test_distance_ok_attraction_bucket_uses_150m_threshold():
+    """attraction bucket は 150m。施設内 spots を許容する。"""
+    a = _place("p_a", "A", 35.2, 139.0)
+    inside = _place("p_inside", "inside", 35.2 + 0.0014, 139.0)  # ~155m → OK
+    too_close = _place("p_too", "too", 35.2 + 0.0010, 139.0)  # ~111m → skip
+    assert _distance_ok_for_bucket(inside, [a], "attraction") is True
+    assert _distance_ok_for_bucket(too_close, [a], "attraction") is False
+
+
+def test_distance_ok_lodging_bucket_uses_500m_threshold():
+    """lodging は 500m で分散重視。"""
+    a = _place("p_a", "A", 35.2, 139.0)
+    near = _place("p_near", "near", 35.2 + 0.004, 139.0)  # ~444m → skip
+    far = _place("p_far", "far", 35.2 + 0.005, 139.0)  # ~555m → OK
+    assert _distance_ok_for_bucket(near, [a], "lodging") is False
+    assert _distance_ok_for_bucket(far, [a], "lodging") is True
+
+
+def test_distance_ok_returns_true_for_empty_accepted():
+    a = _place("p_a", "A", 35.2, 139.0)
+    assert _distance_ok_for_bucket(a, [], "meal") is True
+
+
+def test_distance_ok_strict_threshold_via_haversine_mock(monkeypatch):
+    """Codex review 2 Minor 2 反映: `<=` 境界の厳密 test。
+    haversine をモックして閾値 ちょうど / +微小 / -微小 を直接検証。
+    """
+    from src.evidence import builder as builder_mod
+
+    a = _place("p_a", "A", 0, 0)
+    b = _place("p_b", "B", 0, 0)
+
+    # meal threshold = 0.30 km
+    monkeypatch.setattr(builder_mod, "_haversine_km", lambda x, y: 0.30)
+    assert _distance_ok_for_bucket(b, [a], "meal") is False  # ちょうど境界 → skip
+
+    monkeypatch.setattr(builder_mod, "_haversine_km", lambda x, y: 0.30001)
+    assert _distance_ok_for_bucket(b, [a], "meal") is True  # 境界 +ε → ok
+
+    monkeypatch.setattr(builder_mod, "_haversine_km", lambda x, y: 0.29999)
+    assert _distance_ok_for_bucket(b, [a], "meal") is False  # 境界 -ε → skip
+
+    # attraction threshold = 0.15 km
+    monkeypatch.setattr(builder_mod, "_haversine_km", lambda x, y: 0.15)
+    assert _distance_ok_for_bucket(b, [a], "attraction") is False
+    monkeypatch.setattr(builder_mod, "_haversine_km", lambda x, y: 0.15001)
+    assert _distance_ok_for_bucket(b, [a], "attraction") is True
+
+    # lodging threshold = 0.50 km
+    monkeypatch.setattr(builder_mod, "_haversine_km", lambda x, y: 0.50)
+    assert _distance_ok_for_bucket(b, [a], "lodging") is False
+    monkeypatch.setattr(builder_mod, "_haversine_km", lambda x, y: 0.50001)
+    assert _distance_ok_for_bucket(b, [a], "lodging") is True
+
+
+# --- _merge_anchors_and_search（quota + 距離ガード + 補填）---
+
+
+def _spread(prefix: str, n: int, lat0: float, bucket_cat: list[str]) -> list[PlacePoint]:
+    """同 bucket でも距離ガードに引っかからない 1km 間隔の places を生成。"""
+    return [
+        _place(
+            f"{prefix}{i}",
+            f"{prefix}{i}",
+            lat0 + 0.01 * i,  # 約 1.1km 刻み
+            139.0,
+            category=bucket_cat,
+        )
+        for i in range(n)
+    ]
+
+
+def test_merge_full_buckets_at_two_nights():
+    """2 泊（lodging=2）で全 bucket 充足、合計 15 件採用。"""
+    attractions = _spread("a", 10, 35.0, ["tourist_attraction"])
+    meals = _spread("m", 10, 36.0, ["restaurant"])
+    lodgings = _spread("l", 5, 37.0, ["lodging"])
+    others = _spread("o", 5, 38.0, ["shopping_mall"])
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[attractions, meals, lodgings, others],
+        cap=15,
+        total_days=3,
+    )
+    assert len(out) == 15
+    buckets = [_classify_bucket(p) for p in out]
+    assert buckets.count("attraction") == 6
+    assert buckets.count("meal") == 5
+    assert buckets.count("lodging") == 2
+    assert buckets.count("other") == 2
+
+
+def test_merge_day_trip_zero_lodging_quota():
+    """日帰り (total_days=1) で lodging が 0 件、attraction/meal が増える。"""
+    attractions = _spread("a", 10, 35.0, ["tourist_attraction"])
+    meals = _spread("m", 10, 36.0, ["restaurant"])
+    lodgings = _spread("l", 5, 37.0, ["lodging"])
+    others = _spread("o", 5, 38.0, ["shopping_mall"])
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[attractions, meals, lodgings, others],
+        cap=15,
+        total_days=1,
+    )
+    buckets = [_classify_bucket(p) for p in out]
+    assert buckets.count("lodging") == 0
+    assert buckets.count("attraction") == 7
+    assert buckets.count("meal") == 6
+
+
+def test_merge_min_places_fill_when_attraction_short():
+    """observation 不足時、MIN_PLACES=12 まで meal/other/attraction の余りで補填。"""
+    # attraction は 3 件のみ、meal/other/lodging は余裕
+    attractions = _spread("a", 3, 35.0, ["tourist_attraction"])
+    meals = _spread("m", 10, 36.0, ["restaurant"])
+    lodgings = _spread("l", 3, 37.0, ["lodging"])
+    others = _spread("o", 5, 38.0, ["shopping_mall"])
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[attractions, meals, lodgings, others],
+        cap=15,
+        total_days=2,
+    )
+    # baseline 採用 = attraction 3 + meal 5 + lodging 1 + other 2 = 11、補填で >=12 に
+    assert len(out) >= 12
+    buckets = [_classify_bucket(p) for p in out]
+    # 補填は meal が最初、distance ok の余りから 1 件以上採用
+    assert buckets.count("meal") >= 6 or buckets.count("other") >= 3
+
+
+def test_merge_distance_guard_blocks_clustered_meals():
+    """同一 100m 圏の飲食店 5 件 → 距離ガードで 1 件のみ採用（Run 7 修正の再現テスト）。"""
+    cluster = [
+        _place(f"m{i}", f"meal{i}", 35.2 + 0.0001 * i, 139.0, category=["restaurant"])
+        for i in range(5)
+    ]
+    # 補完用に距離離れた places を入れて MIN_PLACES に届くようにする
+    far_meals = _spread("fm", 5, 36.0, ["restaurant"])
+    far_attractions = _spread("a", 6, 37.0, ["tourist_attraction"])
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[cluster, far_meals, far_attractions],
+        cap=15,
+        total_days=2,
+    )
+    cluster_ids_in_out = [p.place_id for p in out if p.place_id.startswith("m")]
+    assert len(cluster_ids_in_out) == 1  # クラスターから 1 件のみ採用
+
+
+def test_merge_anchor_bypasses_quota_and_distance_guard():
+    """anchor は quota / 距離ガード bypass、search 結果は通常通り。"""
+    anchor1 = _place("anchor1", "A1", 35.2, 139.0, category=["tourist_attraction"])
+    anchor2 = _place("anchor2", "A2", 35.20001, 139.0, category=["tourist_attraction"])  # 100m 以内
+    attractions = _spread("a", 10, 35.0, ["tourist_attraction"])
+    out = _merge_anchors_and_search(
+        anchors=[anchor1, anchor2],
+        search_results=[attractions],
+        cap=15,
+        total_days=2,
+    )
+    out_ids = [p.place_id for p in out]
+    assert "anchor1" in out_ids
+    assert "anchor2" in out_ids
+    # anchor が先頭、anchor 同士の距離ガードはなし
+    assert out_ids[:2] == ["anchor1", "anchor2"]
+
+
+def test_merge_anchor_search_dedupe():
+    """anchor と search に同一 place_id があれば search 側を重複として無視。"""
+    place_x = _place("X", "X", 35.0, 139.0, category=["tourist_attraction"])
+    out = _merge_anchors_and_search(
+        anchors=[place_x],
+        search_results=[[place_x]],
+        cap=15,
+        total_days=2,
+    )
+    assert len(out) == 1
+    assert out[0].place_id == "X"
+
+
+def test_merge_area_filter_applied_only_to_search():
+    """area filter は search 結果側のみ。anchor は bypass。"""
+    locality_anchor = _place(
+        "loc", "箱根町", 0, 0, category=["locality", "political"]
+    )
+    locality_search = _place(
+        "loc_s", "箱根町_search", 0, 0, category=["locality", "political"]
+    )
+    spot = _place("spot", "観光地", 35.5, 139.5, category=["tourist_attraction"])
+    out = _merge_anchors_and_search(
+        anchors=[locality_anchor],  # anchor は filter bypass
+        search_results=[[locality_search, spot]],  # locality_search は除外
+        cap=15,
+        total_days=2,
+    )
+    out_ids = [p.place_id for p in out]
+    assert "loc" in out_ids
+    assert "loc_s" not in out_ids
+    assert "spot" in out_ids
+
+
+def test_merge_lodging_only_input_overnight_fills_to_min_places():
+    """Codex review 2 Major 1 反映: lodging だけ大量にある場合、1 泊以上なら lodging を補填して >= MIN_PLACES。"""
+    lodgings = _spread("l", 20, 35.0, ["lodging"])
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[lodgings],
+        cap=15,
+        total_days=2,  # 1 泊なので lodging 補填が有効
+    )
+    # baseline lodging quota=1、補填で MIN_PLACES=12 まで lodging 採用
+    assert len(out) >= 12
+    assert all(_classify_bucket(p) == "lodging" for p in out)
+
+
+def test_merge_lodging_only_input_day_trip_does_not_fill_lodging():
+    """日帰りのときは lodging 補填しない（plan に組み込めないため）。"""
+    lodgings = _spread("l", 20, 35.0, ["lodging"])
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[lodgings],
+        cap=15,
+        total_days=1,
+    )
+    # 日帰り quota=0、補填も lodging 対象外 → 0 件
+    assert len(out) == 0
+
+
+def test_merge_caps_at_max_places():
+    """cap=MAX_PLACES=15 を超えない。全 bucket 余裕あり (others 含む)。"""
+    attractions = _spread("a", 20, 35.0, ["tourist_attraction"])
+    meals = _spread("m", 20, 36.0, ["restaurant"])
+    lodgings = _spread("l", 20, 37.0, ["lodging"])
+    others = _spread("o", 20, 38.0, ["shopping_mall"])
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[attractions, meals, lodgings, others],
+        cap=15,
+        total_days=3,
+    )
+    assert len(out) == 15
 
 
 # ==============================
@@ -319,8 +751,12 @@ def test_generate_keywords_history_theme():
     assert any(("神社" in kw) or ("寺" in kw) or ("歴史" in kw) for kw in keywords)
 
 
-def test_generate_keywords_auto_mode_is_unchanged():
-    """auto モードでは theme keyword は追加されない（regression check）。"""
+def test_generate_keywords_auto_mode_no_theme_extension():
+    """auto モードでは theme keyword は追加されない（regression check）。
+
+    Phase 1.10 fix で基本 4 軸が最低保証となり、tag「温泉」は基本 4 軸と重複するので
+    追加されない（合計 4 件）。
+    """
     ctx = QueryContext(
         region="箱根",
         start_date=date(2026, 6, 1),
@@ -331,9 +767,9 @@ def test_generate_keywords_auto_mode_is_unchanged():
         participants=[QueryContextParticipant(name="a", wishes="", tags=["温泉"])],
     )
     keywords = _generate_keywords(ctx)
-    # tag の温泉は含むが、theme 拡張は無いので件数は base+tag のみ
-    # base 2 (観光/飲食) + tag 1 (温泉) = 3 のはず
-    assert len(keywords) == 3
+    # 基本 4 軸（"温泉" は重複 skip）= 4 件
+    assert len(keywords) == 4
+    assert "箱根 温泉" in keywords  # 基本 4 軸の 1 つとして含まれる
 
 
 @patch("src.evidence.builder.fetch_place_details")
