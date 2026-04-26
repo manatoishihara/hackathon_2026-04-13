@@ -27,6 +27,44 @@
 
 ## ログ
 
+## 2026-04-26: Maps Directions TRANSIT モードは「観光地間」で ZERO_RESULTS を返す（公共交通の有効圏外）
+- 状況: Phase 1.10 Evidence Pack 多様性 fix（Run 8 ローカル verify）で places を観光地 7 + 飲食 5 = 12 件に多様化、距離 0.64〜9.57 km に分散したのに、`fetchTransitMatrix` の stats が `{attempted: 40, succeeded: 0, errors: 40}` で全ペア ZERO_RESULTS。Maps SDK 自体は動作（REQUEST_DENIED 0 件）、`google.maps.DirectionsService.route({travelMode: "TRANSIT"})` が「彫刻の森美術館 → 箱根食堂」のような観光地ペアで経路を返さない
+- 真因:
+  - Maps Directions の TRANSIT モードは「電車・バス・地下鉄」の **公共交通機関ノード間** の経路を返す
+  - 駅 / バス停以外の **観光地は TRANSIT グラフのノードではない**（徒歩アクセスが基本）
+  - 結果として、観光地 → 観光地 / 観光地 → 食事処 のような「公共交通機関を使わない近距離移動」は ZERO_RESULTS となる
+  - Phase 1.3b で TRANSIT モード固定にしたのは「日本の電車を主役にした demo」のためだが、places の多様化（観光地メイン）と相性が悪かった
+- 学び:
+  - **Maps Directions の TRANSIT は「駅・停留所間」の経路 SDK** であり、汎用の経路 SDK ではない。観光地メインの pack には不向き
+  - 距離 5〜10 km の同一観光圏内なら **WALKING / DRIVING にフォールバック**するのが現実的（実際の旅行者も「徒歩 + 観光地レンタカー」で巡る）
+  - **Phase 1.3b 当時の設計判断**「TRANSIT で日本の電車を強調」は places が駅前飲食店ばかりだったから動いていた（皮肉にも places 偏重 bug が transit 取得を成功させていた）
+  - Phase 1.10 で places を改善したことで隠れていた TRANSIT 限界が顕在化。**「片方の改善が別の限界を露呈する」古典パターン**
+- 対処（次セッション）: `apps/web/src/lib/transit.ts:333` の travelMode 固定を **TRANSIT → WALKING → DRIVING のフォールバック chain** に変更。各 mode で per-call 2s timeout、全体 deadline 10s 維持
+- ルール:
+  - **外部 SDK の特定モード（Maps TRANSIT 等）に依存する場合、フォールバック設計を最初から組み込む**。「特定モードで取れない / ZERO_RESULTS」のケースは現実に頻繁に発生する
+  - 単一モード固定は「demo シナリオが固定」前提で、places の動的変化（Phase 1.10 fix 等）で破綻する
+- → 2 回目が来たら `.claude/rules/external-api-rules.md` に「外部経路 SDK は単一モード固定にせずフォールバック設計」を昇格（今は 1 回目）
+
+## 2026-04-26: 本番 E2E 7 連続 Run で「設計の整合性 bug」を多層的に発見（migration 漏れ / Maps API allowlist / フロント先打ち PATCH / Evidence Pack category 偏重）
+- 状況: Phase 2.2 実装後の本番 E2E verify を 7 回連続で行った結果、**1 回 1 つずつ別の bug が連鎖的に表面化**:
+  - Run 1: FK 23503（migration 05 mirror 未適用、user 適用で解消）
+  - Run 2: Maps Directions REQUEST_DENIED（API key allowlist 漏れ、user 設定で解消）
+  - Run 3: 設定反映ラグ（user 再確認で解消）
+  - Run 4: 同 + 新ブロッカー: `failed to acquire plan lock`（migration 04 plan_generation_rpcs 未適用、user 適用で解消）
+  - Run 5: ↑ 残課題
+  - Run 6: `plan is already being generated`（フロントが先に PATCH status='generating'、Phase 1.3d Branch C と整合 NG、`fix/plan-status-lock-mismatch` で 1 行削除）
+  - Run 7: 422 `plan generation failed after retries` ← Evidence Pack の places 構成が「箱根湯本駅周辺の飲食店ばかり」で観光地 0 件 → 互いの距離 0.01〜0.26 km → Maps TRANSIT が ZERO_RESULTS → transit_matrix=[] → LLM が plan を組めず validator 3 回 retry 後 reject
+- 学び:
+  - **本番 E2E は「設計通りに動く」ではなく「設計の不整合を見つける」道具**。1 つ fix するごとに次の bug が浮上、でも各 Run で原因切り分けが進む（migration 適用 / API key 設定 / フロント整合性 / Evidence Pack 品質）
+  - **migration 適用漏れと API key allowlist 漏れは「user 作業」に依存するため、毎回 user 確認待ち**。これが 1 セッション内で 5 回発生し、各 Run で待ち時間が累積。**deploy preflight で確認できる migration の checklist が欲しい**
+  - **フロント / バック整合性 bug は実装フェーズで検出できる**: Phase 1.3d Branch C で acquire_lock RPC を作った時に「フロントは status='draft' のまま呼ぶ」を契約として明文化していれば Run 6 は防げた。1.5 page.tsx と routes/plan_routes.py が別ブランチで実装されたとき、**両者の status 遷移責務を 1 ヶ所に書いた契約 doc** がなかったのが盲点
+  - **Evidence Pack の category 偏重は LLM プロンプト改善 (Phase 2.2) 以前の品質問題**。Places API text search の結果次第で「飲食店ばかり」「観光地ばかり」になる場合があり、auto モードの keyword 生成 + region 指定だけでは混合が保証されない。次セッションで `places.py` の category-aware keyword 生成（観光 / 温泉 / 食事 / 宿泊の各 1〜2 件以上を必ず含む）を検討
+  - **手動 verify は本番のみ**: ローカル `verify_hallucination_rate.py` は env 不足で動かなかった、unit test だけでは LLM 実遵守が検証できなかった、結果として user に migration / key 適用作業を依頼しながらの本番 7 連続 Run になった。今後は **代替の自動 verify 経路**（mocked Places + 固定 fixture pack で LLM 生成を自動回す）を検討
+- ルール（昇格候補、次セッションで判断）:
+  - 大物機能（Phase 2.x）の実装後に本番 E2E をやる前に「migration / env 変数 / API key allowlist / フロント-バック契約」の **4 軸 preflight checklist** を docs に書く
+  - Evidence Pack の category 多様性を保証する unit test を `tests/test_evidence_builder.py` に追加（places の category set に観光地 + 温泉 + 食事 が含まれること）
+- → 2 回目が来たら `.claude/rules/api-rules.md` に「本番 E2E preflight checklist」節を昇格（今は 1 回目）
+
 ## 2026-04-26: prompt 拡張は「placeholder helper」パターンの再利用で最小変更が成立する（Phase 2.2 で実証）
 - 状況: Phase 2.2「予算配分の制約化」で LLM プロンプトに「宿泊は予算の 40%（¥12,000 以内）」のような絶対制約 Markdown を注入したかった。Explore agent で現状調査したところ、Phase 2.1 で既に `_build_mode_context_md(query_context)` + `{mode_context_md}` placeholder の枠組みが実装されていた。同じ pattern（**helper 関数 + template placeholder + build_user_prompt 内で format_kwargs に追加**）で `_build_budget_context_md(budget_constraints)` を追加することで、validator / assembly / フロント / 3 点同期の変更ゼロで機能拡張完了
 - 効果:

@@ -20,6 +20,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
+from math import asin, cos, radians, sin, sqrt
+
+from ..llm.validator import _LODGING_CATEGORIES, _MEAL_CATEGORIES
 from ..schemas import GeneratePlanRequest
 from ..themes import get_keywords as _theme_keywords
 from .pack import (
@@ -37,6 +40,7 @@ from .places import PlacesError, fetch_place_details, search_by_text
 
 JST = ZoneInfo("Asia/Tokyo")
 MAX_PLACES = 15  # Evidence Pack に載せる最大スポット数
+MIN_PLACES = 12  # bucket 不足時にここまで補填する閾値（Run 8 fix、tasks/plans/2026-04-26-evidence-pack-diversity.md）
 PARALLEL_WORKERS = 5
 DEFAULT_START_HOUR = 9
 DEFAULT_END_HOUR = 20
@@ -129,9 +133,11 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
     if missing_anchors:
         raise AnchorFetchError(missing_anchors)
 
-    places = _merge_anchors_and_search(anchor_places, search_results, MAX_PLACES)
     temporal = _compute_temporal_constraints(request)
     budget = _compute_budget_constraints(request)
+    places = _merge_anchors_and_search(
+        anchor_places, search_results, MAX_PLACES, total_days=temporal.total_days
+    )
     lodging_options = _fetch_lodging_safe(ctx, request, temporal, budget)
 
     return EvidencePack(
@@ -183,37 +189,53 @@ def _build_query_context(request: GeneratePlanRequest) -> QueryContext:
 # ==============================
 
 
+_BASE_KEYWORD_SUFFIXES: tuple[str, ...] = (
+    "観光地",
+    "温泉",
+    "神社 寺",
+    "食事処",
+)
+_MAX_KEYWORDS = 5  # PARALLEL_WORKERS=5 内に収めるための上限
+
+
 def _generate_keywords(ctx: QueryContext) -> list[str]:
-    """region と参加者 tag から 3〜5 個の検索キーワードを作る。
+    """region から「観光地 / 温泉 / 神社 寺 / 食事処」の 4 軸を必ず投入し、theme 語彙 + tag 1 個を上限 5 で追加する（Phase 1.10 fix、tasks/plans/2026-04-26-evidence-pack-diversity.md）。
 
-    Phase 2.1: theme モードでは _THEME_KEYWORDS の語彙を追加（pack を theme 寄りに bias）。
+    auto / anchor / theme 全 mode で基本 4 軸を投入することで、Places API text search の
+    人気度 ranking 偏重（飲食店ばかり来る Run 7 型）を構造的に防ぐ。
+
+    順序: 基本 4 軸 → theme 語彙（theme モード時、tag より先に予約）→ tag 1 個（重複は無視、
+    残り枠分のみ）。合計 ≤ 5。
+    Codex review 2 Major 2 反映: theme 語彙を tag より先に入れることで、tag 入力時に
+    theme bias が消えてしまう問題を回避。
     """
-    keywords = [
-        f"{ctx.region} 観光",
-        f"{ctx.region} 飲食",
-    ]
-    seen: list[str] = []
-    for participant in ctx.participants:
-        for tag in participant.tags:
-            if tag not in seen:
-                seen.append(tag)
-            if len(seen) >= 3:
-                break
-        if len(seen) >= 3:
-            break
-    for tag in seen:
-        keywords.append(f"{ctx.region} {tag}")
+    keywords: list[str] = [f"{ctx.region} {suffix}" for suffix in _BASE_KEYWORD_SUFFIXES]
 
-    # Phase 2.1: theme モード時の追加 keyword（重複は無視）
+    # theme モード時の追加 keyword（tag より先に予約、空き枠分のみ）
     if ctx.start_mode == "theme" and ctx.mode_payload:
         theme = ctx.mode_payload.get("theme") if isinstance(ctx.mode_payload, dict) else None
         if isinstance(theme, str):
             for word in _theme_keywords(theme):
+                if len(keywords) >= _MAX_KEYWORDS:
+                    break
                 kw = f"{ctx.region} {word}"
                 if kw not in keywords:
                     keywords.append(kw)
 
-    return keywords
+    # tag 1 個（重複は無視、最初に見つけた tag、残り枠分のみ）
+    if len(keywords) < _MAX_KEYWORDS:
+        for participant in ctx.participants:
+            added = False
+            for tag in participant.tags:
+                kw = f"{ctx.region} {tag}"
+                if kw not in keywords:
+                    keywords.append(kw)
+                    added = True
+                    break
+            if added:
+                break
+
+    return keywords[:_MAX_KEYWORDS]
 
 
 # ==============================
@@ -289,30 +311,185 @@ def _fetch_anchor_safe(place_id: str) -> PlacePoint | None:
         raise AnchorFetchUpstreamError(place_id, e) from e
 
 
+# ==============================
+# Phase 1.10 fix: bucket 分類 + quota + 距離ガード
+# (tasks/plans/2026-04-26-evidence-pack-diversity.md)
+# ==============================
+
+# attraction の category allowlist。観光地として扱うべき Places API type。
+# 神社・寺は place_of_worship + tourist_attraction の組み合わせで来ることが多い。
+_ATTRACTION_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "tourist_attraction",
+        "museum",
+        "park",
+        "art_gallery",
+        "aquarium",
+        "zoo",
+        "place_of_worship",
+        "church",
+        "hindu_temple",
+        "mosque",
+        "synagogue",
+        "natural_feature",
+    }
+)
+
+# bucket 別の距離閾値 (km)。同 bucket かつこの距離以内なら新候補は skip。
+# attraction は施設内 spots 保持のため緩め、lodging は分散重視で厳しめ。
+_BUCKET_DISTANCE_KM: dict[str, float] = {
+    "attraction": 0.15,
+    "meal": 0.30,
+    "lodging": 0.50,
+    "other": 0.30,
+}
+
+# bucket の出力順（pack 先頭から並べる順番）
+_BUCKET_OUTPUT_ORDER: tuple[str, ...] = ("attraction", "lodging", "meal", "other")
+
+# 補填の優先順位（MIN_PLACES 未満時に余り候補から取る順）。
+# total_days >= 2 のときは lodging 余りも補填対象に含める（Codex review 2 Major 1 反映、
+# 候補は十分あるのに 12 未達となるケースを回避）。
+_BUCKET_FILL_ORDER_DAY_TRIP: tuple[str, ...] = ("meal", "other", "attraction")
+_BUCKET_FILL_ORDER_OVERNIGHT: tuple[str, ...] = ("meal", "other", "attraction", "lodging")
+
+
+def _classify_bucket(place: PlacePoint) -> str:
+    """place の category list から bucket を判定。
+
+    優先順位: lodging > attraction > meal > other（Codex Major 3 反映）。
+    複数 category 該当時は最優先 bucket にマップ。例えば ["spa", "lodging"] は lodging。
+    `_MEAL_CATEGORIES` / `_LODGING_CATEGORIES` は validator 側を import 再利用（drift 防止）。
+    """
+    cats = place.category or []
+    if any(c in _LODGING_CATEGORIES for c in cats):
+        return "lodging"
+    if any(c in _ATTRACTION_CATEGORIES for c in cats):
+        return "attraction"
+    if any(c in _MEAL_CATEGORIES or c.endswith("_restaurant") for c in cats):
+        return "meal"
+    return "other"
+
+
+def _bucket_quota(total_days: int) -> dict[str, int]:
+    """total_days に応じた bucket 別 quota（合計は MAX_PLACES=15）。
+
+    日帰り (total_days <= 1): lodging=0、その分 attraction +1 / meal +1
+    1 泊 (total_days == 2): lodging=1、attraction +1
+    2 泊以上 (total_days >= 3): lodging=2（baseline）
+    """
+    if total_days <= 1:
+        return {"attraction": 7, "meal": 6, "lodging": 0, "other": 2}
+    if total_days == 2:
+        return {"attraction": 7, "meal": 5, "lodging": 1, "other": 2}
+    return {"attraction": 6, "meal": 5, "lodging": 2, "other": 2}
+
+
+def _haversine_km(a: PlacePoint, b: PlacePoint) -> float:
+    R = 6371.0
+    dlat = radians(b.lat - a.lat)
+    dlng = radians(b.lng - a.lng)
+    h = (
+        sin(dlat / 2) ** 2
+        + cos(radians(a.lat)) * cos(radians(b.lat)) * sin(dlng / 2) ** 2
+    )
+    return 2 * R * asin(sqrt(h))
+
+
+def _distance_ok_for_bucket(
+    candidate: PlacePoint,
+    accepted_in_bucket: list[PlacePoint],
+    bucket: str,
+) -> bool:
+    """候補が同 bucket の採用済 places から距離閾値以上離れているか。
+
+    閾値以下（境界含む、`<=`）なら overcrowding と判定して False を返す。
+    """
+    threshold = _BUCKET_DISTANCE_KM[bucket]
+    for accepted in accepted_in_bucket:
+        if _haversine_km(candidate, accepted) <= threshold:
+            return False
+    return True
+
+
 def _merge_anchors_and_search(
     anchors: list[PlacePoint],
     search_results: list[list[PlacePoint]],
     cap: int,
+    total_days: int,
 ) -> list[PlacePoint]:
-    """anchor を先頭に、後ろに search 結果を続ける。dedupe + cap。
+    """anchor + search 結果を bucket quota + 距離ガード + MIN_PLACES 補填で組み立てる。
 
-    anchor は user 明示意思なので area_place フィルタを skip する。
-    search 結果側は従来通り area_place を除外。
+    フロー（Phase 1.10 fix）:
+    1. anchor を先頭に置く（user 明示意思、area filter / quota / 距離ガード bypass）
+    2. search 結果を flatten、area filter で除外（anchor と重複も除外）
+    3. bucket 分類 → quota 内採用（距離ガードを適用）、超過分は leftover に保留
+    4. cap (MAX_PLACES) で打ち切り
+    5. 第 2 段: 合計 < MIN_PLACES なら leftover から meal > other > attraction の順で補填
+       （補填でも距離ガードは維持）
     """
-    unique: dict[str, PlacePoint] = {}
-    # anchors（area filter skip）
+    out: list[PlacePoint] = []
+    seen_ids: set[str] = set()
+    # anchors（area filter / quota / 距離ガード すべて bypass）
     for p in anchors:
-        if p.place_id not in unique:
-            unique[p.place_id] = p
-    # search results（area filter 適用、anchor と重複は無視）
+        if p.place_id not in seen_ids:
+            out.append(p)
+            seen_ids.add(p.place_id)
+
+    # search 結果を flatten + area filter + 既 seen 除外
+    candidates: list[PlacePoint] = []
     for batch in search_results:
         for p in batch:
-            if p.place_id in unique:
+            if p.place_id in seen_ids:
                 continue
             if _is_area_place(p):
                 continue
-            unique[p.place_id] = p
-    return list(unique.values())[:cap]
+            candidates.append(p)
+            seen_ids.add(p.place_id)
+
+    quota = _bucket_quota(total_days)
+    accepted_by_bucket: dict[str, list[PlacePoint]] = {b: [] for b in _BUCKET_OUTPUT_ORDER}
+    leftover_by_bucket: dict[str, list[PlacePoint]] = {b: [] for b in _BUCKET_OUTPUT_ORDER}
+
+    # 第 1 段: 各 bucket を quota まで採用
+    for p in candidates:
+        bucket = _classify_bucket(p)
+        if len(accepted_by_bucket[bucket]) >= quota[bucket]:
+            leftover_by_bucket[bucket].append(p)
+            continue
+        if not _distance_ok_for_bucket(p, accepted_by_bucket[bucket], bucket):
+            leftover_by_bucket[bucket].append(p)
+            continue
+        accepted_by_bucket[bucket].append(p)
+
+    # bucket 順序で out に追加
+    for bucket in _BUCKET_OUTPUT_ORDER:
+        for p in accepted_by_bucket[bucket]:
+            if len(out) >= cap:
+                return out[:cap]
+            out.append(p)
+
+    # 第 2 段: MIN_PLACES 未満なら leftover から補填（meal > other > attraction、
+    # 1 泊以上なら lodging も追加）。日帰りで lodging を補填しないのは「1 件入っても
+    # plan に組み込めない」ため。
+    fill_order = (
+        _BUCKET_FILL_ORDER_OVERNIGHT if total_days >= 2 else _BUCKET_FILL_ORDER_DAY_TRIP
+    )
+    if len(out) < MIN_PLACES:
+        for fill_bucket in fill_order:
+            if len(out) >= MIN_PLACES or len(out) >= cap:
+                break
+            for p in leftover_by_bucket[fill_bucket]:
+                if len(out) >= MIN_PLACES or len(out) >= cap:
+                    break
+                if not _distance_ok_for_bucket(
+                    p, accepted_by_bucket[fill_bucket], fill_bucket
+                ):
+                    continue
+                accepted_by_bucket[fill_bucket].append(p)
+                out.append(p)
+
+    return out[:cap]
 
 
 # ==============================
