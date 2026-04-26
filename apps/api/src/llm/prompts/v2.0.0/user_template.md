@@ -15,11 +15,13 @@
 # 連続 slot の place が transit_matrix で到達可能なペアになるよう選ぶこと。
 {transit_matrix_json}
 
-# 予算目安（参考値、実際の cost はサーバが決定する）
+# 予算目安（カテゴリ上限は次の絶対制約節を参照）
 {budget_constraints_json}
 
 # 出発モード補足
 {mode_context_md}
+
+{budget_context_md}
 
 # 前回の生成で失敗した検証項目（あれば修正せよ。空配列なら初回試行）
 {previous_issues_json}

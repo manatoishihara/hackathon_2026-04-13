@@ -38,6 +38,8 @@
 
 **Phase 2.5 Evidence 詳細モーダル**: ✅ **2026-04-26 完了（develop マージ済 commit 98e37fe + 872140d）**。EvidenceBadge を `onClick` 有無で span/button 切替、EvidenceModal で 5 フィールド（営業時間 / 評価 / 価格帯 / 出典 / 検証日時）+ Google Maps 公式 URL 形式の外部リンク（place_id があるとき）。`formatVerifiedAt` を JST 固定で追加、Phosphor X close ボタン、a11y (aria-labelledby / 新規タブ告知)、不在「— 不明」統一。Codex review 1+2 回目で Blocker 2 / Major 6 / Minor 1 を全反映。**web test 130/130 PASS / tsc clean / build PASS**。詳細は `tasks/plans/2026-04-26-evidence-detail-modal.md`
 
+**Phase 2.2 予算配分の制約化**: 🟡 **2026-04-26 実装完了、commit 提案待ち**（`feat/budget-constraint` ブランチ、user 手動 push 待ち）。`_build_budget_context_md(budget_constraints)` を `apps/api/src/llm/prompt.py` に追加し、v2 prompt に「予算配分の絶対制約」Markdown を `mode_context_md` 直後に注入。カテゴリ別上限（宿泊/食事/観光/交通）を 3 桁区切りで明示、`BUDGET_TOLERANCE_RATIO` 連動で「+5% 許容」表記、LLM に slot 配分で守れと指示。v1 prompt は変更なし（後方互換）。Explore agent で現状調査 → plan 起案 → Codex review 1（Blocker 0 / Major 3 / Minor 3 / OK 5）反映 → TDD 実装 → Codex review 2（Blocker 0 / Major 0 / Minor 2）反映、の流れ。**API unit test 27/27 PASS（既存 16 + 新規 11）、prompt token +216（実測、警告閾値 12k 内）**。手動 verify（Run A 通常配分 + Run B 宿泊 80%）は MVP 提出優先で skip 可、smoke test 一括時に判断。設計詳細は `tasks/plans/2026-04-26-budget-constraint.md`
+
 **🔴 セキュリティインシデント（2026-04-26）**: 🟡 user 対応中。docs に Google Maps ブラウザキーを文字列として埋め込んだ commit 215570e を public repo に push し、GitHub Secret Scanning が検出 + Google にアラート送信。**対処**: (a) user が Google Cloud Console で旧 key を rotate / 新 key 発行 / Vercel env 更新 / redeploy、(b) Claude が working tree の todo.md / lessons.md から key 文字列を redact 済（commit 提案待ち）。詳細は @tasks/lessons.md「docs / todo に API key 文字列を貼ったら Public repo の Secret Scanning が即検出」エントリ参照。再発防止ルールを `.claude/rules/external-api-rules.md` 昇格候補に
 
 **Phase 1.10 Render 先行デプロイ**: 🟢 2026-04-25 完了。`https://routeful-api.onrender.com/healthz` が `{"service":"routeful-api","status":"ok"}` を返す状態。Singapore region / NRT edge 経由 / cold start ~0.4s / CORS ヘッダ動作確認済（`access-control-allow-origin: http://localhost:3000` が env から正しく echo back）。次は RLS 42501 解消 → Vercel deploy → CORS_ALLOWED_ORIGINS を Vercel URL に書き換え。
@@ -84,7 +86,8 @@
 **次にやるべきタスク:**
 - [x] **Manato**: Phase 1.3e すべて完遂（hallucination 0% / success 100%、run 27 ベースライン）
 - [x] **Manato（2026-04-26 完了）**: Phase 2.5 Evidence 詳細モーダル（バッジクリック → modal、5 フィールド + Google Maps リンク、Codex 2 回 review 反映、test 130/130 PASS、develop マージ済）
-- [ ] **Manato（緊急、user 対応中）**: API key 漏洩の rotate + redact commit 実行待ち（Phase 2.5 commit 215570e で発生、上記「セキュリティインシデント」節参照）
+- [x] **Manato（2026-04-26 完了 → user push 待ち）**: Phase 2.2 予算配分の制約化（prompt v2 に絶対制約 Markdown 注入、Codex 2 回 review 反映、API test 27/27 PASS）。`feat/budget-constraint` ブランチに 4 ファイル変更、commit 提案済
+- [x] **Manato（2026-04-26 完了 → user push 済）**: API key 漏洩対応（旧 key rotate + working tree redact + .claude/rules/external-api-rules.md に「commit 提案前 secret プリフライト」を 1 回目で即昇格 + CLAUDE.md「Do NOT」と「ワークフロー」に明文化、commit 16bc5d0 で push 済）。**残: user が Vercel env を新 key に更新 + redeploy** で本番 Maps が動くようになる
 - [ ] **Manato（真因判明、SQL 適用待ち）**: 「RLS 42501」は実は `plans.session_id` の **FK 違反 (23503)**。本番 E2E で `proxy-status: PostgREST; error=23503` を確認。anon サインインが `public.sessions` に mirror 行を作らないのが根本原因。**`supabase/migrations/20260425_05_auth_user_sessions_mirror.sql` を Supabase SQL Editor で実行**すれば解消（トリガ + backfill、冪等）。詳細は @tasks/lessons.md 「RLS 42501 の真因は FK 違反」エントリ参照
   - **2026-04-26 セッションで Playwright 再現済み**: auto モードで実フォーム送信 → `POST /rest/v1/plans → 409` を確定。SQL 未適用が原因と確定。SQL 適用後に Playwright で auto/anchor/theme 3 モードの動作確認を行う準備が整っている
 - [ ] **Manato（連番衝突、別タスク）**: `supabase/migrations/` で `20260425_05_auth_user_sessions_mirror.sql` と `20260425_05_index_optimization.sql` が連番衝突。`all_migrations.sql` の sort 順が辞書順依存で曖昧になる。`index_optimization` を `06` 以降にリネーム or 連番ルール再整理（mirror が前提条件として先に来る方が適切なので mirror を 05 のまま維持、index は 06 に降格が筋）。**user の SQL 適用順序が決まる前に rename しない方が安全**（既に user が 05_index を実行済みの可能性あり、その場合は別の連番運用を再合意してから対応）
@@ -468,11 +471,15 @@ Phase 1.3 は大物なので 4 段に分割: 1.3a → 1.3b → 1.3c → 1.3d の
 - [ ] (Codex 残 Minor) submit 時の `start_mode/mode_payload` 実引数を直接アサートする統合テスト（次セッション以降の堅牢化、必須ではない）
 
 ### 2.2 予算配分の制約化
-- [ ] テスト: スライダーの配分が LLM プロンプトに数値制約として渡される
-- [ ] テスト: 生成結果が配分内に収まっている（カテゴリごと合計を検証）
-- [ ] 実装: Evidence Pack に `budget_breakdown` フィールドを追加
-- [ ] 実装: LLM プロンプトで「宿泊は予算の40%以内、食事は30%以内」と指定
-- [ ] 検証: 配分を極端に変える（宿泊80%など）と出力が追従する
+
+**2026-04-26 実装完了** (`feat/budget-constraint` ブランチ、user 手動 push 待ち):
+- [x] テスト: スライダーの配分が LLM プロンプトに数値制約として渡される（test_build_user_prompt_v2_includes_budget_context_md など 11 件）
+- [x] テスト: 生成結果が配分内に収まっている（カテゴリごと合計検証）→ **既に Phase 1.3d で `_check_budget` 実装済**、Phase 2.2 では prompt 側で「絶対制約 + +5% 許容」明示
+- [x] 実装: Evidence Pack の `budget_constraints` は既存（`breakdown_percent` + `breakdown_jpy`）、prompt 側で再利用
+- [x] 実装: `_build_budget_context_md` で「宿泊は予算の 40%（¥12,000 以内）」形式の Markdown 生成、user_template.md に `{budget_context_md}` placeholder を `{mode_context_md}` 直後に追加
+- [ ] 検証（任意、smoke test 一括時に判断）: 配分を極端に変える（宿泊 80% など）と出力が追従する。Run A 通常配分 + Run B 宿泊 80% 偏りの 2 run（~$0.15、5〜10 分）
+
+設計詳細: `tasks/plans/2026-04-26-budget-constraint.md`（Codex review 1+2 回目で Blocker 0 / Major 3 / Minor 5 を全反映）
 
 ### 2.3 宿泊費 API 連携
 - [ ] テスト: 楽天トラベル API で「箱根」「2025-10-18〜20」の検索結果が返る

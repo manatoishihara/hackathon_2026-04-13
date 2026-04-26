@@ -25,7 +25,7 @@ import tiktoken
 
 from ..evidence.pack import EvidencePack, PlacePoint, TransitEdge
 from ..themes import get_label as _theme_label
-from .validator import ValidationIssue
+from .validator import BUDGET_TOLERANCE_RATIO, ValidationIssue
 
 logger = logging.getLogger(__name__)
 
@@ -108,17 +108,26 @@ def build_user_prompt(
     issues_json = _to_json([_issue_to_dict(i) for i in (previous_issues or [])])
     slot_catalog_json = _to_json(catalog)
     mode_context_md = _build_mode_context_md(pack.query_context)
-
-    return template.format(
-        query_context_json=ctx_json,
-        evidence_pack_places_json=places_json,
-        transit_matrix_json=transit_json,
-        budget_constraints_json=budget_json,
-        temporal_constraints_json=temporal_json,
-        previous_issues_json=issues_json,
-        slot_catalog_json=slot_catalog_json,
-        mode_context_md=mode_context_md,
+    # Phase 2.2: v2 のみ予算絶対制約を Markdown で注入（v1 template には placeholder なし）
+    budget_context_md = (
+        _build_budget_context_md(pack.budget_constraints)
+        if version.startswith("v2")
+        else ""
     )
+
+    format_kwargs = {
+        "query_context_json": ctx_json,
+        "evidence_pack_places_json": places_json,
+        "transit_matrix_json": transit_json,
+        "budget_constraints_json": budget_json,
+        "temporal_constraints_json": temporal_json,
+        "previous_issues_json": issues_json,
+        "slot_catalog_json": slot_catalog_json,
+        "mode_context_md": mode_context_md,
+    }
+    if version.startswith("v2"):
+        format_kwargs["budget_context_md"] = budget_context_md
+    return template.format(**format_kwargs)
 
 
 def count_prompt_tokens(system: str, user: str, *, model: str = "gpt-4o") -> int:
@@ -226,3 +235,39 @@ def _issue_to_dict(issue: ValidationIssue) -> dict:
         "message": issue.message,
         "item_index": issue.item_index,
     }
+
+
+def _build_budget_context_md(budget_constraints) -> str:
+    """Phase 2.2: 予算配分の絶対制約を Markdown で表現する。
+
+    LLM は数値（cost_jpy）を生成しないが、**slot 配分**でカテゴリ別予算上限を
+    守れる構成を選ぶ必要がある。validator はカテゴリ別合計を `BUDGET_TOLERANCE_RATIO=0.05`
+    の許容で reject するため、prompt 側でも +5% 許容を明示しておく。
+
+    数値整形: `{:,}` で 3 桁区切り（Intl.NumberFormat('ja-JP') 相当）。
+    0% カテゴリは行ごと消さず明示する（LLM が「使うな」を確実に解釈できるように、
+    Codex review 1 回目 OK 反映）。
+    """
+    pct = budget_constraints.breakdown_percent
+    jpy = budget_constraints.breakdown_jpy
+    total = budget_constraints.total_jpy_per_person
+    # validator 側の許容率と必ず一致させる（Codex Minor 1 反映、ハードコード回避）
+    tol_pct = int(BUDGET_TOLERANCE_RATIO * 100)
+    rows = [
+        ("宿泊", pct.lodging, jpy.lodging),
+        ("食事", pct.meal, jpy.meal),
+        ("観光", pct.activity, jpy.activity),
+        ("交通", pct.transit, jpy.transit),
+    ]
+    bullets = "\n".join(
+        f"- **{label}**: 予算の {p}%（¥{value:,} 以内）" for label, p, value in rows
+    )
+    return (
+        "## 予算配分の絶対制約\n"
+        f"参加者 1 人あたり総予算 ¥{total:,} を、以下のカテゴリ別上限目標に収めること。\n"
+        f"**超過は validator で reject され retry の対象**となる（許容は +{tol_pct}% まで）。\n"
+        f"{bullets}\n"
+        "\n注: cost_jpy はサーバが price_level から決定論で埋めるが、"
+        "**slot の枠配分（lodging を 1 回にする / 高 price_level の meal を避ける 等）"
+        "でこの上限を守れる構成にせよ**。"
+    )
