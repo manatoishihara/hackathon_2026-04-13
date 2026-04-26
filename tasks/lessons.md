@@ -27,6 +27,39 @@
 
 ## ログ
 
+## 2026-04-26: migration 適用漏れは「複数ファイル同日 merge」で起きやすい — 本番デプロイ前に migrations 全件の適用 checklist を作る運用が必要
+- 状況: Phase 1.10 本番 E2E verify で 4 連続の Run（Run 1〜4）を実行する過程で、**migration 適用漏れに 2 度連続で遭遇**:
+  - Run 1: 409 FK violation → 真因は `20260425_05_auth_user_sessions_mirror.sql` 未適用
+  - Run 4: `failed to acquire plan lock` 500 → 真因は `20260424_04_plan_generation_rpcs.sql` 未適用と推定（routes/plan_routes.py:110 の想定外例外パスからしか出ない文字列、acquire_plan_generation_lock RPC が見つからず raise）
+- 共通パターン: **migrations ファイルが develop に存在 + ローカル `pytest -m integration` 通過 + 本番 SQL Editor で未実行**。適用漏れは本番実行で初めて分かる（ローカル test は本番 schema を共有していない）
+- 原因仮説:
+  - 同日に複数 migration を develop に追加するメンバーが分散（Manato が 04 を Phase 1.3d で、メンバー B が `06_shared_plan_rpc.sql` `07_shared_plan_rpc_v2.sql` を Phase 1.9 で）
+  - 本番側の SQL Editor は 1 メンバーが手動で適用する運用 → ファイルが増えると追従漏れが起きる
+  - `supabase/migrations/all_migrations.sql` という統合ファイルがあるが、04 が含まれているか / 最新か / sort 順は何か、を毎回確認する手順がない
+- 対処（user 作業）: 04 を再適用 → Run 5 で動作確認。**冪等設計なので追加実行は安全**
+- ルール:
+  - **本番デプロイ前に「適用済み migration の checklist」を必ず作って supabase/migrations/ 全ファイルを 1 件ずつ ✅ する**。複数メンバーが merge するプロジェクトでは特に
+  - **新規 migration を develop に merge した時の commit message に「本番適用必須」をマークする運用**（例: `[migrations: APPLY] feat: ...` のような prefix）。次のデプロイ前に grep で残タスクを探せる
+  - migrations 連番衝突時（`05_*` が 2 つ等）は、適用順を user に明示しないと事故る。merge 前に rename か順序合意
+  - **本番 E2E で 500 を見たら、まず routes ファイルでそのエラー文字列を grep**。エラー本文が「想定外例外」パスからしか出ない文字列なら、依存先（RPC / DB schema / 環境変数）の不在を疑う
+- → 2 回目発生済みのため `.claude/rules/data-model-sync.md` の「migrations 適用 checklist」節に昇格を次セッションで実施（今は本番未適用ファイルが 1 つ残っているのでまず解消、解消後に rule 化）
+
+## 2026-04-26: 本番 E2E は「動くこと」より「壊れる箇所が想定通りか」を確認するのが価値、migration 連番衝突も同時発見
+- 状況: Phase 2.1 polish merge 後、Vercel 本番（`https://hackathon-2026-04-13.vercel.app`）で Phase 2.1 が動くか確認するため Playwright を起動。フロント描画 / API healthz は通るが、`/plan/new` から auto モードで実フォーム送信したところ **`POST https://<project>.supabase.co/rest/v1/plans → 409 Conflict`** で失敗、フロントは即 `PATCH ... {"status":"failed"}` を打って遷移せず終了
+- 既知問題の本番再現: 2026-04-25 lessons の「RLS 42501 の真因は plans.session_id の FK 違反 (23503)」が本番でも同じ表れ方。修正用 `supabase/migrations/20260425_05_auth_user_sessions_mirror.sql` は develop 上に存在するが **user による SQL Editor 実行が未着手** だったのが原因と確定
+- **同時発見（新規）**: `supabase/migrations/` に **`20260425_05_*` で始まるファイルが 2 つ** 存在:
+  - `20260425_05_auth_user_sessions_mirror.sql` — 上記 fix
+  - `20260425_05_index_optimization.sql` — メンバー B のインデックス最適化
+  両方とも develop に merge 済。ファイル名 sort で適用順が決まる現運用では辞書順 (`auth` < `index`) で偶然 mirror が先になるが、これは **明示的に保証されていない**。新規環境を構築する際に CI / 自動 apply ツールを後で導入すると順序の偶然性が崩れて即座に壊れる
+- 学び:
+  - **本番 E2E は「動くこと」を確認するためでなく、「壊れる時に想定通りの場所で壊れるか」を確認するのが価値**。今回は仮説（FK 23503）を本番 response で実証できたので、対処（migration 適用）への確信度が上がった。「本番で動くだろう」という楽観で SQL 未適用のまま提出すると当日デモで詰む
+  - **migration 連番は `chmod` 規則と同じ厳密さで管理すべき**。複数メンバーが並行で develop に migration を入れる時、同じ日付・同じ連番が衝突しても build / test には現れず、新規環境構築時に初めて発覚する。`tasks/handoff-db.md` の「DB-1 連番ルール」を「**同日に複数 migration を入れる場合は 05a / 05b ではなく 05 / 06 で進める**」と明文化する価値がある
+  - Playwright で本番 form を実際に submit する手順は **migration 05 適用後の再 verify でそのまま再利用可能**（auto / anchor / theme の 3 mode を 1 回ずつ実行 → ~$0.15 OpenAI / 5-10 分）。検証 cost が低く、本番ブロッカーの確認パスとして恒久化する価値あり
+- ルール:
+  - **本番デプロイ完了直後は必ず 1 回 Playwright で「最低限の golden path」を踏む**（local test や API healthz では本番固有の RLS / FK / CORS / env mismatch が出ないため）
+  - **同日に複数の migration を develop に追加する場合は、merge 前に連番衝突を check し、衝突していれば次の連番に繰り上げる**。小さな擦り合わせコストで新規環境破綻を防げる
+- → 2 回目が来たら `.claude/rules/data-model-sync.md` の「migrations 連番運用」節と、`.claude/rules/api-rules.md` の「デプロイ後検証」節に分けて昇格（今は 1 回目）
+
 ## 2026-04-26: Google Cloud SDK 利用は **4 階層** を全部確認する必要がある（API key の allowlist が見落とされやすい）
 - 状況: PlaceAutocompleteElement に migrate 後、smoke test で 403 「Requests to this API places.googleapis.com method google.maps.places.v1.Places.AutocompletePlaces are blocked」エラー
 - 真因: Phase 1.10 でブラウザキーを「Maps JavaScript API のみ」に絞ったため、`PlaceAutocompleteElement` がブラウザから直接叩く Places API (New) endpoint が key 制限で reject された。Cloud project では Places API (New) は enable 済だが、API key 側で許可されてない
@@ -42,7 +75,8 @@
 - ルール:
   - **Maps Platform / 同種 SaaS の SDK class を呼ぶ前に 4 階層全部 ✅ してから着手**。1 階層飛ばすと smoke test で詰まる
   - API key を新規発行する時は「キーを制限」で **将来呼びたい API も含めて allowlist に入れる**。あとから追加し忘れると本件のような 403 になる
-- → 2 回目が来たら `.claude/rules/external-api-rules.md` に「Google Cloud SDK 4 階層 checklist」として昇格（今は 1 回目）
+- → ~~2 回目が来たら~~ **2 回目発生のため `.claude/rules/external-api-rules.md` に昇格済み（2026-04-26）**
+- **2 回目（2026-04-26 本番 E2E verify、`feat/anchor-autocomplete` merge 後）**: migration 05 適用直後の Playwright auto モード verify で `MapsRequestError: DIRECTIONS_ROUTE: REQUEST_DENIED` が連発、`transit_matrix: []` で `/api/plans/generate → 500`。同じブラウザキーの **API allowlist に Directions API が入っていない** ことが原因。1 回目の Places API (New) と全く同じパターンの違う API での再発で、3 階層目の見落としが構造的なリスクと確定。**`.claude/rules/external-api-rules.md` に「Google Cloud SDK 4 階層 checklist」を昇格、今後は新規 SDK class を導入する前に必ず 4 階層を埋めてから着手するワークフローを強制**
 
 ## 2026-04-25: Cloud project の enable API と SDK class が一致しているか実装前に検証する
 - 問題: Phase 2.1 polish で AnchorPicker に Google Places Autocomplete を統合する際、deprecated 警告だけ気にして `google.maps.places.Autocomplete` (legacy) で実装 → ローカル smoke test で「This API project is not authorized to use this API. (legacy Places API)」エラー。Routeful の Google Cloud project は **「Places API (New)」だけ enable** していて、legacy "Places API" は enable していなかった
@@ -359,7 +393,8 @@
   - **「RLS 42501」と「FK 23503」は production REST API では似た失敗に見えるが原因が異なる**。response body / proxy-status header の Postgres error code を必ず確認せよ
   - **Supabase 匿名認証 (`signInAnonymously`) は `auth.users` にしか行を作らない**。custom テーブルとの FK で繋ぐ場合、必ず mirror トリガを設定する。これは「データモデル設計時に決めるべき事項」で、後追いで気付くと本番ブロッカーになる
   - test 環境で「workaround」（_ensure_session_row のような helper）を入れる場合、**同じ workaround を production 側にも仕組みとして組み込んでいるか必ず照合せよ**。test だけ通す対症療法は production 移行時に必ず破綻する
-- → 2 回目が来たら `.claude/rules/data-model-sync.md` の「Supabase 匿名認証で custom テーブル FK を繋ぐなら mirror トリガ必須」節に昇格（今は 1 回目）
+- → 2 回目が来たら `.claude/rules/data-model-sync.md` の「Supabase 匿名認証で custom テーブル FK を繋ぐなら mirror hijack 必須」節に昇格（今は 1 回目）
+- **追記（2026-04-26）**: Phase 2.1 polish merge 後の本番 E2E 確認で **同じ 409 が再現**。Playwright で `/plan/new` auto モード実 submit → `POST /rest/v1/plans → 409` を観測、request body に `session_id` が `auth.uid()` 値で乗っており確定。migration 05 が **develop に存在するが本番 SQL Editor 未適用** だったのが原因と確定。本件は「mirror トリガ migration を作っただけでは本番は動かない、user の SQL 適用まで含めて完了」という運用知見にも繋がる（lessons.md 別エントリ「本番 E2E は壊れる箇所の想定確認に価値あり」参照）
 
 ## 2026-04-25: pnpm strict isolation + 依存先 package の peer 宣言漏れで Next.js build が `Module not found: zod/v4/core` で失敗
 - 問題: Phase 1.10 Vercel deploy で `apps/web` の `next build --turbopack` が以下のエラーで失敗（ローカル `pnpm --filter web build` でも再現）:
