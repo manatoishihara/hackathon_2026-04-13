@@ -75,7 +75,8 @@ const DEFAULT_VALUES: PlanFormValues = {
  *   2. crypto.randomUUID() で plan_id 発行
  *   3. plans + participants を INSERT（plan.status = 'draft'）
  *   4. /api/evidence/places 呼び出し
- *      - 成功時: plans.status = 'generating' に更新（fire-and-forget）
+ *      - 成功時: plans.status は 'draft' のまま、サーバ側 acquire_plan_generation_lock RPC が
+ *        compare-and-set で 'draft' → 'generating' に遷移する（Phase 1.3d 設計）
  *      - 失敗時: plans.status = 'failed' に更新、エラー表示
  *   5. generationSessionStore にセッションを stash
  *   6. /plan/<plan_id>/generating に遷移
@@ -228,10 +229,10 @@ export default function NewPlanPage() {
       // 4. /api/evidence/places
       const evidenceResponse = await postEvidencePlaces(values);
 
-      // 成功: status を generating に（fire-and-forget、失敗しても UI ブロックしない）
-      void updatePlanStatus(planId, "generating").catch((e) => {
-        console.warn("updatePlanStatus(generating) failed", e);
-      });
+      // 注: status は 'draft' のまま維持。サーバ側 acquire_plan_generation_lock RPC が
+      // 'draft' or 'failed' のときだけ 'generating' に compare-and-set で遷移する設計。
+      // フロントが先に 'generating' に書き換えると、acquire_lock が already_generating を
+      // 返して 409 になる（2026-04-26 本番 E2E Run 6 で実証）。
 
       // 5. Zustand stash
       setSession({
