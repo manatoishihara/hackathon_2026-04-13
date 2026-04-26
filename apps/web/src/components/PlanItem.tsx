@@ -1,7 +1,11 @@
+"use client";
+
+import { useState } from "react";
 import { Bed, ForkKnife, MapPin } from "@phosphor-icons/react/dist/ssr";
 import type { PlanItem as PlanItemType, ItemType } from "shared-types";
 
 import { EvidenceBadge } from "./EvidenceBadge";
+import { EvidenceModal } from "./EvidenceModal";
 import { formatDurationMin, formatHHmmJst, formatJpy } from "@/lib/format";
 
 type Props = {
@@ -16,6 +20,7 @@ type Props = {
  * - hover で translateX 軽め + 背景色変化
  */
 export function PlanItem({ item }: Props) {
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const durationMin = Math.max(
     1,
     Math.round(
@@ -57,9 +62,16 @@ export function PlanItem({ item }: Props) {
           <EvidenceBadge
             confidence={item.cost_confidence}
             sources={item.evidence.sources}
+            ariaLabelTitle={item.title}
+            onClick={() => setEvidenceOpen(true)}
           />
         </div>
       </div>
+      <EvidenceModal
+        item={item}
+        open={evidenceOpen}
+        onOpenChange={setEvidenceOpen}
+      />
     </article>
   );
 }
