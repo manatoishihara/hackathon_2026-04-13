@@ -44,5 +44,6 @@ htmlcov/
 /test-results/
 /playwright-report/
 /playwright/.cache/
+/.playwright-mcp/
 
 .claude/scheduled_tasks.lock

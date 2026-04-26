@@ -38,6 +38,22 @@
 
 **Phase 1.10 Render 先行デプロイ**: 🟢 2026-04-25 完了。`https://routeful-api.onrender.com/healthz` が `{"service":"routeful-api","status":"ok"}` を返す状態。Singapore region / NRT edge 経由 / cold start ~0.4s / CORS ヘッダ動作確認済（`access-control-allow-origin: http://localhost:3000` が env から正しく echo back）。次は RLS 42501 解消 → Vercel deploy → CORS_ALLOWED_ORIGINS を Vercel URL に書き換え。
 
+**Phase 1.10 本番 E2E 動作確認（2026-04-26）**: 🟡 **migration 05 適用で 409 解消、ただし Maps Directions API allowlist 漏れの新ブロッカー発覚**。経緯:
+  - **Run 1（migration 05 未適用）**: Playwright で `/plan/new` auto モード submit → `POST /rest/v1/plans → 409 Conflict` で失敗、`PATCH ... {"status":"failed"}` で遷移失敗。FK 23503 仮説を本番実証
+  - **Run 2（user が migration 05 を SQL Editor で適用後）**: 同条件で再 submit → `plans INSERT → 201` / `participants INSERT → 201` / `PATCH status='generating' → 204` まで通過、`/plan/<UUID>/generating` へ遷移成功。**migration 05 fix が本番で効くことを実証**
+  - **Run 2 の後段で新ブロッカー**: ブラウザ Maps JS SDK の `DirectionsService.Route` が **全 call `MapsRequestError: DIRECTIONS_ROUTE: REQUEST_DENIED`** で失敗、`transit_matrix: []`（空配列）のまま `/api/plans/generate` に POST → サーバが 500 で `status='failed'` 転落。原因はブラウザキー `AIzaSyDqxYfg_Df50uRckXX0Lhws82TaiOyH3y4` の API restrictions に **Directions API** が入っていない（lessons.md「Google Cloud SDK 4 階層 checklist」3 階層目の **2 回目の見落とし**、Phase 1.10 で Places API (New) で同じパターンあり）
+  - **次のアクション（user 作業）**: Google Cloud Console → Credentials → 該当ブラウザキー編集 →「キーの制限」「API の制限」に **Directions API を追加**（Maps JavaScript API / Places API (New) は維持）+ APIs & Services → Library で **Directions API が project で Enabled** か確認。反映後 Playwright で auto/anchor/theme 3 モードを再 verify
+  - **Run 3（user 1 回目の Directions API 設定試行後）**: Playwright で同条件 submit、依然 `REQUEST_DENIED` 14 件 + `/api/plans/generate → 500`。ブラウザキー (`AIzaSyDq...3y4`) は変わっておらず、設定が(a) 反映待ち中 / (b) 「Restrict key」で別 API を追加 / (c) project Library で "Directions API"（legacy）が enable されていない / (d) 保存忘れ、のいずれかと推定。User に再確認依頼中。**ブラウザキーとサーバキーの API 分離知見**は @.claude/rules/external-api-rules.md「キー別 API 必要性早見表」節を参照（フロント DirectionsService が legacy "Directions API" を叩く事実、サーバ Places API (New)/Routes API/Geocoding API の必要度の差）
+  - **Run 4（user 2 回目の Directions API 設定後、2026-04-26）**: **REQUEST_DENIED が 0 件に解消** (Maps SDK 動作 ✅)。`/api/evidence/places → 200` も維持。**ただし新たに 2 つの未解決問題が浮上**:
+    - **問題 (i)**: `/api/plans/generate → 500`、エラー本文 `"failed to acquire plan lock"`。これは `apps/api/src/routes/plan_routes.py:110` の **`except Exception` 想定外例外パス**でしか出ない文字列で、`acquire_plan_generation_lock` RPC コール時に raise されている = **migration 04 (`20260424_04_plan_generation_rpcs.sql`、Phase 1.3d Branch B 実装) が本番 SQL Editor 未適用**の可能性大。冪等なので user に SQL Editor で再実行依頼必要
+    - **問題 (ii)**: フロントが送る `transit_matrix: []` が **依然空配列**。Maps Direction API は反応するようになったが edge が 0 件。原因不明、要追加調査:
+      - 仮説 (a): 箱根の places が 14km 以内 filter で全ペア弾かれ skip
+      - 仮説 (b): `apps/web/src/lib/transit.ts` の deadline 10s に Maps SDK ロード時間が間に合わず global timeout
+      - 仮説 (c): フロント logic bug（places 配列が空のまま渡してる、submit 時の race 等）
+      - 問題 (i) 解消後に LLM 生成側で `transit_matrix=[]` を許容するか、validator で 422 reject になるかで切り分けやすくなる
+  - **次のアクション（user 作業）**: `supabase/migrations/20260424_04_plan_generation_rpcs.sql` を Supabase SQL Editor で実行（冪等、既に適用済みでも害なし）。実行後に再度 auto モードで Playwright submit して、エラーが「failed to acquire plan lock」から別エラーに変わるか確認
+  - **並行発見**: `supabase/migrations/` に `20260425_05_*` ファイルが **2 つ** (`auth_user_sessions_mirror` / `index_optimization`) 存在する連番衝突。`all_migrations.sql` の sort 順が曖昧になるので、適用後に `index_optimization` を 06 にリネーム or 連番ルールの再整理を別タスク化推奨。詳細は @tasks/lessons.md 2026-04-26 エントリ + @.claude/rules/external-api-rules.md（2 回目から rule 昇格）参照
+
 **Phase 1.10 Vercel 設定とビルド修正**: 🟡 2026-04-25 セッションで Vercel ビルド成功まで到達（`pnpm --filter web build` ローカル PASS / Web test 61/61 PASS）、本番 deploy は user push 後に確認。経緯:
   - Vercel UI Root Directory picker が monorepo 中間 `apps/` を表示しない罠 → Plan B（root deploy → Settings 修正 → Redeploy）で迂回
   - 設定: Root Directory `apps/web` / Install Command `pnpm install` / Production Branch `develop` を Settings の `Build and Deployment` / `Environments` 配下で個別設定（旧 UI と場所違い）
@@ -64,6 +80,8 @@
 **次にやるべきタスク:**
 - [x] **Manato**: Phase 1.3e すべて完遂（hallucination 0% / success 100%、run 27 ベースライン）
 - [ ] **Manato（真因判明、SQL 適用待ち）**: 「RLS 42501」は実は `plans.session_id` の **FK 違反 (23503)**。本番 E2E で `proxy-status: PostgREST; error=23503` を確認。anon サインインが `public.sessions` に mirror 行を作らないのが根本原因。**`supabase/migrations/20260425_05_auth_user_sessions_mirror.sql` を Supabase SQL Editor で実行**すれば解消（トリガ + backfill、冪等）。詳細は @tasks/lessons.md 「RLS 42501 の真因は FK 違反」エントリ参照
+  - **2026-04-26 セッションで Playwright 再現済み**: auto モードで実フォーム送信 → `POST /rest/v1/plans → 409` を確定。SQL 未適用が原因と確定。SQL 適用後に Playwright で auto/anchor/theme 3 モードの動作確認を行う準備が整っている
+- [ ] **Manato（連番衝突、別タスク）**: `supabase/migrations/` で `20260425_05_auth_user_sessions_mirror.sql` と `20260425_05_index_optimization.sql` が連番衝突。`all_migrations.sql` の sort 順が辞書順依存で曖昧になる。`index_optimization` を `06` 以降にリネーム or 連番ルール再整理（mirror が前提条件として先に来る方が適切なので mirror を 05 のまま維持、index は 06 に降格が筋）。**user の SQL 適用順序が決まる前に rename しない方が安全**（既に user が 05_index を実行済みの可能性あり、その場合は別の連番運用を再合意してから対応）
 - [ ] **旧 (参考、SQL 適用後に閉じる)**: `test_routes_plans.py::test_integration_end_to_end_plan_generation` と `::test_integration_lock_conflict_returns_409` の RLS violation (42501) 解消。
   - 2026-04-25 セッションでコード側の調査は完了。`test_rls.py` のコメントに「実 DB の RLS 設定上は挙動が docs/data-model.md 通りになっていない」と既に明記済み = production drift 確定
   - migrations 側は `FOR ALL USING (session_id = auth.uid())` のみで `WITH CHECK` 暗黙、PostgreSQL default で USING と同じになるはず → production policy は何かしら drift している

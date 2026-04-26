@@ -46,6 +46,7 @@ Flask API実装時: @.claude/rules/api-rules.md
 LLM呼び出し実装時: @.claude/rules/llm-rules.md
 テスト作成時: @.claude/rules/testing.md
 データモデル変更時: @.claude/rules/data-model-sync.md
+外部 API（Google Cloud / Maps / OpenAI / Supabase 等）SDK 導入時: @.claude/rules/external-api-rules.md
 
 ## 分業資料（自分の担当を先に特定してから読む）
 作業開始時はまず @tasks/todo.md の「進捗サマリ」節で **今どのフェーズにいるか / 自分の担当（Manato / メンバー B / メンバー C）** を確認し、該当するハンドオフ資料を読んでから実装に入る:
