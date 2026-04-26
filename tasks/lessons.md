@@ -27,6 +27,24 @@
 
 ## ログ
 
+## 2026-04-26: docs / todo に API key 文字列を貼ったら Public repo の Secret Scanning が即検出した
+- 状況: Phase 1.10 本番 E2E debug を todo.md / lessons.md に詳細記録する際、**Playwright の console error から拾った Google Maps ブラウザキー** をそのまま `tasks/todo.md` line 44 に文字列として埋め込み、commit 215570e で develop に push。GitHub Secret Scanning が **API key pattern** (`AIzaSy[A-Za-z0-9_-]{33}`) を検出して Google にアラート送信、user に通知が来た
+- 原因:
+  - Playwright console output に key が出てくる → debug log として手元の sub-agent / context にコピー → todo.md に転記 → commit、という流れで「文字列をそのまま貼る」抑止が効かなかった
+  - **本人としては「省略形（`AIzaSyDq...3y4`）」と「フルキー」を 2 箇所に書いた**。前者は復元不可だが、後者は完全公開
+  - Vercel の env から取り出せる前提で「key そのものは secret」という意識が docs 編集中に薄れた
+- 影響範囲:
+  - 該当 key は **HTTP referrer 制限あり**（Vercel domain + localhost 限定）なので攻撃ハードルは少しだけ高いが、リファラ偽装で叩ける／quota 消費攻撃の余地あり
+  - **rotate（無効化 + 新規発行）で被害最小化**。commit 履歴自体は残るが key 自体が無価値になる
+- 対処:
+  - 即時: Google Cloud Console で旧 key を delete + 新規発行（同じ API restrictions / referrer 制限）+ Vercel env 更新 + redeploy
+  - working tree 上の todo.md / lessons.md から key 文字列を redact する revert commit を作成（force push なし、key は無効化済なので history は残しても OK）
+- ルール:
+  - **debug log に key / token / secret が出たら、絶対にそのまま docs に貼るな**。記録するなら「prefix 4 chars `AIza...`」だけにする、もしくは `<env: NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY>` のような env 変数名で参照
+  - Public repo に push する commit を作る前に、**`git diff --staged | rg 'AIzaSy|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9]'` で必ず secret pattern check**
+  - GitHub Secret Scanning は **Public repo + 主要パートナー pattern (Google / OpenAI / AWS / Stripe / Slack) のみ自動 alert**。Private repo でも漏洩の可能性はあるので同じ rule を適用
+- → 2 回目が来たら `.claude/rules/external-api-rules.md` の「鍵運用」節に「commit 前 secret grep」を昇格（今は 1 回目）
+
 ## 2026-04-26: migration 適用漏れは「複数ファイル同日 merge」で起きやすい — 本番デプロイ前に migrations 全件の適用 checklist を作る運用が必要
 - 状況: Phase 1.10 本番 E2E verify で 4 連続の Run（Run 1〜4）を実行する過程で、**migration 適用漏れに 2 度連続で遭遇**:
   - Run 1: 409 FK violation → 真因は `20260425_05_auth_user_sessions_mirror.sql` 未適用
