@@ -27,6 +27,14 @@
 
 ## ログ
 
+## 2026-04-27: フロントエラー分類を HTTP ステータス別に細分化（`classifyError` リファクタ）
+- 問題: `classifyError()` が 401/403 を同じメッセージ、500 台を一括で処理していた。ネットワーク `TypeError` と `ApiError(status=0)` の混在で「接続できませんでした」に全部が吸収され、本当の原因（422 LLM 検証 / 403 APIキー / 504 Render コールドスタート）がユーザーに見えなかった
+- 原因: `ApiError` は `authedFetch` が HTTP レスポンスを受け取った後にのみ throw する。真のネットワーク障害は `TypeError`、タイムアウトは `DOMException(AbortError)` として届く。旧実装は `ApiError.status === 0` を確認していたが、このケースは実際には発生しない（`authedFetch` 設計上、404 以上が status に入る）
+- ルール:
+  - **`ApiError` は HTTP レスポンスあり前提**、ネットワーク障害は `TypeError`、タイムアウトは `AbortError` で来る。3 つを別 `instanceof` ブランチで処理せよ
+  - **422 はユーザーに「LLM 検証失敗」と伝える**。`err.message` をそのまま流すだけでは「何が悪かったか」が伝わらない
+  - **502/503/504 には「Render コールドスタートの可能性」を添える**。ユーザーが 30 秒待てば解消するケースを明示する
+
 ## 2026-04-27: Phase 2 polish 計画書を Codex review 1 で確定（実装は次セッション）
 - 状況: 本セッション末で 3 課題（重複 / 楽天 / 移動手段）の実装計画書を `tasks/plans/2026-04-27-plan-quality-improvements.md` に作成、Codex review 1 で **Blocker 2 / Major 3 / Minor 2 / OK 2** を全反映
 - 軌道修正された設計判断:

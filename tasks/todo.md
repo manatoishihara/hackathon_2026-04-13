@@ -5,6 +5,13 @@
 
 ---
 
+## 🏁 進捗サマリ（2026-04-27 更新、エラー詳細化）
+
+**フロント UX: エラー原因の詳細化**: ✅ **2026-04-27 完了（commit 提案待ち）**。`classifyError()` を HTTP ステータス別に分岐し、メッセージ + 詳細説明の 2 段表示に刷新。
+- `apps/web/src/app/plan/new/page.tsx`: `classifyError()` を `{ message, detail? }` 返却に変更。422（LLM 検証失敗）/ 429（レート制限）/ 401（セッション認証切れ）/ 403（APIキー制限）/ 404（Evidence Pack 有効期限切れ）/ 502-504（Render コールドスタート）/ 500（サーバー内部エラー）を個別に分類。`TypeError`（ネットワーク失敗）と `AbortError`（タイムアウト）も個別分岐。エラー UI を「太字メッセージ + secondary カラーの詳細説明」2 行表示に変更
+- `apps/web/src/app/plan/[id]/generating/page.tsx`: `ApiError` import 追加、catch ブロックで同等のステータス別分岐
+- web test **158/158 PASS** / tsc clean
+
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
 **Phase 2 polish: 3 課題（重複防止 / 楽天 lodging / 移動手段指定）の実装計画策定**: 🟡 **2026-04-27 セッション末で計画書 + Codex review 1 完了 → 実装は次セッション**（`feat/plan-quality-improvements` ブランチ予定、1 ブランチ + 3 commits、想定 4 時間）。本番 Run 12 で完全動作達成後の demo 観察で発覚した 3 課題: (A) DAY 跨ぎ place 重複 → assembler に `used_place_ids` + `exclude_place_ids` 引数 + 最終 invariant、(B) 宿情報欠落 → 楽天 env 設定のみ（コード変更ゼロ）、(C) 移動手段指定なし → form + shared-types + Pydantic + prompt + transit + session 伝播。Codex review で Blocker 2（transport_mode の session 伝播経路 / Plan 保存スコープ外）+ Major 3（exclude_place_ids 両関数、prompt 合成方式、徒歩 30 分上限）+ Minor 2 を全反映。詳細計画書: `tasks/plans/2026-04-27-plan-quality-improvements.md`、学び: lessons.md「2026-04-27: Phase 2 polish 計画書を Codex review 1 で確定」エントリ。**次セッション最初のタスク**: 計画書通り実装 → Codex review 2 → 本番 Run 13 verify。
