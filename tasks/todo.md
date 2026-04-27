@@ -7,6 +7,11 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
+**カレンダーナビゲーション UI 改善**: ✅ 2026-04-27 完了（commit 提案待ち）。DateRangePicker の月移動ボタン UX をポリッシュ。
+- `apps/web/src/components/ui/calendar.tsx`: 前月/次月ボタンを `ArrowLeft`/`ArrowRight`（Phosphor regular 15px）に換装、`rounded-full` + hover fill navy（primary 色）+ `active:scale-90` プレスフィードバック、`nav: "contents"` + CSS Grid で月移動ボタンが確実にクリック可能に（旧 absolute 配置による blocked クリック問題を完全解消）
+- `apps/web/src/app/pages.smoke.test.tsx` / `src/app/plan/new/modeSwitch.test.tsx`: `checkApiHealth` モック追加（`vi.mock("@/lib/api")` が新エクスポートを知らずテスト 6 件失敗していた問題を修正）
+- web test **147/147 PASS** / tsc clean
+
 **日付入力 UI 改善 (DateRangePicker)**: ✅ 2026-04-27 完了（commit 提案待ち）。`<input type="date">` のネイティブピッカー（OS/ブラウザ依存で使いにくい）をカレンダーポップオーバーに刷新。
 - `react-day-picker@9.14.0` を `apps/web` に追加（date-fns 不要、native Date のみ）
 - `apps/web/src/components/ui/calendar.tsx` 新規作成（blue hour デザイントークン適用、日本語曜日ラベル）
