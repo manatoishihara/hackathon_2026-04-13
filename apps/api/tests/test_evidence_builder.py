@@ -107,36 +107,36 @@ def _make_ctx(*, mode="auto", payload=None, tags_per_participant=None) -> QueryC
     )
 
 
-def test_generate_keywords_auto_no_tags_returns_4_base_axes():
+_BASE_AXES = [
+    "箱根 観光地",
+    "箱根 温泉",
+    "箱根 神社 寺",
+    "箱根 食事処",
+    "箱根 旅館 ホテル",  # Phase 2 polish v6 で追加 (lodging 候補確保)
+]
+
+
+def test_generate_keywords_auto_no_tags_returns_5_base_axes():
+    """v6: 基本 5 軸 (観光地 / 温泉 / 神社寺 / 食事処 / 旅館ホテル) を必ず投入。"""
     ctx = _make_ctx(tags_per_participant=[[]])
     keywords = _generate_keywords(ctx)
-    assert keywords == [
-        "箱根 観光地",
-        "箱根 温泉",
-        "箱根 神社 寺",
-        "箱根 食事処",
-    ]
+    assert keywords == _BASE_AXES
 
 
 def test_generate_keywords_auto_with_unique_tag_appends_one():
     ctx = _make_ctx(tags_per_participant=[["写真映え"]])
     keywords = _generate_keywords(ctx)
-    assert len(keywords) == 5
+    assert len(keywords) == 6
     assert "箱根 写真映え" in keywords
-    # 基本 4 軸が先頭にある
-    assert keywords[:4] == [
-        "箱根 観光地",
-        "箱根 温泉",
-        "箱根 神社 寺",
-        "箱根 食事処",
-    ]
+    # 基本 5 軸が先頭にある
+    assert keywords[:5] == _BASE_AXES
 
 
 def test_generate_keywords_auto_with_duplicate_tag_skips():
     ctx = _make_ctx(tags_per_participant=[["温泉"]])
     keywords = _generate_keywords(ctx)
-    # 「箱根 温泉」は基本 4 軸に既に含まれるので tag からは追加されない
-    assert len(keywords) == 4
+    # 「箱根 温泉」は基本 5 軸に既に含まれるので tag からは追加されない
+    assert len(keywords) == 5
     assert keywords.count("箱根 温泉") == 1
 
 
@@ -145,8 +145,8 @@ def test_generate_keywords_auto_caps_tag_at_one():
         tags_per_participant=[["温泉", "和食", "写真映え", "茶道", "着物"]]
     )
     keywords = _generate_keywords(ctx)
-    # 基本 4 軸 + tag 最大 1 個（"温泉" は重複 skip → "和食" が採用）
-    assert len(keywords) == 5
+    # 基本 5 軸 + tag 最大 1 個（"温泉" は重複 skip → "和食" が採用）
+    assert len(keywords) == 6
     assert "箱根 和食" in keywords
     assert "箱根 写真映え" not in keywords  # 1 個目で打ち切り
 
@@ -158,50 +158,50 @@ def test_generate_keywords_theme_mode_adds_theme_words_within_cap():
         tags_per_participant=[[]],
     )
     keywords = _generate_keywords(ctx)
-    # 基本 4 軸 + theme 語彙 1 個（合計 5 で打ち切り）
-    assert len(keywords) == 5
-    assert keywords[:4] == [
-        "箱根 観光地",
-        "箱根 温泉",
-        "箱根 神社 寺",
-        "箱根 食事処",
-    ]
+    # v6: 基本 5 軸 + theme 語彙 (cap _MAX_KEYWORDS=7 まで詰める)
+    assert len(keywords) == 7
+    assert keywords[:5] == _BASE_AXES
+    # 残り 2 件が theme 語彙
+    extra = [k for k in keywords if k not in set(_BASE_AXES)]
+    assert len(extra) == 2
 
 
-def test_generate_keywords_anchor_mode_returns_base_4_axes():
+def test_generate_keywords_anchor_mode_returns_base_5_axes():
     ctx = _make_ctx(
         mode="anchor",
         payload={"anchor_place_ids": ["place_X"]},
         tags_per_participant=[[]],
     )
     keywords = _generate_keywords(ctx)
-    # anchor mode でも基本 4 軸（anchor は別経路で fetch）
-    assert keywords == [
-        "箱根 観光地",
-        "箱根 温泉",
-        "箱根 神社 寺",
-        "箱根 食事処",
-    ]
+    # anchor mode でも基本 5 軸（anchor は別経路で fetch）
+    assert keywords == _BASE_AXES
 
 
 def test_generate_keywords_theme_with_tag_keeps_theme_word():
-    """Codex review 2 Major 2 反映: theme + tag 入力で theme 語彙が tag より先に入る。"""
+    """Codex review 2 Major 2 反映: theme + tag 入力で theme 語彙が tag より先に入る。
+
+    v6: cap _MAX_KEYWORDS=7。基本 5 + theme 2 = 7 で枠埋まり、tag は入らない。
+    theme bias 維持の意図 (Codex review 2 Major 2) は保たれる。
+    """
     ctx = _make_ctx(
         mode="theme",
         payload={"theme": "onsen"},
         tags_per_participant=[["写真映え"]],
     )
     keywords = _generate_keywords(ctx)
-    # 基本 4 軸 + theme 語彙 1 個（合計 5 で打ち切り）。tag の "写真映え" は入らない（枠なし）
-    assert len(keywords) == 5
+    # 基本 5 軸 + theme 語彙 2 個 (合計 7、cap で打ち切り)。tag は枠不足で入らない
+    assert len(keywords) == 7
     assert "箱根 写真映え" not in keywords
-    # 基本 4 軸以外で theme bias が反映されている（onsen 系語彙）
-    extra = [k for k in keywords if k not in {"箱根 観光地", "箱根 温泉", "箱根 神社 寺", "箱根 食事処"}]
-    assert len(extra) == 1
+    # 基本 5 軸以外で theme bias が反映されている（onsen 系語彙）
+    extra = [k for k in keywords if k not in set(_BASE_AXES)]
+    # extra = theme 2 個 (tag は入らない、theme より優先順位低い)
+    assert len(extra) == 2
 
 
-def test_generate_keywords_max_5_regardless_of_input():
-    """mode 別キーワード回帰: いかなる入力でも合計 5 を超えない。"""
+def test_generate_keywords_max_7_regardless_of_input():
+    """mode 別キーワード回帰: v6 で _MAX_KEYWORDS=7 (5 base + theme + tag) に拡張。
+    いかなる入力でも合計 7 を超えない。
+    """
     for mode, payload in [
         ("auto", None),
         ("theme", {"theme": "onsen"}),
@@ -213,7 +213,7 @@ def test_generate_keywords_max_5_regardless_of_input():
             tags_per_participant=[["温泉", "和食", "写真"]],
         )
         keywords = _generate_keywords(ctx)
-        assert len(keywords) <= 5, f"{mode} mode produced {len(keywords)} keywords"
+        assert len(keywords) <= 7, f"{mode} mode produced {len(keywords)} keywords"
 
 
 # =================================================================
@@ -845,8 +845,8 @@ def test_generate_keywords_history_theme():
 def test_generate_keywords_auto_mode_no_theme_extension():
     """auto モードでは theme keyword は追加されない（regression check）。
 
-    Phase 1.10 fix で基本 4 軸が最低保証となり、tag「温泉」は基本 4 軸と重複するので
-    追加されない（合計 4 件）。
+    Phase 2 polish v6: 基本 5 軸 (旅館 ホテル 追加) + tag「温泉」は重複 skip
+    = 合計 5 件。
     """
     ctx = QueryContext(
         region="箱根",
@@ -858,9 +858,10 @@ def test_generate_keywords_auto_mode_no_theme_extension():
         participants=[QueryContextParticipant(name="a", wishes="", tags=["温泉"])],
     )
     keywords = _generate_keywords(ctx)
-    # 基本 4 軸（"温泉" は重複 skip）= 4 件
-    assert len(keywords) == 4
-    assert "箱根 温泉" in keywords  # 基本 4 軸の 1 つとして含まれる
+    # 基本 5 軸（"温泉" は重複 skip）= 5 件
+    assert len(keywords) == 5
+    assert "箱根 温泉" in keywords  # 基本 5 軸の 1 つとして含まれる
+    assert "箱根 旅館 ホテル" in keywords  # v6 追加分
 
 
 @patch("src.evidence.builder.fetch_place_details")
