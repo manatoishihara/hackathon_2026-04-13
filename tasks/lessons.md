@@ -657,3 +657,51 @@
   - **DDL を docs に貼る時は、**少なくとも一度は本番 or ローカル Supabase で SQL Editor 実行して syntax を確認する
   - 運用方針が変わった（view → Flask 経由）場合、該当 DDL もその場で簡素化（使わないなら削除も可）
 - → 2 回目が来たら `.claude/rules/data-model-sync.md` に「DDL は実行確認必須」節を追加
+
+## 2026-04-27: @base-ui/react Popover は controlled mode + onSelect で close する設計が最もシンプル（DateRangePicker 実装で習得）
+- 状況: `<input type="date">` をカレンダーポップオーバーに置き換える `DateRangePicker` を実装した。最初に `PopoverTrigger render={<span />}` の中にカスタム `<button>` を入れるパターンを書いたが、クリックハンドラの二重登録リスクと DOM 構造の不明瞭さがあった。次に `PopoverPrimitive.Close render={<Calendar />}` を試したが Close は「閉じるだけ」の用途で onSelect コールバックが呼ばれるタイミングと嚙み合わなかった。
+- 真因: `@base-ui/react` の Popover API には「Trigger が toggle、Close が閉じる専用」という明確な責務分離があり、「カレンダー選択時に閉じる」という複合動作は Popup 側の onSelect で `setOpen(false)` を呼ぶ controlled mode が自然な設計
+- 解決パターン（採用）:
+  ```tsx
+  <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+    <PopoverPrimitive.Trigger>...</PopoverPrimitive.Trigger>
+    <PopoverPrimitive.Portal>
+      <PopoverPrimitive.Positioner>
+        <PopoverPrimitive.Popup>
+          <Calendar onSelect={(date) => { handleSelect(date); setOpen(false); }} />
+        </PopoverPrimitive.Popup>
+      </PopoverPrimitive.Positioner>
+    </PopoverPrimitive.Portal>
+  </PopoverPrimitive.Root>
+  ```
+- 学び:
+  - `@base-ui/react` Popover の Trigger はデフォルトで `<button>` を render し、aria-expanded などを自動付与するので `render` prop でカスタム要素に変える必要はほぼない。Trigger 自体をスタイリングするだけで十分
+  - **カレンダーを選んだら閉じる** という複合動作は PopoverPrimitive.Close より `controlled open state + onSelect で close` の方が意図が明確
+  - 開始日 → 終了日の自動連鎖は `setTimeout(() => setEndOpen(true), 120)` で十分（ポップオーバーアニメーション完了を待つ）
+- ルール:
+  - `@base-ui/react` の Compound Component（Popover / Select / Menu 等）で「何かをしたら閉じる」動作を実装するときは **controlled mode が第一選択**。uncontrolled の Close component を流用するより onOpenChange(false) の方が保守しやすい
+
+## 2026-04-27: react-day-picker v9 のナビゲーションボタンは `nav: "contents"` + CSS Grid で配置しないとクリックが blocked される
+- 問題: `month_caption` を `flex justify-center relative` にして前月/次月ボタンを `nav` 内の `absolute left-1`/`absolute right-1` で配置したところ、ボタンの表示はされるが月移動がきかず「今月のみ」の状態になっていた
+- 真因: `nav` が flex コンテナ内でゼロ幅要素になり、absolute 配置したボタンが caption_label の上に重なっていたか、あるいは DayPicker が内部的に nav を通じてボタンを登録する際のイベントバブリングが caption_label に遮断されていた。ボタンは「見えていたが押せていなかった」
+- 解決パターン（採用）:
+  ```tsx
+  month_caption: "grid grid-cols-[36px_1fr_36px] items-center py-2 px-1",
+  caption_label: "col-start-2 text-center ...",
+  nav: "contents",  // ← nav を消して子要素を親 grid に参加させる
+  button_previous: "col-start-1 ...",  // ← grid の 1列目
+  button_next: "col-start-3 ...",      // ← grid の 3列目
+  ```
+- 学び:
+  - react-day-picker v9 では `nav: "contents"` を設定すると `<nav>` 要素が layout box を持たず、内部の `button_previous` / `button_next` が親の grid / flex に直接参加する。これにより caption label との重なりを完全に排除できる
+  - `display: contents` は「要素自体は透明、子要素だけ layout に参加」という CSS の値。ナビゲーション wrapper を layout に影響させたくない時に有効
+  - **CSS Grid の `grid-cols-[36px_1fr_36px]`** パターンは「[左ボタン幅] [可変ラベル] [右ボタン幅]」の3列構造で月ヘッダーを作る最もシンプルな方法
+- ルール:
+  - react-day-picker v9 で独自スタイリングを当てる場合は `nav: "contents"` + grid コンテナを組み合わせる。absolute 配置はイベント遮断リスクがあるので避ける
+
+## 2026-04-27: `vi.mock("@/lib/api", () => ({...}))` に新エクスポートを追加したら既存テストモックも更新する
+- 問題: `api.ts` に `checkApiHealth` を追加した後、既存の `pages.smoke.test.tsx` と `modeSwitch.test.tsx` の `vi.mock("@/lib/api")` ファクトリに `checkApiHealth` が含まれておらず、vitest が "No 'checkApiHealth' export is defined on the mock" エラーで 6 件失敗
+- 原因: `vi.mock(path, factory)` はファクトリ関数が返すオブジェクトのキーのみをモックとして登録する。新しいエクスポートを実モジュールに追加しても、テストのファクトリを更新しないと vitest は「未定義エクスポートを呼ぼうとした」とエラーにする
+- ルール:
+  - `lib/api.ts` などのモジュールに新しい関数を追加したら、そのモジュールを `vi.mock(factory)` している全テストファイルを grep して `checkApiHealth: vi.fn(...)` を追加する
+  - `grep -r 'vi.mock.*@/lib/api' apps/web/src` で一覧を取ると漏れが防げる

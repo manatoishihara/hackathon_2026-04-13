@@ -7,12 +7,24 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
-> ⚠️ **本セッション末の git 状態（2026-04-27 セッション終了時点、次セッション要対処）**:
-> - ローカル `develop` に 4 commits（`6f1b025` docs / `c7c343d` フロント / `1402778` バック / `ddb0aa9` merge）
-> - origin/develop に別端末の 5 commits（design 仕事: 「生成中の画面を変更」「カレンダー入力 UI」「DateRangePicker」「FlyingPlane」）= **divergence**
-> - **衝突が予測される 3 ファイル**: `apps/web/src/app/plan/[id]/generating/page.tsx` / `tasks/lessons.md` / `tasks/todo.md`
-> - **⚠️ origin/develop の `tasks/todo.md` には既に conflict marker (`<<<<<<< HEAD`) が残ったまま push されている**（前 merge での conflict 未解決 commit、別タスク化必要）
-> - **次セッション最初のタスク**: user 手動で `git pull origin develop --no-rebase` → conflict 解決（origin design 仕事 + 私の fix を両方統合 + 残存 marker 消去）→ commit + push → 本番 Run 11
+> 📌 **2026-04-27 セッション末の git 状況（本 merge commit で解消）**:
+> - ローカル develop の私の 4 commits + origin/develop の design 仕事 5 commits を本 merge commit で統合
+> - 自動マージ成功: `apps/web/src/app/plan/[id]/generating/page.tsx`（origin の FlyingPlane 演出 + 私の早期 throw が両方残った）/ `tasks/lessons.md` 等
+> - 手動 merge: 本ファイル `tasks/todo.md`（origin の calendar UI / DateRangePicker entry + 私の Phase 1.10 全塞ぎ entry を両方保持、origin に残存していた壊れた marker `>>>>>>> 4fe0c10...` も本 commit で除去）
+> - **次セッション最初のタスク**: 本 merge commit を push → Vercel/Render 再 deploy → 本番 Run 11 で `/api/plans/generate → 200` + `/plan/[id]` 遷移を必須条件で確認
+
+**カレンダーナビゲーション UI 改善**: ✅ 2026-04-27 完了（commit 提案待ち）。DateRangePicker の月移動ボタン UX をポリッシュ。
+- `apps/web/src/components/ui/calendar.tsx`: 前月/次月ボタンを `ArrowLeft`/`ArrowRight`（Phosphor regular 15px）に換装、`rounded-full` + hover fill navy（primary 色）+ `active:scale-90` プレスフィードバック、`nav: "contents"` + CSS Grid で月移動ボタンが確実にクリック可能に（旧 absolute 配置による blocked クリック問題を完全解消）
+- `apps/web/src/app/pages.smoke.test.tsx` / `src/app/plan/new/modeSwitch.test.tsx`: `checkApiHealth` モック追加（`vi.mock("@/lib/api")` が新エクスポートを知らずテスト 6 件失敗していた問題を修正）
+- web test **147/147 PASS** / tsc clean
+
+**日付入力 UI 改善 (DateRangePicker)**: ✅ 2026-04-27 完了（commit 提案待ち）。`<input type="date">` のネイティブピッカー（OS/ブラウザ依存で使いにくい）をカレンダーポップオーバーに刷新。
+- `react-day-picker@9.14.0` を `apps/web` に追加（date-fns 不要、native Date のみ）
+- `apps/web/src/components/ui/calendar.tsx` 新規作成（blue hour デザイントークン適用、日本語曜日ラベル）
+- `apps/web/src/components/ui/popover.tsx` 新規作成（`@base-ui/react/popover` ベース、制御モード対応）
+- `apps/web/src/components/DateRangePicker.tsx` 新規作成（開始日 → 終了日ポップオーバー自動連鎖、終了日は開始日より前を disabled、後ろにずらすと終了日自動リセット）
+- `apps/web/src/app/plan/new/page.tsx` の `start_date` / `end_date` フィールドを `DateRangePicker` に差し替え
+- tsc clean / build PASS（`/plan/new` バンドル 417kB、増加なし）
 
 **Phase 1.10 後段: 422 真因全塞ぎ (`fix/plan-generation-blockers`)**: 🟡 **2026-04-27 セッション末で実装完了 → ローカル merge 済 → user push 待ち（divergence 解決必要）**。本番 Run 10 で発見した 2 真因 (candidate_departures 1 件 / LLM hallucination) + Codex review 1+2+3 で発覚した追加 Blocker 2 / Major 4 / Minor 2 を網羅的に修正。フロント canonical 8 点 + 早期 throw、バック retry guidance + previous_issues 累積化 (recency 保証 `pop + 再挿入`) + regex robust 抽出。test 全 PASS / tsc clean / build PASS / Codex 最終 review Blocker 0。push → 本番 Run 11 で **`/api/plans/generate → 200` + `/plan/[id]` 遷移**を必須条件で確認。詳細は `tasks/plans/2026-04-27-plan-generation-blockers.md` + lessons.md「2026-04-27: 全塞ぎモード」エントリ。
 
@@ -33,6 +45,7 @@
 **Phase 1.10 本番 Run 9 (2026-04-27 セッション中盤)**: 🟢 **transit fallback fix が本番でも実証**。Vercel + Render 両方で `develop` の最新 commit が auto deploy 済、`/plan/new → /plan/<id>/generating` まで遷移、Maps SDK 40 回 ZERO_RESULTS の後 fallback で `/api/plans/generate` まで POST 到達（`transit_matrix=[]` でなくなった）。
 
 **Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック**: 🟢 **2026-04-27 セッションで実装完了 + ローカル verify 完了 + 本番 push 完了 + 本番 Run 9 で fix 実証**（`fix/transit-fallback-walking-driving` ブランチ → develop merge → push 済、commit ce3dabd 含む）。`apps/web/src/lib/transit.ts` の travelMode 固定を「距離 ≤ 2km は TRANSIT → WALKING → DRIVING、> 2km は TRANSIT → DRIVING → WALKING」の fallback chain 化。Codex review 2 回（review 1 で「徒歩 2 時間 plan が assembler 経由で 422 を生む」を Major で発覚 → 距離分岐に軌道修正、review 2 で test 設計 bug 2 件発覚 → 反映）。web test 147/147 PASS / tsc clean / build PASS / API regression 381/381 PASS。**ローカル verify**: stats 40/40 全成功、mode_counts walk 20 / car 20、duration 5-46 min avg 18 min。**仮説修正**: 「transit fallback で 422 も解消する」は誤り、422 は LLM validator 側の独立問題（次の Run 10 で詳細 log 取得予定）。詳細は `tasks/plans/2026-04-27-transit-fallback.md` + lessons.md「2026-04-27」3 エントリ。
+
 
 **DB-4/DB-5 テスト**: ✅ 2026-04-26 完了。`apps/api/tests/test_share_routes.py` を新規作成（11 件）。share_routes.py / plan_cache.py / extensions.py の実装は既完成済みで、テストのみ追加。全 unit テスト 332 件 PASS（既存 2 件の env 依存失敗は本変更と無関係）。
 
