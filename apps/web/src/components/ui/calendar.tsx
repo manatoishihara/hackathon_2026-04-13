@@ -13,16 +13,16 @@ export function Calendar({ className, classNames, showOutsideDays = true, ...pro
       className={cn("p-3", className)}
       classNames={{
         months: "flex flex-col sm:flex-row gap-4",
-        month: "flex flex-col gap-4",
-        // grid 3列: [prev 36px] [label auto] [next 36px]
-        month_caption: "grid grid-cols-[36px_1fr_36px] items-center py-2 px-1",
-        caption_label: "col-start-2 text-center text-sm font-semibold tracking-wide text-[color:var(--color-text-primary)]",
-        // nav は box を作らず子要素を親 grid に参加させる
-        nav: "contents",
+        month: "relative flex flex-col gap-4",
+        month_caption: "flex items-center justify-center py-2 px-1",
+        caption_label:
+          "text-sm font-semibold tracking-wide text-[color:var(--color-text-primary)]",
+        // nav は month_caption に absolute で重ね、左右両端に prev/next を配置
+        nav: "absolute inset-x-1 top-1.5 z-10 flex items-center justify-between pointer-events-none",
         button_previous:
-          "col-start-1 group inline-flex h-8 w-8 items-center justify-center rounded-full text-[color:var(--color-text-tertiary)] transition-all hover:bg-[color:var(--color-primary)] hover:text-[color:var(--color-background)] hover:shadow-sm active:scale-90 disabled:pointer-events-none disabled:opacity-30",
+          "pointer-events-auto group inline-flex h-8 w-8 items-center justify-center rounded-full text-[color:var(--color-text-tertiary)] transition-all hover:bg-[color:var(--color-primary)] hover:text-[color:var(--color-background)] hover:shadow-sm active:scale-90 disabled:pointer-events-none disabled:opacity-30",
         button_next:
-          "col-start-3 group inline-flex h-8 w-8 items-center justify-center rounded-full text-[color:var(--color-text-tertiary)] transition-all hover:bg-[color:var(--color-primary)] hover:text-[color:var(--color-background)] hover:shadow-sm active:scale-90 disabled:pointer-events-none disabled:opacity-30",
+          "pointer-events-auto group inline-flex h-8 w-8 items-center justify-center rounded-full text-[color:var(--color-text-tertiary)] transition-all hover:bg-[color:var(--color-primary)] hover:text-[color:var(--color-background)] hover:shadow-sm active:scale-90 disabled:pointer-events-none disabled:opacity-30",
         month_grid: "w-full border-collapse",
         weekdays: "flex",
         weekday:

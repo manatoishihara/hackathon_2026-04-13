@@ -89,7 +89,7 @@ function CalendarPopover({
       </div>
 
       <PopoverPrimitive.Portal>
-        <PopoverPrimitive.Positioner sideOffset={6} align="start">
+        <PopoverPrimitive.Positioner sideOffset={6} align="start" side="bottom">
           <PopoverPrimitive.Popup className="z-50 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] shadow-[0_8px_32px_rgba(4,44,83,0.14)] outline-none">
             <Calendar
               mode="single"
@@ -216,7 +216,7 @@ function EndCalendarPopover({
       </div>
 
       <PopoverPrimitive.Portal>
-        <PopoverPrimitive.Positioner sideOffset={6} align="start">
+        <PopoverPrimitive.Positioner sideOffset={6} align="start" side="bottom">
           <PopoverPrimitive.Popup className="z-50 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] shadow-[0_8px_32px_rgba(4,44,83,0.14)] outline-none">
             <Calendar
               mode="single"
