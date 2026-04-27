@@ -31,11 +31,14 @@ import type {
 // Defaults（options で上書き可）
 // ==============================
 
-const DEFAULT_MAX_PAIRS = 20; // undirected ペアの最大数（directed は ×2）
+// Phase 2 polish v3 (2026-04-27): 草津 4 日 plan で Pack 12-15 places × 旧 MAX_PAIRS=20 ×
+// 旧 DISTANCE=10km では transit_matrix が疎で重複防止 swap 候補が枯渇 → 422 多発。
+// 倍増で coverage を底上げ、deadline は SDK ロード + 並列 fetch 込みで 15s 想定。
+const DEFAULT_MAX_PAIRS = 40; // undirected ペアの最大数（directed は ×2、旧 20 → 40）
 const DEFAULT_PARALLELISM = 5;
 const DEFAULT_PER_CALL_TIMEOUT_MS = 2_000;
-const DEFAULT_GLOBAL_DEADLINE_MS = 10_000;
-const DEFAULT_DISTANCE_KM = 10;
+const DEFAULT_GLOBAL_DEADLINE_MS = 15_000; // 旧 10s → 15s
+const DEFAULT_DISTANCE_KM = 15; // 旧 10 → 15（地方温泉地で観光地が散在するケースに対応）
 const MAX_ROUTE_SUMMARY_CHARS = 120; // Pydantic 側の Field(max_length=120) と揃える
 
 // この距離以下なら fallback の 2 段目を WALKING に、超えるなら DRIVING にする。
@@ -484,7 +487,8 @@ export async function fetchTransitMatrix(
   const globalDeadlineMs = Math.max(1, options.globalDeadlineMs ?? DEFAULT_GLOBAL_DEADLINE_MS);
   const distanceKm = Math.max(0, options.distanceKm ?? DEFAULT_DISTANCE_KM);
 
-  // 締切は SDK ロードも含めて「関数呼び出し開始から」10 秒で管理する。
+  // 締切は SDK ロードも含めて「関数呼び出し開始から」`globalDeadlineMs` (default 15 秒、
+  // Phase 2 polish v3 で 10s → 15s に拡張) で管理する。
   // バッチ投入時と per-call timeout の両方でこの deadline を参照する。
   const deadlineEpochMs = Date.now() + globalDeadlineMs;
 

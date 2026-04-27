@@ -104,9 +104,10 @@ export default function GeneratingPage() {
         try {
           const result = await fetchTransitMatrix(session.places, departureTime);
           transitMatrix = result.edges;
-          // 全 pair 失敗 → サーバー 422 へ流さず早期エラー化（Codex review 2 Blocker 1）。
-          // attempted === 0 (places 1 件以下) は transit_matrix=[] で続行（既存挙動）。
-          if (shouldEarlyThrowOnTransit(result.stats)) {
+          // 全 pair 失敗 / 低 coverage / pair 0 件 → サーバー 422 へ流さず早期エラー化。
+          // (v3 Codex review 5 Major: attempted=0 でも places>1 なら距離フィルタで pair 0 件
+          // 抜け穴のため places.length も判定材料に)
+          if (shouldEarlyThrowOnTransit(result.stats, session.places.length)) {
             throw new Error(
               "経路情報を取得できませんでした。少し時間をおいてお試しください。",
             );
