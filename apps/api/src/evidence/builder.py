@@ -216,8 +216,16 @@ _BASE_KEYWORD_SUFFIXES: tuple[str, ...] = (
     "温泉",
     "神社 寺",
     "食事処",
+    # Phase 2 polish v6 (2026-04-28、本番 4 日 plan で lodging 欠損対策):
+    # 楽天トラベル API が UUID applicationId で 400 失敗中、Google Places search で
+    # lodging 候補を確保する必要がある。「旅館 ホテル」を keyword に追加して
+    # 4 日 plan の 3 lodging slot (連泊許容で 1 unique でも可) を埋められるようにする。
+    "旅館 ホテル",
 )
-_MAX_KEYWORDS = 5  # PARALLEL_WORKERS=5 内に収めるための上限
+# Phase 2 polish v6 (2026-04-28、5 base axes + theme + tag を許容):
+# 旧 5 から 7 に拡張、PARALLEL_WORKERS=5 だと search が 2 batch 直列になるが、
+# anchor fetch 並列との合算で許容範囲のレイテンシ。
+_MAX_KEYWORDS = 7
 
 
 def _generate_keywords(ctx: QueryContext) -> list[str]:

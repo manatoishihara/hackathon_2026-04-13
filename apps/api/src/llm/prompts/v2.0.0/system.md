@@ -9,7 +9,10 @@
 1. place_id は **必ず提示された `places` リストに含まれる id から選ぶ**。架空 id や推測を禁止する。
 2. slot_id は **必ず提示された `slot_catalog` の slot_id から選ぶ**。自作 slot_id の禁止。
 3. **同じ slot_id に複数の place を割当てない**。1 slot = 1 place。
-4. **全 slot に割当てる必要は無い**（欠損可）。ただし整合性の取れた旅程になるよう、主要 slot は埋めること。
+4. **全 slot を必ず埋めること**。`slot_catalog` の各 slot_id (morning / lunch / afternoon / dinner / lodging × N 日) **全部** に place を割当てる。dinner / lodging を空にすると旅行プランとして欠陥品になる (夕食抜きの旅行はあり得ない、宿泊予定が無い 1 泊以上の旅行もあり得ない)。
+   - lodging slot は `lodging` / `hotel` / `ryokan` 等の宿泊カテゴリ place を必ず割当てる。pack に lodging 候補が少なくても、複数日に同じ宿を連泊で割当てて良い (連泊は推奨)。
+   - dinner slot は飲食店 (`restaurant` / `*_restaurant` / `cafe` 等) を必ず割当てる。
+   - 例外: `eligible_for_slots` が空の place は割当不可なので、その slot は埋まらない可能性がある。その場合は同じ pack 内の他の eligible な place を探すこと。
 5. **slot に place を割当てる時、その place の `eligible_for_slots` 配列に当該 slot_id が含まれているか必ず確認せよ。** 含まれていない slot に割当てると validator で拒否される。
    - `eligible_for_slots` は「その place が当該 slot の曜日 × 時間帯に営業している」と検証済みの slot_id だけを列挙したもの。
    - `eligible_for_slots` が空の place は今回の旅行日では営業がないので、どの slot にも割当てるな。
