@@ -159,6 +159,10 @@ pnpm dev
    - `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`
    - `CORS_ALLOWED_ORIGINS` — Vercel 本番ドメインを CSV 指定（例: `https://routeful.vercel.app,https://routeful-git-main-xxx.vercel.app`）
    - （任意）`PROMPT_VERSION` — code default が v2.0.0、legacy v1 を試したい時のみセット
+   - **（任意、Phase 2 polish）`RAKUTEN_APPLICATION_ID` / `RAKUTEN_AFFILIATE_ID`** — 楽天トラベル API 連携で宿情報を Evidence Pack に載せる。両方未設定なら fail-soft で skip される。発行手順:
+     1. https://webservice.rakuten.co.jp/ で新規登録（無料）→ アプリ ID 発行
+     2. https://affiliate.rakuten.co.jp/ で Affiliate ID 発行（同じアカウント、無料）
+     3. 上 2 つの値を Render Dashboard → Environment に投入 → 自動 redeploy
 4. **HTTP Request Timeout を 180 秒に引き上げる**（Settings → HTTP Timeout、`render.yaml` では指定不可な Service-level 設定）
    → LLM 生成は最悪 ~150 秒（per-call 35s × 4 attempts + overhead）。Render の Free plan は 100 秒上限のため、Starter plan へ移行が必要な場合あり
 5. Deploy

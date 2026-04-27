@@ -116,6 +116,7 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
         "budget_breakdown",
         "start_mode",
         "mode_payload",
+        "transport_mode",
         "participants",
     },
     "GeneratePlanResponse": {"plan_id"},

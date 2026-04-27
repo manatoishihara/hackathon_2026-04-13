@@ -192,6 +192,12 @@ def assemble_plan(
     order_index = 0
     start_date = pack.temporal_constraints.start_datetime.astimezone(JST).date()
 
+    # Phase 2 polish (2026-04-27): slot 跨ぎ place_id 重複防止。
+    # plan items に既に採用された place_id を追跡し、同 place を 2 度採用しない。
+    # _find_eligible_alternate_for_slot / _find_alternate_place の exclude_place_ids
+    # にこの set を渡すことで、代替選定でも used を再選しない。
+    used_place_ids: set[str] = set()
+
     prev_entry: dict | None = None
     for slot_meta, place_id, rationale in ordered:
         if place_id not in places_by_id:
@@ -215,6 +221,37 @@ def assemble_plan(
         day_index = _day_index_from_slot_id(slot_meta["slot_id"])
         slot_date = start_date + timedelta(days=day_index - 1)
         place = places_by_id[place_id]
+        prev_place_id_for_swap: str | None = (
+            prev_entry["place"].place_id if prev_entry else None
+        )
+
+        # Phase 2 polish (A): slot 跨ぎ重複検出 + swap。
+        # 既存の transit-failure swap path は from==target かつ self-edge 不在の場合のみ
+        # 救うため、非隣接 slot（DAY1 と DAY2 の lunch 重複等）を取りこぼす。proactive に
+        # 重複を検出し _find_eligible_alternate_for_slot で別 place に差し替える。
+        if place_id in used_place_ids:
+            alternate = _find_eligible_alternate_for_slot(
+                pack=pack,
+                target_place=place,
+                slot_meta=slot_meta,
+                slot_date=slot_date,
+                prev_place_id=prev_place_id_for_swap,
+                exclude_place_ids=used_place_ids,
+            )
+            if alternate is None:
+                # fail-soft: 代替が見つからない場合は item を drop して継続（Risk 1）。
+                # validator で「slot 欠損」は許容されるため retry を誘発しない。
+                logger.error(
+                    "Duplicate place_id %r in slot %r; no eligible alternate (used=%s); dropping item",
+                    place_id, slot_meta["slot_id"], sorted(used_place_ids),
+                )
+                continue
+            logger.warning(
+                "Duplicate place_id %r in slot %r; swapped to %r",
+                place_id, slot_meta["slot_id"], alternate.place_id,
+            )
+            place = alternate
+            place_id = place.place_id
 
         # Phase 1.3e (iv) hard self-healing: LLM が opening_hours 不適合 place を
         # 選んだ場合、assembler が pack 内の eligible 代替に自動差し替え（同カテゴリ優先）。
@@ -232,7 +269,8 @@ def assemble_plan(
                 target_place=place,
                 slot_meta=slot_meta,
                 slot_date=slot_date,
-                prev_place_id=(prev_entry["place"].place_id if prev_entry else None),
+                prev_place_id=prev_place_id_for_swap,
+                exclude_place_ids=used_place_ids,
             )
             if alternate is None:
                 raise IneligiblePlaceForSlotError(
@@ -272,6 +310,7 @@ def assemble_plan(
                     target_place=place,
                     slot_meta=slot_meta,
                     slot_date=slot_date,
+                    exclude_place_ids=used_place_ids,
                 )
                 if alternate is None:
                     raise NoFeasibleTransitError(
@@ -334,12 +373,68 @@ def assemble_plan(
             )
         )
         order_index += 1
+        used_place_ids.add(place_id)
         prev_entry = {"place": place, "end_dt": end_dt}
+
+    # Phase 2 polish (A): 最終 invariant — defense-in-depth で重複が残ったら drop。
+    # 上の proactive swap で網羅できているはずだが、想定外パスでの混入を log で可視化。
+    items = _drop_duplicate_place_items(items)
 
     # Phase 2.1: anchor モード post-check（swap で anchor が落ちたケースも catch）
     _check_anchors_present(pack, items)
 
     return LlmGeneratedPlan(items=items)
+
+
+def _drop_duplicate_place_items(items: list[LlmPlanItem]) -> list[LlmPlanItem]:
+    """非 transit item の place_id が unique であることを保証する defense-in-depth。
+
+    proactive duplicate-detection swap が想定外パスで漏らした場合のみ発動する。
+    raise しない方針（Risk 1）: logger.error で記録し item を drop して fail-soft 継続。
+
+    Codex review 2 Major 1: 単純に non-transit を drop すると transit_ref.from/to が
+    drop された place_id を指して dangling になる。validator は edge 存在のみ見るので
+    semantic 整合まで catch できない。よって 2 pass:
+      1) 重複 non-transit を drop して `surviving_pids` を確定
+      2) `transit_ref.from/to` のどちらかが surviving_pids に居ない transit も drop
+    """
+    # 1st pass: 重複 non-transit を識別、生き残る place_id 集合を確定
+    surviving_pids: set[str] = set()
+    keep_flags: list[bool] = []
+    for it in items:
+        if it.place_id is None:
+            keep_flags.append(True)  # transit は 2nd pass で再判定
+            continue
+        if it.place_id in surviving_pids:
+            keep_flags.append(False)
+            logger.error(
+                "Final invariant violation: duplicate place_id %r at order_index=%d; dropping item. "
+                "This indicates a bug in proactive duplicate detection.",
+                it.place_id, it.order_index,
+            )
+        else:
+            surviving_pids.add(it.place_id)
+            keep_flags.append(True)
+
+    # 2nd pass: dangling transit (from/to が drop 先を指すもの) を除去
+    deduped: list[LlmPlanItem] = []
+    for keep, it in zip(keep_flags, items):
+        if not keep:
+            continue
+        if it.transit_ref is not None:
+            from_ok = it.transit_ref.from_place_id in surviving_pids
+            to_ok = it.transit_ref.to_place_id in surviving_pids
+            if not (from_ok and to_ok):
+                logger.error(
+                    "Dropping dangling transit item at order_index=%d "
+                    "(from=%r to=%r): endpoint not in surviving place_ids",
+                    it.order_index,
+                    it.transit_ref.from_place_id,
+                    it.transit_ref.to_place_id,
+                )
+                continue
+        deduped.append(it)
+    return deduped
 
 
 def _check_anchors_present(pack: EvidencePack, items: list[LlmPlanItem]) -> None:
@@ -533,6 +628,7 @@ def _find_eligible_alternate_for_slot(
     slot_meta: dict,
     slot_date: date,
     prev_place_id: str | None = None,
+    exclude_place_ids: set[str] | None = None,
 ) -> PlacePoint | None:
     """Phase 1.3e (iv) hard self-healing 用: opening_hours 不適合 place の代替選定。
 
@@ -547,6 +643,9 @@ def _find_eligible_alternate_for_slot(
     これがないと「opening は OK だが transit 不能」の代替を選んで後段で
     `NoFeasibleTransitError` を引き起こすケースがあった。最初の slot
     （prev_entry None）では `prev_place_id=None` で transit check をスキップ。
+
+    Phase 2 polish (A) Major 1: `exclude_place_ids` で別 slot で既に採用された place を
+    除外できる。重複防止の中核。
     """
     reachable_ids: set[str] | None = None
     if prev_place_id is not None:
@@ -555,9 +654,12 @@ def _find_eligible_alternate_for_slot(
             for e in pack.transit_matrix
             if e.from_place_id == prev_place_id
         }
+    excluded = exclude_place_ids or set()
     candidates: list[PlacePoint] = []
     for p in pack.places:
         if p.place_id == target_place.place_id:
+            continue
+        if p.place_id in excluded:
             continue
         if reachable_ids is not None and p.place_id not in reachable_ids:
             continue
@@ -602,6 +704,7 @@ def _find_alternate_place(
     target_place: PlacePoint,
     slot_meta: dict,
     slot_date: date,
+    exclude_place_ids: set[str] | None = None,
 ) -> PlacePoint | None:
     """transit 不成立時の代替 place 選定（設計書 §「代替選定ロジック」step 1-2）。
 
@@ -618,17 +721,23 @@ def _find_alternate_place(
 
     **連鎖探索（前段 place も差し替える step 3）は最小実装では未採用**。LLM retry 経路で
     解消する方が副作用が少ないと判断（Phase 1.3e スコープメモ）。
+
+    Phase 2 polish (A) Major 1: `exclude_place_ids` で別 slot で既に採用された place を
+    除外できる。重複防止の中核。
     """
     target_categories = set(target_place.category)
     reachable_ids = {
         e.to_place_id for e in pack.transit_matrix if e.from_place_id == from_place_id
     }
+    excluded = exclude_place_ids or set()
     candidates: list[PlacePoint] = []
     for p in pack.places:
         if p.place_id == target_place.place_id:
             continue
         if p.place_id == from_place_id:
             # 自己ループ防止（slot[i-1] と同じ place へ戻る移動を作らない）
+            continue
+        if p.place_id in excluded:
             continue
         if p.place_id not in reachable_ids:
             continue

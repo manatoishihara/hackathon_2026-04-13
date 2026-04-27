@@ -1,5 +1,21 @@
 import { z } from "zod";
-import { THEME_KEYS, type GeneratePlanRequest } from "shared-types";
+import { THEME_KEYS, type GeneratePlanRequest, type TransportMode } from "shared-types";
+
+// Phase 2 polish (2026-04-27): TransportMode の値リストを単一情報源化。
+// shared-types の TransportMode union と integrity を保つ（Codex Major 2 と同パターン）。
+export const TRANSPORT_MODES = ["all_modes", "public_transit_only"] as const;
+// 静的 type-check で shared-types の TransportMode と zip 整合する。
+const _transportTypeCheck: TransportMode = TRANSPORT_MODES[0];
+void _transportTypeCheck;
+export const TRANSPORT_MODE_LABELS_JP: Record<TransportMode, string> = {
+  all_modes: "車も使う",
+  public_transit_only: "公共交通機関のみ",
+};
+// 注: schema 側 `.default()` を使うと z.infer の output 型に undefined が混じる
+// （zod 4 系の挙動）ため、default は form の `DEFAULT_VALUES` 側で吸収する。
+// バックエンド Pydantic 側にも `transport_mode: TransportMode = "all_modes"` を持たせて
+// 古い API クライアントからの未送信 payload も既存挙動相当で受理する。
+export const transportModeSchema = z.enum(TRANSPORT_MODES);
 
 /**
  * 1.5 希望入力画面のフォーム用 zod スキーマ。
@@ -65,6 +81,8 @@ const baseFormFields = {
     .min(1000, "1人あたり 1,000 円以上で指定してください")
     .max(1_000_000, "1人あたり 1,000,000 円以下で指定してください"),
   budget_breakdown: budgetBreakdownSchema,
+  // Phase 2 polish (2026-04-27): 移動手段指定。default 'all_modes' で既存挙動と互換。
+  transport_mode: transportModeSchema,
   participants: z
     .array(participantInputSchema)
     .min(2, "参加者は 2 人以上必要です")

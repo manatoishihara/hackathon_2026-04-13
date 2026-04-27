@@ -173,6 +173,7 @@ def _build_query_context(request: GeneratePlanRequest) -> QueryContext:
         departure_point=request.departure_point,
         start_mode=request.start_mode,
         mode_payload=request.mode_payload,
+        transport_mode=request.transport_mode,
         participants=[
             QueryContextParticipant(
                 name=p.display_name,

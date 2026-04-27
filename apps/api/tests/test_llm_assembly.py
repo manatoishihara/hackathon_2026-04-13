@@ -27,7 +27,7 @@ from src.llm.assembly import (
     generate_slot_catalog,
     is_place_eligible_for_slot,
 )
-from src.llm.schema import LlmGeneratedPlanV2, LlmSlotAssignment
+from src.llm.schema import LlmGeneratedPlanV2, LlmPlanItem, LlmSlotAssignment, LlmTransitRef
 from src.schemas import BudgetBreakdown
 
 
@@ -919,3 +919,284 @@ def test_assemble_plan_cost_for_unknown_price_level():
     meal = result.items[0]
     assert meal.cost_jpy == 2500
     assert meal.cost_confidence == "unknown"
+
+
+# ==============================
+# 重複防止 (Phase 2 polish 2026-04-27、A 課題)
+# ==============================
+
+
+def test_assemble_plan_swaps_duplicate_place_in_non_adjacent_slot():
+    """非隣接 slot で重複 pick → duplicate detection で swap される。
+
+    DAY1 / DAY2 lunch 重複のような実際のシナリオをシミュレート。
+    transit lookup は edge 存在で成功するパスなので、duplicate detection が
+    無いと既存コードはそのまま重複 place を plan に入れてしまう。
+    """
+    p1 = _place("P1", category=["museum"])
+    p_mid = _place("P_mid", category=["museum"])  # slot 2 で使われ used になる
+    p_alt = _place("P_alt", category=["museum"])  # swap target
+    edges = [
+        _edge("P1", "P_mid"),     # slot1 → slot2
+        _edge("P_mid", "P1"),     # slot2 → slot3 (P1 重複だが edge ある)
+        _edge("P_mid", "P_alt"),  # swap target reachable from prev
+    ]
+    pack = _make_pack(places=[p1, p_mid, p_alt], edges=edges, total_days=1)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P1", rationale="重複 1 つ目の rationale"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_mid", rationale="間に挟まる別 place"),
+            LlmSlotAssignment(slot_id="day1_afternoon", place_id="P1", rationale="重複 2 つ目 → swap"),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    place_id_items = [it for it in result.items if it.place_id is not None]
+    assert len(place_id_items) == 3
+    assert place_id_items[0].place_id == "P1"
+    assert place_id_items[1].place_id == "P_mid"
+    assert place_id_items[2].place_id == "P_alt"  # P1 重複検出 → swap
+
+
+def test_assemble_plan_transit_alternate_excludes_already_used_places():
+    """3 slot シナリオで `_find_alternate_place` が exclude_place_ids を honor する。
+
+    transit edge 不在で代替を探す時、別 slot で既に使われた place は再選しない
+    （rating が最高でも除外）。
+    """
+    p_used = _place("P_used", category=["museum"])
+    p_used = p_used.model_copy(update={"rating": 4.9})  # 一番 rating 高い、used により除外
+    p_prev = _place("P_prev", category=["museum"])
+    p_target = _place("P_target", category=["museum"])
+    p_alt = _place("P_alt", category=["museum"])
+    p_alt = p_alt.model_copy(update={"rating": 4.0})  # 普通 rating、exclude 後に選ばれる
+
+    edges = [
+        # slot1 → slot2: P_used → P_prev (transit OK)
+        _edge("P_used", "P_prev"),
+        # slot2 から到達可能候補:
+        _edge("P_prev", "P_used"),  # rating 高いが used で除外されるべき
+        _edge("P_prev", "P_alt"),   # rating 普通、exclude 後に選ばれる
+        # P_prev → P_target に edge 無し → _find_alternate_place 起動
+    ]
+    pack = _make_pack(places=[p_used, p_prev, p_target, p_alt], edges=edges, total_days=1)
+
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_used", rationale="slot1 起点 used 化"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_prev", rationale="slot2 中継 prev 化"),
+            LlmSlotAssignment(slot_id="day1_afternoon", place_id="P_target", rationale="slot3 edge 不在で swap"),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+
+    place_ids = [it.place_id for it in result.items if it.place_id is not None]
+    # P_used は rating 最高だが used により除外、P_alt が選ばれる
+    assert place_ids == ["P_used", "P_prev", "P_alt"]
+
+
+def test_drop_duplicate_place_items_drops_dangling_transit():
+    """Codex review 2 Major 1: 最終 invariant で non-transit を drop したとき、
+    その place を指す transit_ref も dangling として drop されることを確認。
+
+    proactive swap path がカバーする想定だが、defense-in-depth path のテスト。
+    """
+    from src.llm.assembly import _drop_duplicate_place_items
+
+    # 手作りの items (assembler が生成しない malformed なケースをシミュレート)
+    items = [
+        LlmPlanItem(
+            order_index=0,
+            item_type="activity",
+            title="A",
+            description="r",
+            start_time="2026-06-01T09:00:00+09:00",
+            end_time="2026-06-01T11:30:00+09:00",
+            place_id="A",
+            cost_jpy=1000,
+            cost_confidence="estimated",
+            transit_ref=None,
+        ),
+        LlmPlanItem(
+            order_index=1,
+            item_type="transit",
+            title="A→B",
+            description="t",
+            start_time="2026-06-01T11:30:00+09:00",
+            end_time="2026-06-01T11:50:00+09:00",
+            place_id=None,
+            cost_jpy=400,
+            cost_confidence="verified",
+            transit_ref=LlmTransitRef(from_place_id="A", to_place_id="B", departure_time="11:30"),
+        ),
+        # 重複: A が再登場（malformed input、proactive swap が漏らした想定）
+        LlmPlanItem(
+            order_index=2,
+            item_type="activity",
+            title="A_dup",
+            description="r",
+            start_time="2026-06-01T12:00:00+09:00",
+            end_time="2026-06-01T13:30:00+09:00",
+            place_id="A",
+            cost_jpy=1000,
+            cost_confidence="estimated",
+            transit_ref=None,
+        ),
+        LlmPlanItem(
+            order_index=3,
+            item_type="transit",
+            title="A→C",
+            description="t",
+            start_time="2026-06-01T13:30:00+09:00",
+            end_time="2026-06-01T13:50:00+09:00",
+            place_id=None,
+            cost_jpy=400,
+            cost_confidence="verified",
+            transit_ref=LlmTransitRef(from_place_id="A", to_place_id="C", departure_time="13:30"),
+        ),
+        LlmPlanItem(
+            order_index=4,
+            item_type="activity",
+            title="C",
+            description="r",
+            start_time="2026-06-01T14:00:00+09:00",
+            end_time="2026-06-01T16:30:00+09:00",
+            place_id="C",
+            cost_jpy=1000,
+            cost_confidence="estimated",
+            transit_ref=None,
+        ),
+    ]
+    deduped = _drop_duplicate_place_items(items)
+    non_transit_pids = [it.place_id for it in deduped if it.place_id is not None]
+    assert non_transit_pids == ["A", "C"]  # A_dup drop、A→B transit dangling drop、A→C 残存
+    # 残った transit は from/to ともに surviving_pids 内にある
+    for it in deduped:
+        if it.transit_ref is not None:
+            assert it.transit_ref.from_place_id in {"A", "C"}
+            assert it.transit_ref.to_place_id in {"A", "C"}
+    # T(A→B) は to=B が surviving に居ないので dropped、T(A→C) は両端生存で残る
+    transit_pairs = [
+        (it.transit_ref.from_place_id, it.transit_ref.to_place_id)
+        for it in deduped
+        if it.transit_ref is not None
+    ]
+    assert ("A", "B") not in transit_pairs
+    assert ("A", "C") in transit_pairs
+
+
+def test_drop_duplicate_place_items_drops_transit_with_dangling_from():
+    """Codex review 3 Minor 2: transit_ref.from が drop された place を指すケースも drop。
+
+    test_drop_duplicate_place_items_drops_dangling_transit は to 欠落中心のため、
+    対称な from 欠落カバレッジを明示する。
+    """
+    from src.llm.assembly import _drop_duplicate_place_items
+
+    # B が duplicate で drop され、T(B→C) は from=B が surviving に居ない → drop
+    items = [
+        LlmPlanItem(
+            order_index=0, item_type="activity", title="B", description="r",
+            start_time="2026-06-01T09:00:00+09:00", end_time="2026-06-01T11:30:00+09:00",
+            place_id="B", cost_jpy=1000, cost_confidence="estimated", transit_ref=None,
+        ),
+        LlmPlanItem(
+            order_index=1, item_type="transit", title="B→C", description="t",
+            start_time="2026-06-01T11:30:00+09:00", end_time="2026-06-01T11:50:00+09:00",
+            place_id=None, cost_jpy=400, cost_confidence="verified",
+            transit_ref=LlmTransitRef(from_place_id="B", to_place_id="C", departure_time="11:30"),
+        ),
+        LlmPlanItem(
+            order_index=2, item_type="activity", title="C", description="r",
+            start_time="2026-06-01T12:00:00+09:00", end_time="2026-06-01T13:30:00+09:00",
+            place_id="C", cost_jpy=1000, cost_confidence="estimated", transit_ref=None,
+        ),
+        # B duplicate (malformed input、proactive swap が漏らした想定)
+        LlmPlanItem(
+            order_index=3, item_type="activity", title="B_dup", description="r",
+            start_time="2026-06-01T14:00:00+09:00", end_time="2026-06-01T15:00:00+09:00",
+            place_id="B", cost_jpy=1000, cost_confidence="estimated", transit_ref=None,
+        ),
+    ]
+    deduped = _drop_duplicate_place_items(items)
+    non_transit_pids = [it.place_id for it in deduped if it.place_id is not None]
+    # 仕様上 1 番目の B が surviving、4 番目の B_dup は drop
+    assert non_transit_pids == ["B", "C"]
+    # T(B→C) は from=B が surviving に存在するので残るはず
+    transit_pairs = [
+        (it.transit_ref.from_place_id, it.transit_ref.to_place_id)
+        for it in deduped
+        if it.transit_ref is not None
+    ]
+    assert ("B", "C") in transit_pairs
+
+    # 対照として: B が最初に出現 + drop が後発 → 同じ test だが、B が逆順だったら？
+    # _drop_duplicate_place_items は最初の出現を残すので、to=B 欠落 + from=B 欠落
+    # の両方を 1 つの items 配列で同時実証するために以下のケースを追加検証:
+    items2 = [
+        # X が surviving、Y も surviving、T(Y→X) は両端 OK で残る
+        LlmPlanItem(
+            order_index=0, item_type="activity", title="X", description="r",
+            start_time="2026-06-01T09:00:00+09:00", end_time="2026-06-01T11:30:00+09:00",
+            place_id="X", cost_jpy=1000, cost_confidence="estimated", transit_ref=None,
+        ),
+        # T(X→Y) は X 残 + Y 残 で OK
+        LlmPlanItem(
+            order_index=1, item_type="transit", title="X→Y", description="t",
+            start_time="2026-06-01T11:30:00+09:00", end_time="2026-06-01T11:50:00+09:00",
+            place_id=None, cost_jpy=400, cost_confidence="verified",
+            transit_ref=LlmTransitRef(from_place_id="X", to_place_id="Y", departure_time="11:30"),
+        ),
+        # Y_dup として X を再登場させて drop（X が duplicate）
+        LlmPlanItem(
+            order_index=2, item_type="activity", title="X_dup", description="r",
+            start_time="2026-06-01T12:00:00+09:00", end_time="2026-06-01T13:30:00+09:00",
+            place_id="X", cost_jpy=1000, cost_confidence="estimated", transit_ref=None,
+        ),
+        # T(X→Z) は X 残 + Z 残 (続く) で OK のはずだが、ここで Z を non_transit として続ける
+        LlmPlanItem(
+            order_index=3, item_type="transit", title="X→Z", description="t",
+            start_time="2026-06-01T13:30:00+09:00", end_time="2026-06-01T13:50:00+09:00",
+            place_id=None, cost_jpy=400, cost_confidence="verified",
+            transit_ref=LlmTransitRef(from_place_id="X", to_place_id="Z", departure_time="13:30"),
+        ),
+        LlmPlanItem(
+            order_index=4, item_type="activity", title="Z", description="r",
+            start_time="2026-06-01T14:00:00+09:00", end_time="2026-06-01T15:30:00+09:00",
+            place_id="Z", cost_jpy=1000, cost_confidence="estimated", transit_ref=None,
+        ),
+    ]
+    # ここでは Y は items2 に含まれず、T(X→Y) は to=Y が surviving に居ないので drop
+    deduped2 = _drop_duplicate_place_items(items2)
+    transit_pairs2 = [
+        (it.transit_ref.from_place_id, it.transit_ref.to_place_id)
+        for it in deduped2
+        if it.transit_ref is not None
+    ]
+    assert ("X", "Y") not in transit_pairs2  # Y 不在で drop
+    assert ("X", "Z") in transit_pairs2  # 両端生存で残存
+
+
+def test_assemble_plan_triple_duplicate_resolved_to_unique_invariant():
+    """3 slot で同じ place を 3 回 pick → 全て unique な place に展開される（最終 invariant）。"""
+    p1 = _place("P1", category=["museum"])
+    p2 = _place("P2", category=["museum"])
+    p3 = _place("P3", category=["museum"])
+    edges = [
+        _edge("P1", "P2"), _edge("P1", "P3"),
+        _edge("P2", "P1"), _edge("P2", "P3"),
+        _edge("P3", "P1"), _edge("P3", "P2"),
+    ]
+    pack = _make_pack(places=[p1, p2, p3], edges=edges, total_days=1)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P1", rationale="重複 1 つ目 rationale"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P1", rationale="重複 2 つ目 → swap"),
+            LlmSlotAssignment(slot_id="day1_afternoon", place_id="P1", rationale="重複 3 つ目 → swap"),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+
+    final_place_ids = [it.place_id for it in result.items if it.place_id is not None]
+    assert len(final_place_ids) == 3
+    assert len(set(final_place_ids)) == 3  # 全 unique（最終 invariant）
+    assert final_place_ids[0] == "P1"  # 1 つ目は LLM pick がそのまま通る

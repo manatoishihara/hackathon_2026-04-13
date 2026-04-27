@@ -55,6 +55,9 @@ class QueryContext(_PackBase):
     departure_point: str
     start_mode: StartMode
     mode_payload: dict[str, Any] | None = None
+    # Phase 2 polish (2026-04-27): 移動手段指定を Pack 経由で LLM プロンプトに届ける。
+    # default 'all_modes' で後方互換（既存 Pack fixtures が transport_mode 未指定でも壊れない）。
+    transport_mode: Literal["all_modes", "public_transit_only"] = "all_modes"
     participants: list[QueryContextParticipant]
 
 
