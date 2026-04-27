@@ -7,12 +7,12 @@ const easing = [0.25, 0.46, 0.45, 0.94] as const;
 
 export function HeroSection() {
   return (
-    <section className="relative flex h-screen flex-col items-center justify-center px-6 text-center">
+    <section className="relative flex h-screen flex-col items-center justify-center px-4 text-center sm:px-6">
       <motion.p
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.7, delay: 0.1, ease: easing }}
-        className="mb-10 text-xs font-medium tracking-[0.28em] text-[color:var(--color-text-secondary)]"
+        className="mb-6 text-[10px] font-medium tracking-[0.28em] text-[color:var(--color-text-secondary)] sm:mb-10 sm:text-xs"
       >
         A JOURNAL FOR THE JOURNEY
       </motion.p>
@@ -21,7 +21,7 @@ export function HeroSection() {
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.95, delay: 0.25, ease: easing }}
-        className="font-heading text-7xl font-medium leading-none tracking-[0.02em] text-[color:var(--color-text-primary)] sm:text-8xl lg:text-[140px]"
+        className="font-heading text-6xl font-medium leading-none tracking-[0.02em] text-[color:var(--color-text-primary)] sm:text-8xl lg:text-[140px]"
       >
         Routeful
       </motion.h1>
@@ -30,7 +30,7 @@ export function HeroSection() {
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.9, delay: 0.55, ease: easing }}
-        className="mt-12 max-w-md text-base leading-[1.95] text-[color:var(--color-text-primary)]"
+        className="mt-8 max-w-sm text-sm leading-[1.95] text-[color:var(--color-text-primary)] sm:mt-12 sm:max-w-md sm:text-base"
       >
         みんなで 1 画面を囲んで、
         <span className="relative mx-1 inline-block">

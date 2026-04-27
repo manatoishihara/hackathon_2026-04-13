@@ -33,29 +33,29 @@ export function PlanItem({ item }: Props) {
   return (
     <article
       data-plan-item-id={item.id}
-      className="group flex items-start gap-3 rounded-md bg-[color:var(--color-surface)] p-3 transition-[transform,background-color] duration-300 hover:translate-x-1 hover:bg-[#FAF5EA]"
+      className="group flex items-start gap-2 rounded-md bg-[color:var(--color-surface)] p-2 transition-[transform,background-color] duration-300 hover:translate-x-1 hover:bg-[#FAF5EA] sm:gap-3 sm:p-3"
     >
-      <div className="flex w-12 shrink-0 flex-col">
-        <span className="font-heading text-[15px] font-medium tabular-nums text-[color:var(--color-text-primary)]">
+      <div className="flex w-10 shrink-0 flex-col sm:w-12">
+        <span className="font-heading text-[13px] font-medium tabular-nums text-[color:var(--color-text-primary)] sm:text-[15px]">
           {formatHHmmJst(item.start_time)}
         </span>
-        <span className="text-[11px] text-[color:var(--color-text-secondary)]">
+        <span className="text-[10px] text-[color:var(--color-text-secondary)] sm:text-[11px]">
           {formatDurationMin(durationMin)}
         </span>
       </div>
       <ItemThumb type={item.item_type} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <h3 className="break-words text-[13px] font-medium leading-snug text-[color:var(--color-text-primary)]">
+        <h3 className="break-words text-[12px] font-medium leading-snug text-[color:var(--color-text-primary)] sm:text-[13px]">
           {item.title}
         </h3>
         {item.description ? (
-          <p className="text-[12px] leading-[1.55] text-[color:var(--color-text-secondary)]">
+          <p className="text-[11px] leading-[1.55] text-[color:var(--color-text-secondary)] sm:text-[12px]">
             {item.description}
           </p>
         ) : null}
         <div className="mt-1 flex flex-wrap items-center gap-2">
           {item.cost_jpy !== null ? (
-            <span className="font-mono text-[12px] tabular-nums text-[color:var(--color-text-primary)]">
+            <span className="font-mono text-[11px] tabular-nums text-[color:var(--color-text-primary)] sm:text-[12px]">
               {formatJpy(item.cost_jpy)}
             </span>
           ) : null}
@@ -93,17 +93,22 @@ function ItemThumb({ type }: { type: ItemType }) {
   return (
     <div
       aria-hidden
-      className="relative h-[54px] w-[54px] shrink-0 overflow-hidden rounded-sm"
+      className="relative h-10 w-10 shrink-0 overflow-hidden rounded-sm sm:h-[54px] sm:w-[54px]"
       style={{ backgroundColor: theme.bg }}
     >
       <span
-        className="absolute inset-x-0 bottom-0 h-[22px]"
+        className="absolute inset-x-0 bottom-0 h-3 sm:h-[22px]"
         style={{ backgroundColor: theme.accent }}
+      />
+      <Icon
+        size={14}
+        weight="duotone"
+        className="absolute right-1 top-1 text-[color:var(--color-surface)] opacity-85 sm:hidden"
       />
       <Icon
         size={18}
         weight="duotone"
-        className="absolute right-1 top-1 text-[color:var(--color-surface)] opacity-85"
+        className="absolute right-1 top-1 hidden text-[color:var(--color-surface)] opacity-85 sm:block"
       />
     </div>
   );

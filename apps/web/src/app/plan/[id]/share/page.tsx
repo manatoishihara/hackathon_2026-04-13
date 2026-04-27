@@ -57,7 +57,7 @@ export default function SharePage() {
   const plan = planQuery.data;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-8 px-6 py-12">
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-6 px-4 py-8 sm:gap-8 sm:px-6 sm:py-12">
       <header className="flex flex-col gap-2">
         <p className="text-sm font-medium tracking-widest text-[color:var(--color-primary)]">
           SHARE
@@ -106,14 +106,14 @@ function ShareReadyView({
         <p className="text-xs font-semibold uppercase tracking-wide text-[color:var(--color-text-tertiary)]">
           共有 URL
         </p>
-        <div className="flex items-center gap-2 rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-background)] px-3 py-2 text-sm">
-          <code className="min-w-0 flex-1 truncate font-mono text-xs text-[color:var(--color-text-primary)]">
+        <div className="flex flex-col gap-2 rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-background)] p-3 sm:flex-row sm:items-center sm:gap-2 sm:px-3 sm:py-2">
+          <code className="min-w-0 flex-1 break-all font-mono text-xs text-[color:var(--color-text-primary)] sm:truncate sm:break-normal">
             {shareUrl}
           </code>
           <button
             type="button"
             onClick={handleCopy}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md bg-[color:var(--color-primary)] px-3 py-1 text-xs font-medium text-white transition hover:opacity-90"
+            className="inline-flex shrink-0 items-center justify-center gap-1 rounded-md bg-[color:var(--color-primary)] px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 sm:py-1"
             aria-label="共有 URL をコピー"
           >
             {copied ? (

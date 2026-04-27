@@ -121,7 +121,7 @@ export default function PlanPage() {
   }));
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-6 py-8">
+    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 sm:py-8 sm:gap-8">
       <PlanHeader plan={plan} participants={participants} />
 
       <DayTabs
@@ -138,7 +138,7 @@ export default function PlanPage() {
           <PlanTimeline items={activeItems} />
         )}
         <aside className="flex flex-col gap-3">
-          <div className="h-[200px]">
+          <div className="h-[160px] sm:h-[200px] lg:h-[240px]">
             {/* MapView は dynamic import + Error Boundary で隔離（⑥ Lazy Load / ⑭ フォールバック）*/}
             <MapErrorBoundary>
               <MapView items={activeItems} />

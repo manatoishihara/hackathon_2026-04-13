@@ -302,7 +302,7 @@ export default function NewPlanPage() {
   const canSubmit = !isSubmitting && !isApiDown;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-12">
+    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-4 py-8 sm:gap-10 sm:px-6 sm:py-12">
       {isApiDown ? (
         <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <WifiSlash size={18} weight="bold" className="mt-0.5 shrink-0" />

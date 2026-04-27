@@ -7,6 +7,18 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
+**レスポンシブデザイン対応**: ✅ 2026-04-27 完了（commit 提案待ち）。全画面をスマホ/タブレット/PC で最適表示できるよう `sm:` ブレークポイントを網羅的に適用。
+- `PlanItem.tsx`: gap/padding/サムネイル(40px→sm:54px)/フォントサイズを `sm:` で段階拡大
+- `ParticipantTabs.tsx`: タブ padding・名前最大幅(8ch→sm:12ch)・ドット・ボタンを `sm:` 拡大
+- `BudgetSummary.tsx`: `p-3→sm:p-4`、見出し/金額/カテゴリ行フォントを `sm:` 拡大
+- `plan/[id]/page.tsx`: `px-4→sm:px-6`、マップ高さ `160px→sm:200px→lg:240px`
+- `generating/page.tsx`: `px-4→sm:px-6 py-8→sm:py-16`、h1 `text-xl→sm:text-2xl`
+- `share/page.tsx`: `px-4→sm:px-6`、URL行 スマホ縦並び→`sm:flex-row`、URL `break-all→sm:truncate`
+- `HeroSection.tsx`: h1 `text-6xl→sm:text-8xl`、キャッチ `text-sm→sm:text-base`
+- `FeatureSection.tsx`: h2 `text-2xl→sm:text-4xl`、説明 `text-sm→sm:text-base`
+- `plan/new/page.tsx`: コンテナ `px-4→sm:px-6`
+- web test **147/147 PASS** / tsc clean
+
 **カレンダーナビゲーション UI 改善**: ✅ 2026-04-27 完了（commit 提案待ち）。DateRangePicker の月移動ボタン UX をポリッシュ。
 - `apps/web/src/components/ui/calendar.tsx`: 前月/次月ボタンを `ArrowLeft`/`ArrowRight`（Phosphor regular 15px）に換装、`rounded-full` + hover fill navy（primary 色）+ `active:scale-90` プレスフィードバック、`nav: "contents"` + CSS Grid で月移動ボタンが確実にクリック可能に（旧 absolute 配置による blocked クリック問題を完全解消）
 - `apps/web/src/app/pages.smoke.test.tsx` / `src/app/plan/new/modeSwitch.test.tsx`: `checkApiHealth` モック追加（`vi.mock("@/lib/api")` が新エクスポートを知らずテスト 6 件失敗していた問題を修正）

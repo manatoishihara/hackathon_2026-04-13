@@ -29,16 +29,16 @@ export function BudgetSummary({ plan, items }: Props) {
   const spentByCategory = computeSpentByCategory(items);
 
   return (
-    <div className="flex flex-col gap-4 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] p-4">
+    <div className="flex flex-col gap-3 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] p-3 sm:gap-4 sm:p-4">
       <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold text-[color:var(--color-text-secondary)]">
+        <h3 className="text-xs font-semibold text-[color:var(--color-text-secondary)] sm:text-sm">
           予算（1 人あたり）
         </h3>
-        <p className="font-mono text-lg font-semibold tabular-nums text-[color:var(--color-text-primary)]">
+        <p className="font-mono text-base font-semibold tabular-nums text-[color:var(--color-text-primary)] sm:text-lg">
           {formatJpy(totalPerPerson)}
         </p>
       </div>
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2.5 sm:gap-3">
         {categories.map((cat) => {
           const allocatedPct = plan.budget_breakdown[cat];
           const allocatedJpy = Math.round((totalPerPerson * allocatedPct) / 100);
@@ -46,14 +46,14 @@ export function BudgetSummary({ plan, items }: Props) {
           const pctUsed = allocatedJpy === 0 ? 0 : Math.min(100, Math.round((spentJpy / allocatedJpy) * 100));
           return (
             <div key={cat} className="flex flex-col gap-1">
-              <div className="flex items-baseline justify-between text-sm">
+              <div className="flex items-baseline justify-between text-xs sm:text-sm">
                 <span className="text-[color:var(--color-text-primary)]">
                   {CATEGORY_LABEL[cat]}
-                  <span className="ml-2 text-xs text-[color:var(--color-text-tertiary)]">
+                  <span className="ml-1.5 text-[11px] text-[color:var(--color-text-tertiary)] sm:ml-2 sm:text-xs">
                     {allocatedPct}%
                   </span>
                 </span>
-                <span className="font-mono text-xs tabular-nums text-[color:var(--color-text-secondary)]">
+                <span className="font-mono text-[11px] tabular-nums text-[color:var(--color-text-secondary)] sm:text-xs">
                   {formatJpy(spentJpy)} / {formatJpy(allocatedJpy)}
                 </span>
               </div>

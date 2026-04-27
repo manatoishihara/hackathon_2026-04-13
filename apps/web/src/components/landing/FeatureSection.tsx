@@ -15,8 +15,8 @@ const easing = [0.25, 0.46, 0.45, 0.94] as const;
 
 export function FeatureSection({ feature }: { feature: Feature }) {
   return (
-    <section className="relative flex min-h-screen items-center px-6 py-24">
-      <div className="mx-auto grid w-full max-w-6xl grid-cols-12 items-center gap-10 lg:gap-16">
+    <section className="relative flex min-h-screen items-center px-4 py-16 sm:px-6 sm:py-24">
+      <div className="mx-auto grid w-full max-w-6xl grid-cols-12 items-center gap-8 lg:gap-16">
         <motion.div
           initial={{ opacity: 0, y: 28 }}
           whileInView={{ opacity: 1, y: 0 }}
@@ -34,10 +34,10 @@ export function FeatureSection({ feature }: { feature: Feature }) {
             />
             {feature.label}
           </p>
-          <h2 className="font-heading text-3xl leading-[1.45] text-[color:var(--color-text-primary)] sm:text-4xl lg:text-5xl">
+          <h2 className="font-heading text-2xl leading-[1.45] text-[color:var(--color-text-primary)] sm:text-4xl lg:text-5xl">
             {feature.title}
           </h2>
-          <p className="mt-8 max-w-md text-base leading-[1.95] text-[color:var(--color-text-primary)] opacity-85">
+          <p className="mt-6 max-w-md text-sm leading-[1.95] text-[color:var(--color-text-primary)] opacity-85 sm:mt-8 sm:text-base">
             {feature.description}
           </p>
         </motion.div>

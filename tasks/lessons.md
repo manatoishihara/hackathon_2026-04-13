@@ -630,3 +630,17 @@
 - ルール:
   - `lib/api.ts` などのモジュールに新しい関数を追加したら、そのモジュールを `vi.mock(factory)` している全テストファイルを grep して `checkApiHealth: vi.fn(...)` を追加する
   - `grep -r 'vi.mock.*@/lib/api' apps/web/src` で一覧を取ると漏れが防げる
+
+## 2026-04-27: Tailwind v4 レスポンシブ対応の基本パターン（スマホ→PC の段階拡大）
+- 状況: 全ページをスマホ/タブレット/PC 対応にする際、既存コンポーネントの padding・font-size・gap が px 固定だったため、スマホで窮屈な UI になっていた
+- 採用パターン:
+  - **padding/gap**: モバイルを基準値（例: `p-2 gap-2`）にして `sm:p-3 sm:gap-3` で拡大
+  - **font-size**: `text-[12px] sm:text-[13px]` のように 1 段階差で揃える
+  - **サイズ固定要素（サムネイルなど）**: `h-10 w-10 sm:h-[54px] sm:w-[54px]` で Tailwind utility 優先
+  - **コンテナ横 padding**: `px-4 sm:px-6` が最頻出パターン（モバイルで 16px、デスクトップで 24px）
+  - **縦並び→横並び**: `flex-col sm:flex-row` でスマホ縦/PC 横切り替え（share URL 行など）
+  - **マップ高さ**: `h-[160px] sm:h-[200px] lg:h-[240px]` で画面幅に応じて段階拡大
+- ルール:
+  - **px 固定を書く前にスマホ幅（375px）で崩れないかを考える**。固定で書くなら理由が必要
+  - Tailwind の `sm:` は 640px 以上。スマホ（<640px）がデフォルト、`sm:` が拡張という向き
+  - アイコンサイズ（Phosphor の `size` prop）は Tailwind では直接制御できないので、`sm:hidden` + `hidden sm:block` で 2 要素切り替えか、`className` で `w-` / `h-` を上書きする

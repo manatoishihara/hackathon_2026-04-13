@@ -143,7 +143,7 @@ export default function GeneratingPage() {
   const activeIdx = step === "error" ? -1 : STEP_ORDER.indexOf(step === "ready-mock" ? "generating-plan" : step);
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col items-center justify-center gap-8 px-6 py-16 text-center">
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col items-center justify-center gap-6 px-4 py-8 text-center sm:gap-8 sm:px-6 sm:py-16">
       <div className="flex flex-col items-center gap-4">
         {step === "error" ? (
           <WarningCircle size={48} weight="duotone" className="text-[color:var(--color-danger)]" />
@@ -152,7 +152,7 @@ export default function GeneratingPage() {
         ) : (
           <Spinner size={48} weight="bold" className="animate-spin text-[color:var(--color-primary)]" />
         )}
-        <h1 className="text-2xl font-bold text-[color:var(--color-text-primary)]">
+        <h1 className="text-xl font-bold text-[color:var(--color-text-primary)] sm:text-2xl">
           {step === "error"
             ? "プラン生成に失敗しました"
             : step === "ready-mock"
