@@ -39,6 +39,34 @@ const MAX_ROUTE_SUMMARY_CHARS = 120; // Pydantic 側の Field(max_length=120) �
 // 2km は徒歩 ~30 分相当で plan に組み込んでも違和感ない上限。
 const WALKING_DISTANCE_KM = 2;
 
+/**
+ * candidate_departures の canonical 8 点（HH:mm 固定）。
+ *
+ * Phase 1.10 後段の本番 Run 10 で「1 件しか入らないため
+ * assembler の `_pick_departure_time` がカバー不能 → unknown_transit_edge」が
+ * 多発した（Phase 1.3b ↔ 1.3e contract drift）。
+ *
+ * 8 点の意義:
+ * - "00:00" / "23:59": 翌朝への transit (lodging slot 後 / 22:00+ start_hhmm) をカバー
+ * - "06:00": 早朝 activity slot
+ * - "09:00" / "12:00" / "15:00" / "18:00" / "21:00": 主要時間帯
+ *
+ * **drift 注意**: `apps/api/scripts/verify_hallucination_rate.py:147` 周辺にも
+ * 同じ 8 点を Python list で hardcode している（言語境界で共有 module 不可なため）。
+ * **本 list を変更する時は必ず Python 側も更新する**。Python script 側のコメントにも
+ * 双方向の drift 警告を残してある。
+ */
+export const CANONICAL_DEPARTURE_TIMES = [
+  "00:00",
+  "06:00",
+  "09:00",
+  "12:00",
+  "15:00",
+  "18:00",
+  "21:00",
+  "23:59",
+] as const;
+
 // ==============================
 // Types
 // ==============================
@@ -308,7 +336,14 @@ export function parseDirectionsResult(
   // routeSummary が空文字に落ちるのは TRANSIT で line.name が空文字の特殊ケースのみ。
   // (DRIVING='車' / WALKING='徒歩' / TRANSIT(transit step なし)='徒歩' は構造的に空にならない)
   const summary = routeSummary.slice(0, MAX_ROUTE_SUMMARY_CHARS) || "公共交通機関";
-  const candidate = formatHHmmJST(departureDate ?? requestedDeparture);
+  const observed = formatHHmmJST(departureDate ?? requestedDeparture);
+
+  // canonical 8 点 + observed を Set で dedup → HH:mm 文字列 sort（辞書順 = 時刻順）。
+  // observed が canonical に含まれれば 8 件、外なら 9 件。
+  // Pydantic ClientTransitEdge.candidate_departures は max_length=10 なので必ず収まる。
+  const candidates = Array.from(
+    new Set<string>([...CANONICAL_DEPARTURE_TIMES, observed]),
+  ).sort();
 
   return {
     from_place_id: fromPlaceId,
@@ -317,7 +352,7 @@ export function parseDirectionsResult(
     route_summary: summary,
     duration_min: Math.max(0, durationMin),
     fare_jpy: fareJpy,
-    candidate_departures: [candidate],
+    candidate_departures: candidates,
   };
 }
 
