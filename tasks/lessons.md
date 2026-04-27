@@ -27,6 +27,30 @@
 
 ## ログ
 
+## 2026-04-27: 本番 Run 11 で **422 全塞ぎ fix の効果実証** + プラン閲覧画面の独立 React error 発覚（EvidenceModal / MapView の location 未定義セーフガード漏れ）
+- 状況: `fix/plan-generation-blockers` の本番 deploy 後、Playwright で本番 Run 11 を実行（plan_id `10524736-4767-40b2-bcd8-93957b2fcd68`、05:29 JST）
+- **422 全塞ぎ fix の効果実証**:
+  - URL が `/plan/10524736-...`（`/generating` なし）に遷移 = `/api/plans/generate` が **200 で plan_id を返した動かぬ証拠**
+  - Run 10 までは `/plan/.../generating` で停止 + 422 console error だった
+  - canonical 8 点 (`["00:00","06:00","09:00","12:00","15:00","18:00","21:00","23:59"]`) + retry guidance + previous_issues 累積化が効いた
+  - **本セッションで実装した Codex 3 回 review 反映 fix が本番で完全に動いた**
+- 別問題として発覚した独立 React error:
+  - `apps/web/src/components/EvidenceModal.tsx:42` で `item.location.place_id` access、`item.location` が undefined のとき crash
+  - `apps/web/src/components/MapView.tsx:29` で `i.location.lat !== null` access、同様に crash
+  - Phase 2.5 evidence modal を design 仕事で committed した時に safety check が漏れた regression
+- 学び:
+  - **「200 を返す = 動く」ではない、閲覧画面までの完全な動作確認が verify**。本セッション「Run 11 = 200 必須 + 画面遷移」を Codex review 2 で必須条件化したが、画面遷移の先のレンダリングまで含めるべき
+  - **Phase 2.5 design 実装で safety check 漏れ**: TypeScript の `strictNullChecks` でも nested optional access が type system 上は通っても、runtime で undefined のケースは検出できない。型と現実の data shape の乖離は test で fix が必要
+  - **Run 11 で「3 つ目の独立した問題」が発覚**: 本セッションで真因 A, B + Codex 追加 Major 4 件を全塞ぎしたが、それでも別問題が表に出てきた。**本番 verify は仮説検証だけでなく「次の隠れた bug の発見器」でもある**
+- 解決策（`fix/evidence-modal-undefined-location` ブランチ、本セッション末で実装）:
+  - `EvidenceModal.tsx`: `item.location?.place_id ?? null` で optional chaining
+  - `MapView.tsx`: `i.location != null && ...` で undefined 除外
+  - test 追加（`EvidenceModal.test.tsx`: location 削除でも crash しない 1 件）
+- ルール候補:
+  - **本番 verify の必須条件は「200 + 画面遷移 + レンダリング無 error」の 3 段階**
+  - **type system 上 optional の nested field を component で使う時は必ず optional chaining + nullish coalescing**
+- → `.claude/rules/frontend-design.md` に「component の data access は必ず optional chaining で safety check」を昇格候補（同種事故の防止）
+
 ## 2026-04-27: develop ブランチで origin と divergence、conflict marker が origin に残ったまま push されている（git 運用の落とし穴、次セッション解決必要）
 - 状況: 本セッション末で `fix/plan-generation-blockers` を develop に local merge 後、push しようとしたら origin/develop と divergence。origin に別端末の 5 commits（design 仕事）が先行していて、3 ファイル (`generating/page.tsx` / `lessons.md` / `todo.md`) で衝突予測。
 - **更に深刻な問題**: `git show origin/develop:tasks/todo.md` で確認すると、**origin の todo.md に `<<<<<<< HEAD` `=======` `>>>>>>>` marker が commit に含まれた状態で push されている**。前回の merge 時に user が conflict 解決を保存せず commit してしまった可能性

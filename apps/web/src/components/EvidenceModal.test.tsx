@@ -211,6 +211,19 @@ describe("EvidenceModal", () => {
       expect(screen.queryByRole("link", { name: /Google Maps/ })).toBeNull();
     });
 
+    it("location 自体が undefined でも crash しない（transit item 等のセーフガード）", () => {
+      // 本番 Run 11 で発覚: transit item や location 持たない item で
+      // `item.location.place_id` が undefined access → React render error。
+      // optional chaining で吸収、Maps リンクは描画されない（fallbackTitle のみ）。
+      const item = makeItem();
+      // @ts-expect-error - 意図的に location を undefined にして runtime safety を test
+      delete item.location;
+      expect(() =>
+        render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />),
+      ).not.toThrow();
+      expect(screen.queryByRole("link", { name: /Google Maps/ })).toBeNull();
+    });
+
     it("aria-label に「新しいタブ」表記を含む", () => {
       render(
         <EvidenceModal item={makeItem()} open={true} onOpenChange={() => {}} />,

@@ -26,7 +26,10 @@ export function MapView({ items }: Props) {
     () =>
       items.filter(
         (i): i is PlanItem & { location: { lat: number; lng: number } } =>
-          i.location.lat !== null && i.location.lng !== null,
+          // location 自体が undefined のケース（transit item 等）も除外
+          i.location != null &&
+          i.location.lat !== null &&
+          i.location.lng !== null,
       ),
     [items],
   );
