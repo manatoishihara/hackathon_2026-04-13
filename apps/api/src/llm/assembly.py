@@ -283,6 +283,39 @@ def assemble_plan(
             prev_entry["place"].place_id if prev_entry else None
         )
 
+        # Phase 2 polish v6 (2026-04-28、本番 Run 13e で `item_type_category_mismatch` が
+        # 支配 issue となった対策): LLM が meal slot に park、lodging slot に restaurant 等を
+        # 割当てた場合、assembler が事前に検出して swap 試行する。validator が後段で catch
+        # する経路 (4 attempts retry) より自動修復が早い。
+        if not _is_item_type_compatible(slot_meta["item_type"], place.category):
+            alternate = _find_eligible_alternate_for_slot(
+                pack=pack,
+                target_place=place,
+                slot_meta=slot_meta,
+                slot_date=slot_date,
+                prev_place_id=prev_place_id_for_swap,
+                exclude_place_ids=used_place_ids,
+            )
+            if alternate is not None and _is_item_type_compatible(
+                slot_meta["item_type"], alternate.category
+            ):
+                logger.warning(
+                    "LLM picked item_type-mismatched place %r (category=%s) for slot %r (item_type=%s); "
+                    "swapped to %r (category=%s)",
+                    place_id, place.category, slot_meta["slot_id"], slot_meta["item_type"],
+                    alternate.place_id, alternate.category,
+                )
+                place = alternate
+                place_id = place.place_id
+            else:
+                # alternate も item_type 不適合 (or なし) → warn + accept、validator が
+                # item_type_category_mismatch を catch して retry guidance に流す
+                logger.warning(
+                    "LLM picked item_type-mismatched place %r (category=%s) for slot %r (item_type=%s); "
+                    "no compatible alternate, accepting (validator will catch)",
+                    place_id, place.category, slot_meta["slot_id"], slot_meta["item_type"],
+                )
+
         # Phase 2 polish v5 (2026-04-28、user 「重複は best-effort、エラー回避優先」):
         # lodging slot は連泊許容のため重複検出から除外。meal/activity slot は重複検出
         # するが、swap 失敗時は raise/drop ではなく **warn + accept** で続行する
@@ -416,7 +449,12 @@ def assemble_plan(
                         end_dt = end_dt + shift
                 else:
                     transit_start = prev_end_dt
-                    transit_end = transit_start + timedelta(minutes=edge.duration_min)
+                    # Phase 2 polish v6 (2026-04-28、本番 Run 13e で `invalid_time_range`
+                    # 多発の対策): edge.duration_min が 0 (徒歩 0 分の至近距離) のとき
+                    # transit_start == transit_end になり validator が `start >= end` で catch。
+                    # 最小 1 分の duration を保証して invalid_time_range を構造的に防ぐ。
+                    duration_min = max(1, edge.duration_min)
+                    transit_end = transit_start + timedelta(minutes=duration_min)
                     # activity 開始を transit 到着に合わせて繰り下げ
                     if transit_end > start_dt:
                         shift = transit_end - start_dt
@@ -811,21 +849,30 @@ def _find_eligible_alternate_for_slot(
 
     target_primary = target_place.category[0] if target_place.category else None
     target_categories = set(target_place.category)
+    item_type = slot_meta.get("item_type", "activity")
 
-    # tier 1: 同 category[0]
+    # Phase 2 polish v6 (Codex review 1 Major 1 反映): tier1/tier2 にも item_type filter を
+    # 適用する。target_place 自体が item_type 不適合 (例: meal slot に LLM が park を割当)
+    # のとき、tier1/2 で同 category 系 (park の同 category) を返してしまうと結局 swap が
+    # 機能せず park のままになる事故を防ぐ。
+    # tier 1: 同 category[0] かつ item_type 適合
     tier1 = [
         p for p in candidates
         if p.category and target_primary is not None and p.category[0] == target_primary
+        and _is_item_type_compatible(item_type, p.category)
     ]
     if tier1:
         return min(tier1, key=lambda p: (-(p.rating or 0.0), p.place_id))
-    # tier 2: category 共通集合
-    tier2 = [p for p in candidates if set(p.category) & target_categories]
+    # tier 2: category 共通集合 かつ item_type 適合
+    tier2 = [
+        p for p in candidates
+        if set(p.category) & target_categories
+        and _is_item_type_compatible(item_type, p.category)
+    ]
     if tier2:
         return min(tier2, key=lambda p: (-(p.rating or 0.0), p.place_id))
     # tier 3 (Phase 2 polish v3 T7): item_type と category の整合 filter を validator と
     # 同じ判定で適用する。空 category は許容（validator と挙動一致）。
-    item_type = slot_meta.get("item_type", "activity")
     tier3 = [p for p in candidates if _is_item_type_compatible(item_type, p.category)]
     if tier3:
         return min(tier3, key=lambda p: (-(p.rating or 0.0), p.place_id))

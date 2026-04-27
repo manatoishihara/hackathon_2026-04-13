@@ -747,7 +747,12 @@ def test_assemble_plan_transit_departure_skips_when_all_candidates_before_start(
 
 
 def test_assemble_plan_alternate_selection_avoids_self_loop():
-    """LLM が連続 slot に同じ place を割当てた場合、代替選定で from_place_id 自身は避ける。"""
+    """LLM が連続 slot に同じ place を割当てた場合、代替選定で from_place_id 自身は避ける。
+
+    Phase 2 polish v6: day1_lunch (meal slot) だと v6 の item_type pre-check が
+    point_of_interest を meal 不適合として swap 試みて失敗する。day1_afternoon (activity slot)
+    に変更して item_type 制約なし状態で自己ループ回避の動作を確認する (本 test の本来の意図)。
+    """
     p_a = _place("P_A", category=["point_of_interest"])
     p_b = _place("P_B", category=["point_of_interest"])
     pack = _make_pack(
@@ -760,7 +765,7 @@ def test_assemble_plan_alternate_selection_avoids_self_loop():
                 slot_id="day1_morning", place_id="P_A", rationale="起点 slot のテスト内容"
             ),
             LlmSlotAssignment(
-                slot_id="day1_lunch",
+                slot_id="day1_afternoon",
                 place_id="P_A",  # 同じ id で自己ループリクエスト
                 rationale="自己ループ禁止テストの rationale",
             ),
@@ -1233,7 +1238,12 @@ def test_drop_duplicate_place_items_drops_transit_with_dangling_from():
 
 
 def test_assemble_plan_triple_duplicate_resolved_to_unique_invariant():
-    """3 slot で同じ place を 3 回 pick → 全て unique な place に展開される（最終 invariant）。"""
+    """3 slot で同じ place を 3 回 pick → 全て unique な place に展開される（最終 invariant）。
+
+    Phase 2 polish v6: category=["museum"] だと day1_lunch (meal slot) で v6 の
+    item_type pre-check が swap 試みて失敗する。3 slot 全部 activity slot に変更して
+    pre-check が無関係な状態で重複検出 swap の動作を確認する (本 test の本来の意図)。
+    """
     p1 = _place("P1", category=["museum"])
     p2 = _place("P2", category=["museum"])
     p3 = _place("P3", category=["museum"])
@@ -1242,12 +1252,13 @@ def test_assemble_plan_triple_duplicate_resolved_to_unique_invariant():
         _edge("P2", "P1"), _edge("P2", "P3"),
         _edge("P3", "P1"), _edge("P3", "P2"),
     ]
-    pack = _make_pack(places=[p1, p2, p3], edges=edges, total_days=1)
+    # total_days=2 にすれば day1_morning, day1_afternoon, day2_morning が全て activity slot
+    pack = _make_pack(places=[p1, p2, p3], edges=edges, total_days=2)
     plan_v2 = LlmGeneratedPlanV2(
         slots=[
             LlmSlotAssignment(slot_id="day1_morning", place_id="P1", rationale="重複 1 つ目 rationale"),
-            LlmSlotAssignment(slot_id="day1_lunch", place_id="P1", rationale="重複 2 つ目 → swap"),
-            LlmSlotAssignment(slot_id="day1_afternoon", place_id="P1", rationale="重複 3 つ目 → swap"),
+            LlmSlotAssignment(slot_id="day1_afternoon", place_id="P1", rationale="重複 2 つ目 → swap"),
+            LlmSlotAssignment(slot_id="day2_morning", place_id="P1", rationale="重複 3 つ目 → swap"),
         ]
     )
     result = assemble_plan(plan_v2, pack)
@@ -1763,4 +1774,83 @@ def test_assemble_plan_consecutive_same_place_preserves_monotonic_start_time():
     next_start = _dt.fromisoformat(place_items[1].start_time)
     assert next_start >= prev_end, (
         f"連続同 place skip path で後 slot start_time={next_start} は前 slot end_time={prev_end} 以降であるべき"
+    )
+
+
+# ==============================
+# Phase 2 polish v6: assembler item_type pre-check + duration_min=0 → 1 min 補正
+# ==============================
+
+
+def test_assemble_plan_item_type_pre_check_swaps_park_in_meal_slot(caplog):
+    """v6: LLM が meal slot に park (公園) を割当てた場合、assembler が事前検出して
+    `_find_eligible_alternate_for_slot` で restaurant 系に swap する。
+    本番 Run 13e で観測された `item_type_category_mismatch` 多発の対策。
+    """
+    import logging
+
+    p_attr = _place("P_attr", category=["tourist_attraction"])
+    p_park = _place("P_park", category=["park"])  # LLM が誤って meal slot に割当
+    p_restaurant = _place("P_restaurant", category=["restaurant"])  # 正しい meal slot 候補
+    edges = [
+        _edge("P_attr", "P_park"), _edge("P_attr", "P_restaurant"),
+        _edge("P_park", "P_attr"), _edge("P_restaurant", "P_attr"),
+        _edge("P_park", "P_restaurant"), _edge("P_restaurant", "P_park"),
+    ]
+    pack = _make_pack(places=[p_attr, p_park, p_restaurant], edges=edges, total_days=1)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_attr", rationale="day1 朝の観光地巡り"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_park", rationale="LLM が park を meal に誤割当"),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    place_items = [it for it in result.items if it.place_id is not None]
+    # day1_lunch が P_park ではなく P_restaurant に swap される
+    lunch_item = next(it for it in place_items if it.item_type == "meal")
+    assert lunch_item.place_id == "P_restaurant", (
+        f"meal slot は restaurant に swap されるべき (got {lunch_item.place_id})"
+    )
+    # swap log 確認
+    assert any(
+        "item_type-mismatched" in rec.getMessage() and "swapped to" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+def test_assemble_plan_transit_duration_zero_uses_minimum_one_minute():
+    """v6: edge.duration_min=0 (徒歩 0 分の至近距離) のとき、transit item の
+    start_time == end_time にならないよう最小 1 分の duration を保証する
+    (validator の `INVALID_TIME_RANGE` を構造的に防ぐ)。
+    """
+    p_a = _place("P_A", category=["tourist_attraction"])
+    p_b = _place("P_B", category=["restaurant"])
+    edge_zero = TransitEdge(
+        from_place_id="P_A",
+        to_place_id="P_B",
+        mode="walk",
+        route_summary="徒歩 (至近距離)",
+        duration_min=0,  # 至近距離
+        fare_jpy=None,
+        candidate_departures=["09:00", "12:00", "15:00"],
+    )
+    pack = _make_pack(places=[p_a, p_b], edges=[edge_zero])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_A", rationale="day1 朝の観光地巡り"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_B", rationale="day1 ランチ食事処"),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    # transit item が含まれている、start_time != end_time であることを確認
+    transit_items = [it for it in result.items if it.item_type == "transit"]
+    assert len(transit_items) == 1
+    transit_item = transit_items[0]
+    from datetime import datetime as _dt
+    transit_start = _dt.fromisoformat(transit_item.start_time)
+    transit_end = _dt.fromisoformat(transit_item.end_time)
+    assert transit_end > transit_start, (
+        f"duration_min=0 でも transit_end ({transit_end}) > transit_start ({transit_start}) "
+        f"であるべき (最小 1 分補正)"
     )
