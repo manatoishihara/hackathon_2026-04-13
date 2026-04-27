@@ -8,6 +8,7 @@ import dynamic from "next/dynamic";
 
 import { getParticipants, getPlan, getPlanItems } from "@/lib/api";
 import { groupByDate, PlanTimeline } from "@/components/PlanTimeline";
+import { MapMiniStrip } from "@/components/MapMiniStrip";
 import { DayTabs } from "@/components/plan-view/DayTabs";
 import { PlanHeader } from "@/components/plan-view/PlanHeader";
 import { StatsCard } from "@/components/plan-view/StatsCard";
@@ -144,6 +145,7 @@ export default function PlanPage() {
               <MapView items={activeItems} />
             </MapErrorBoundary>
           </div>
+          <MapMiniStrip items={activeItems} />
           <StatsCard items={activeItems} />
           <SuggestionCard />
         </aside>
