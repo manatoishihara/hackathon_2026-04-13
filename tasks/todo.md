@@ -7,11 +7,28 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
+<<<<<<< HEAD
 **Phase 1.10 後段 chore: Flask logging.basicConfig(INFO) 追加**: 🟡 **2026-04-27 セッション末で実装完了、commit 提案 → user push 待ち**（`chore/api-logging-config` ブランチ）。本番 Run 9 後の Render Live tail で `logger.info` 出力が一切なく、validator/generator の retry 詳細（`LLM attempt %d produced %d validation issues, retrying` 等）が見えなかったため、`apps/api/src/app.py` 冒頭に `logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), ...)` を追加。`LOG_LEVEL` env で上書き可（本番 INFO / test WARNING 想定）。API unit test 381/381 PASS（既知 env 依存 2 件は本変更無関係）。push → Render 再 deploy → 次セッション Run 10 で 422 の IssueKind 別 retry log を Live tail から取得して真因切り分けできる状態に到達。詳細は lessons.md「2026-04-27: Flask デフォルト logger は WARNING 以上のみ → 本番デバッグ視認性ゼロ問題」エントリ。
 
 **Phase 1.10 本番 Run 9 (2026-04-27 セッション末)**: 🟢 **transit fallback fix が本番でも実証**。Vercel + Render 両方で `develop` の最新 commit が auto deploy 済、`/plan/new → /plan/<id>/generating` まで遷移、Maps SDK 40 回 ZERO_RESULTS の後 fallback で `/api/plans/generate` まで POST 到達（`transit_matrix=[]` でなくなった）。**ただし `/api/plans/generate → 422` はローカル verify と同様に発生**（LLM validator 側の独立問題、本セッションスコープ外）。
 
 **Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック**: 🟢 **2026-04-27 セッションで実装完了 + ローカル verify 完了 + 本番 push 完了 + 本番 Run 9 で fix 実証**（`fix/transit-fallback-walking-driving` ブランチ → develop merge → push 済、commit ce3dabd 含む）。`apps/web/src/lib/transit.ts` の travelMode 固定を「距離 ≤ 2km は TRANSIT → WALKING → DRIVING、> 2km は TRANSIT → DRIVING → WALKING」の fallback chain 化。Codex review 2 回（review 1 で「徒歩 2 時間 plan が assembler 経由で 422 を生む」を Major で発覚 → 距離分岐に軌道修正、review 2 で test 設計 bug 2 件発覚 → 反映）。web test 147/147 PASS / tsc clean / build PASS / API regression 381/381 PASS。**ローカル verify**: stats 40/40 全成功、mode_counts walk 20 / car 20、duration 5-46 min avg 18 min。**仮説修正**: 「transit fallback で 422 も解消する」は誤り、422 は LLM validator 側の独立問題（次の Run 10 で詳細 log 取得予定）。詳細は `tasks/plans/2026-04-27-transit-fallback.md` + lessons.md「2026-04-27」3 エントリ。
+=======
+**カレンダーナビゲーション UI 改善**: ✅ 2026-04-27 完了（commit 提案待ち）。DateRangePicker の月移動ボタン UX をポリッシュ。
+- `apps/web/src/components/ui/calendar.tsx`: 前月/次月ボタンを `ArrowLeft`/`ArrowRight`（Phosphor regular 15px）に換装、`rounded-full` + hover fill navy（primary 色）+ `active:scale-90` プレスフィードバック、`nav: "contents"` + CSS Grid で月移動ボタンが確実にクリック可能に（旧 absolute 配置による blocked クリック問題を完全解消）
+- `apps/web/src/app/pages.smoke.test.tsx` / `src/app/plan/new/modeSwitch.test.tsx`: `checkApiHealth` モック追加（`vi.mock("@/lib/api")` が新エクスポートを知らずテスト 6 件失敗していた問題を修正）
+- web test **147/147 PASS** / tsc clean
+
+**日付入力 UI 改善 (DateRangePicker)**: ✅ 2026-04-27 完了（commit 提案待ち）。`<input type="date">` のネイティブピッカー（OS/ブラウザ依存で使いにくい）をカレンダーポップオーバーに刷新。
+- `react-day-picker@9.14.0` を `apps/web` に追加（date-fns 不要、native Date のみ）
+- `apps/web/src/components/ui/calendar.tsx` 新規作成（blue hour デザイントークン適用、日本語曜日ラベル）
+- `apps/web/src/components/ui/popover.tsx` 新規作成（`@base-ui/react/popover` ベース、制御モード対応）
+- `apps/web/src/components/DateRangePicker.tsx` 新規作成（開始日 → 終了日ポップオーバー自動連鎖、終了日は開始日より前を disabled、後ろにずらすと終了日自動リセット）
+- `apps/web/src/app/plan/new/page.tsx` の `start_date` / `end_date` フィールドを `DateRangePicker` に差し替え
+- tsc clean / build PASS（`/plan/new` バンドル 417kB、増加なし）
+
+**Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック**: 🟡 **2026-04-27 セッションで実装完了 + ローカル verify 完了 → commit + user push 待ち**（`fix/transit-fallback-walking-driving` ブランチ）。`apps/web/src/lib/transit.ts` の travelMode 固定を「距離 ≤ 2km は TRANSIT → WALKING → DRIVING、> 2km は TRANSIT → DRIVING → WALKING」の fallback chain 化。Codex review 2 回（review 1 で「徒歩 2 時間 plan が assembler 経由で 422 を生む」を Major で発覚 → 距離分岐に軌道修正、review 2 で test 設計 bug 2 件発覚 → 反映）。web test 147/147 PASS / tsc clean / build PASS / API regression 381/381 PASS。**ローカル verify**: stats 40/40 全成功、mode_counts walk 20 / car 20、duration 5-46 min avg 18 min。**ただし `/api/plans/generate → 422` は transit fallback と独立した別問題と判明**（transit_matrix=40 件あっても 422、LLM validator 側の問題）。詳細は `tasks/plans/2026-04-27-transit-fallback.md` + lessons.md「2026-04-27」2 エントリ。次セッションは LLM validator 422 の切り分けが最優先。
+>>>>>>> 1a9d7bc1187acd803fd67daa52d7a7430ab0f932
 
 **DB-4/DB-5 テスト**: ✅ 2026-04-26 完了。`apps/api/tests/test_share_routes.py` を新規作成（11 件）。share_routes.py / plan_cache.py / extensions.py の実装は既完成済みで、テストのみ追加。全 unit テスト 332 件 PASS（既存 2 件の env 依存失敗は本変更と無関係）。
 

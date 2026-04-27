@@ -38,6 +38,7 @@ vi.mock("@/lib/api", () => ({
   getPlan: vi.fn(async () => mockPlan),
   getPlanItems: vi.fn(async () => mockPlanItems),
   getParticipants: vi.fn(async () => mockParticipants),
+  checkApiHealth: vi.fn(async () => true),
 }));
 
 vi.mock("@/lib/transit", () => ({
