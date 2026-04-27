@@ -139,12 +139,17 @@ export default function PlanPage() {
           <PlanTimeline items={activeItems} />
         )}
         <aside className="flex flex-col gap-3">
-          <div className="h-[50vh] min-h-[320px]">
-            {/* MapView は dynamic import + Error Boundary で隔離（⑥ Lazy Load / ⑭ フォールバック）*/}
-            <MapErrorBoundary>
-              <MapView items={activeItems} />
-            </MapErrorBoundary>
-          </div>
+          <section className="flex flex-col gap-2">
+            <p className="text-[10px] font-medium tracking-[0.18em] text-[color:var(--color-text-secondary)]">
+              MAP
+            </p>
+            <div className="h-[50vh] min-h-[320px]">
+              {/* MapView は dynamic import + Error Boundary で隔離（⑥ Lazy Load / ⑭ フォールバック）*/}
+              <MapErrorBoundary>
+                <MapView items={activeItems} />
+              </MapErrorBoundary>
+            </div>
+          </section>
           <MapMiniStrip items={activeItems} />
           <StatsCard items={activeItems} />
           <SuggestionCard />
