@@ -5,7 +5,20 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-28 更新、本番 Run 13e で v4 も 422 再発、構造的詰み判明）
+## 🏁 進捗サマリ（2026-04-28 更新、v5 で 3 日 plan は通過、4 日 plan は構造的に依然 422、楽天キー無効が副次発覚）
+
+**Phase 2 polish v5 (2026-04-28): 実装 + Codex review 4 サイクル Blocker 0 + push + deploy 完了**: 🟢 user 提案「lodging だけ重複完全許容、meal/activity は best-effort 重複回避 + エラー回避優先」を反映した設計変更を `fix/soft-duplicate-with-lodging-allowed` ブランチで commits 3 件、develop merge + push 済 (commit `6af88f5`)。
+- **検証結果 (本番 deploy 後 user 報告)**:
+  - **3 日 / 80,000 円: 通る** (200 ✅) → v5 効果実証
+  - **4 日 / 80,000 円: 依然 422** → 構造的に slot 数 / pack 候補のバランス未解決
+  - **生成成功時の plan 閲覧で Evidence (営業時間 / 評価 / 出典) が「不明」**多発 → 別バグ (pack→plan_item の serialization 漏れ)
+- **副次発覚**: 楽天 API が `{"error": "wrong_parameter", "error_description": "specify valid applicationId"}` 返却 = **applicationId が rakuten 側で無効**。user 手元の 32 hex chars 値 (`0415bc2d...`) は楽天ウェブサービスの applicationId 形式 (18-19 桁数字) ではない。**user 作業: webservice.rakuten.co.jp で正しい数字 ID 取得 + Render env 更新が必要**
+- **lodging.py 改修 (working tree、未 commit)**: rakuten error response body を log に残す診断 logging 追加。本診断のおかげで 400 真因が即判明
+- **次のタスク優先順位**:
+  1. **user 作業**: 楽天 applicationId を正しい数字 ID に更新 (上記)
+  2. **Claude 作業**: Evidence 「不明」表示問題 (pack→plan_item の serialization で opening_hours/rating/sources 埋め) の修正
+  3. **継続**: 4 日 plan の 422 残存問題 (Pack 構築時に営業日 filter / search keyword 拡張 / outside_opening_hours retry guidance 強化のいずれか)
+- 詳細学び: lessons.md「2026-04-28: Phase 2 polish v5 実装完了 (重複ポリシー best-effort 化 + lodging 連泊許容)」エントリ参照
 
 **Phase 2 polish v4 (2026-04-28): 実装 + push 完了、ただし本番 Run 13e で 422 再発、追加 fix が必要**: 🔴 **`fix/pack-expansion-fuzzy-match` ブランチで A (pack 拡張) + C (fuzzy match) を 2 commits 実装 → develop merge + push 済 (commit `cb39aa5 / 4b96a37`) → 本番 deploy 完了**。**Codex review 1+2 サイクル Blocker 0 認定**。しかし **本番 Run 13e (草津 4 日 / お任せ / 80,000 円) で `/api/plans/generate → 422` 再発**。
 - **Run 13e 4 attempts breakdown**:

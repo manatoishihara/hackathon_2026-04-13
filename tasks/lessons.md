@@ -27,6 +27,32 @@
 
 ## ログ
 
+## 2026-04-28: Phase 2 polish v5 実装完了 (重複ポリシー best-effort 化 + lodging 連泊許容)、3 日 plan は通るが 4 日 plan は依然 422 — Pack 候補不足が新 bottleneck
+- **状況**: v4 (pack 拡張 + fuzzy match) の本番 Run 13e で 422 再発、user 「同じものが許されるのは流石に宿くらいでは？重複は best-effort、エラー回避優先」方針で v5 設計
+- **v5 設計**: Codex review 設計段階 2 サイクル (Critical 1 + Major 5 + Minor 1 → Blocker 0 / Major 3 / Minor 2 → 全反映) → 実装 → review 1+2 サイクル (Major 1 + Minor 3 → Blocker 0 認定)
+- **commits**: `fix/soft-duplicate-with-lodging-allowed` ブランチ → develop merge + push 済 (commit `6af88f5`)
+  - Commit A: assembly の重複ポリシー緩和 (lodging 連泊許容、meal/activity warn+accept、opening_hours raise→warn+accept、transit skip 設計、_drop_duplicate_place_items 呼び出し削除、ChIJ prefix guard 削除) + system.md 第 8 項更新
+  - Commit B: assembly test 12 件更新/追加 (raise→warn+accept × 5、ChIJ guard test → J→H/J→h typo 救済 × 2、新規連泊・skip・時刻補正 × 5)
+  - Commit C: tasks/lessons.md + todo.md 進捗反映
+- **検証**: API 434 PASS (既知 env 依存 2 件 fail 無関係) / Web 164 PASS / tsc clean / build PASS / secret 0 hit
+- **本番 deploy 後の検証 (user 報告)**:
+  - **3 日 / 80,000 円: 通る** (200) → v5 効果実証
+  - **4 日 / 80,000 円: 依然 422** → 構造的に slot 数 / pack 候補のバランス未解決
+  - **生成成功時の plan 閲覧で Evidence (営業時間 / 評価 / 出典) が「不明」表示**が多い (別バグ、pack→plan_item の serialization 問題と推定)
+- **学び 1**: 「**重複防止 hard constraint** が Phase 2 polish v1 で追加されたが、4 日プランで構造的に詰む対症療法だった**」。user 提案「lodging だけ完全許容、他は best-effort」が正解 (本来の UX に合致)
+- **学び 2**: **Codex review 1 Minor 1 (`ChIJ` prefix guard) が逆効果**。本番 Run 13e で gpt-4.1 の最頻ハルシパターン (`ChIJ` → `ChIH` / `ChIh` の J typo) を guard で除外する事故。**「false positive 抑制 guard」は実本番 attack surface (実際の typo パターン) を観測してから入れるべき**。理論的安全性 (false positive 0%) と本番 typo パターンの乖離
+- **学び 3 (Codex 設計段階 review の価値)**: 設計段階で 2 サイクル + 実装後 2 サイクル = 4 サイクルで Blocker 0。各 review で前回 review が見落とした (or 自分の修正で新たに導入した) 別の Major を発見。**実装着手後でしか見えない盲点 (transit skip 時の AssertionError、`_drop_duplicate_place_items` との矛盾) は実装後 review でしか catch できない**
+- **副次の発見**: 楽天 API 400 error が継続発生。lodging.py に rakuten error response body を log に残す改修 + user 側 curl で直接確認 → rakuten が `{"error": "wrong_parameter", "error_description": "specify valid applicationId"}` を返却 = **applicationId が rakuten 側で無効と確定**
+- **学び 4 (重要、ルール昇格候補)**: 私が「32 hex chars は正しい applicationId 形式」と user に伝えたのは誤り。**実は楽天ウェブサービスの applicationId は典型的に 18-19 桁の数字** (`1024711987305213057` 形式)。32 hex chars (`0415bc2d...`) は **「アプリケーションキー」など別フィールド or 別サービスの認証情報**。user の手元のフィールドラベルだけで判断せず、**実際の API 応答 (curl で直接確認) がエビデンス第一**。私の二度の applicationId 形式記述ミス (UUID 否定 → 32 hex chars 肯定 → 実は両方誤り) は、**docs での仕様確認なしに憶測で答えた失敗**。`.claude/rules/external-api-rules.md` 昇格候補
+- **次のステップ (user 作業)**:
+  - [webservice.rakuten.co.jp/app/list](https://webservice.rakuten.co.jp/app/list) で **アプリ ID/デベロッパー ID** が長い数字列 (18-19 桁) か確認
+  - もし 32 hex chars のままなら、webservice.rakuten.co.jp に新規アプリ登録 → 数字 ID 取得 → Render env 更新 → redeploy
+- **次のステップ (継続調査)**:
+  - user が curl で直接 rakuten API を叩いて 400 の真因を確認 (`curl https://app.rakuten.co.jp/services/api/Travel/SimpleHotelSearch/...`)
+  - 原因確定後、適切な fix (maxCharge 計算修正 / checkin 日付 validate / etc)
+  - **Evidence 「不明」表示問題** は別タスクとして切り出し (pack→plan_item の serialization で opening_hours/rating/sources を埋める)
+  - **4 日プラン 422 の残存** は v5 で解消できないなら別軸 fix (Pack 構築時に営業日 filter / search keyword 拡張 / outside_opening_hours の retry guidance 強化)
+
 ## 2026-04-28: Phase 2 polish v4 実装 + 本番 Run 13e で別パターンの 422 再発 — 「Codex 指摘の false positive 抑制が最頻ハルシパターンを逆に除外する」教訓
 - **状況**: 本番 Run 13d (草津 4 日 / 80,000 円) の 422 真因 (pack 12 places で 4 日 19 slot に対し重複防止詰み + gpt-4.1 の `ChIJJ` 短縮ハルシ) を v4 で fix:
   - **A**: `max_places_for(total_days)` で pack cap 動的化 (4 日 = 22)、`_bucket_quota` 4+ 日拡張、`fill_threshold = cap` で bucket 偏り時も buffer 維持
