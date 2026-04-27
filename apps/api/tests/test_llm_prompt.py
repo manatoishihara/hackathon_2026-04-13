@@ -530,6 +530,46 @@ def test_extract_unknown_place_ids_returns_sorted_unique():
     assert _extract_unknown_place_ids(issues) == ["ChIJ_a", "ChIJ_z"]
 
 
+def test_extract_unknown_place_ids_catches_bare_chij_id():
+    """Phase 2 polish v3: quote 無し裸 ID (短縮ハルシ) を catch する regex 3 つ目。
+
+    本番 Run 13c attempt 2 で gpt-4.1 が `ChIJJCcG...` のような 5 文字頭ハルシを出力
+    し、validator / assembly の error message に「裸 ID」が露出するケースを catch。
+    capture group `(ChIJ[...])` で `match.group(1)` 前提を満たすため IndexError は出ない
+    (Codex review 1 C1)。
+    """
+    issues = [
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="LLM hallucinated ChIJN1t_tDeuEmsRUsoyG83frY4 in slot day1_lunch",
+            item_index=None,
+        ),
+    ]
+    extracted = _extract_unknown_place_ids(issues)
+    assert "ChIJN1t_tDeuEmsRUsoyG83frY4" in extracted
+
+
+def test_extract_unknown_place_ids_quoted_preferred_over_bare():
+    """quote 形式 message は最初の regex で確実に capture (裸 regex 追加で回帰しない)。"""
+    issues = [
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="LLM assigned unknown place_id 'ChIJ_quoted' to slot 'day1_lunch'",
+            item_index=None,
+        ),
+    ]
+    assert _extract_unknown_place_ids(issues) == ["ChIJ_quoted"]
+
+
+def test_v2_system_prompt_includes_exact_copy_rule():
+    """Phase 2 polish v3: system.md 第 9 項「正確コピー」が読み込まれる。"""
+    from src.llm.prompt import build_system_prompt
+
+    system = build_system_prompt(version="v2.0.0")
+    assert "1 文字も変えずに正確にコピー" in system
+    assert "短縮、省略、推測、合成は禁止" in system
+
+
 def test_build_user_prompt_v2_includes_retry_guidance_when_unknown_place_id(sample_pack):
     """v2 prompt は retry guidance (`絶対に再使用するな` ブロック) を含む。"""
     issues = [
