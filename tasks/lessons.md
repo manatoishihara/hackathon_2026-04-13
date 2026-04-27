@@ -27,6 +27,18 @@
 
 ## ログ
 
+## 2026-04-27: develop ブランチで origin と divergence、conflict marker が origin に残ったまま push されている（git 運用の落とし穴、次セッション解決必要）
+- 状況: 本セッション末で `fix/plan-generation-blockers` を develop に local merge 後、push しようとしたら origin/develop と divergence。origin に別端末の 5 commits（design 仕事）が先行していて、3 ファイル (`generating/page.tsx` / `lessons.md` / `todo.md`) で衝突予測。
+- **更に深刻な問題**: `git show origin/develop:tasks/todo.md` で確認すると、**origin の todo.md に `<<<<<<< HEAD` `=======` `>>>>>>>` marker が commit に含まれた状態で push されている**。前回の merge 時に user が conflict 解決を保存せず commit してしまった可能性
+- 学び:
+  - **複数端末で並行作業する場合、`git pull --no-rebase` 後の conflict 解決を必ず確認してから commit すべき**。merge editor で「保存だけ」では conflict marker が残る
+  - **conflict marker が含まれた commit を push すると origin が壊れた状態で永続化**。後続の merge / pull で更に複雑化する。**push 前に `git diff` か grep で `<<<<<<<` / `>>>>>>>` を確認する preflight が必要**
+  - **本セッションの全塞ぎ実装は完了したが、divergence 解決が user 手動で必要**。次セッション最初のタスク: `git pull origin develop --no-rebase` → 私が 3 ファイルの conflict を Edit で解消（origin design 仕事 + 私の fix を両方統合 + 残存 marker 消去）→ user commit + push → 本番 Run 11 で 200 確認
+- ルール候補:
+  - **commit 前に `git diff --staged | grep -E '<<<<<<< |>>>>>>> '` を必ず実行**して conflict marker 残存を検出。1 件でも hit したら commit 中断。secret プリフライトと同レベルの preflight として運用
+  - **複数端末作業時は `git pull --rebase` 派 vs `--no-rebase` 派を team で統一**。default 設定の不整合が conflict 発生時の挙動差を生む
+- → 1 回目だが「commit に conflict marker が混入」は今回 origin で 1 度実証されているので、本来は 2 回目記録扱い。**次セッションで `.claude/rules/` に「commit 前 conflict marker grep」を昇格**
+
 ## 2026-04-27: 全塞ぎモード — Codex 3 回 review で 422 真因 4 つ + 副次 Major 4 つを網羅的に修正（Phase 1.10 後段）
 - 状況: 本番 Run 10 で 422 を再現したログから真因 A (candidate_departures 1 件) + 真因 B (LLM hallucination) を特定後、user 指示で「全部特定して塞ぐ」モードに切替。並列 Explore agent 2 件で transit_matrix 構築 path / LLM prompt 詳細を完全把握 → Codex review 3 回（review 1: 設計相談で Blocker 2 / Major 4 / Minor 1、review 2: 計画書 review で 追加 Blocker 2 / Major 3 / Minor 1、review 3: 実装 review で Major 1 / Minor 2）→ 全反映
 - 全塞ぎした問題（複数の独立した穴を網羅的に検出）:

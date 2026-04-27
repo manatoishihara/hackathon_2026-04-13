@@ -7,7 +7,14 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
-**Phase 1.10 後段: 422 真因全塞ぎ (`fix/plan-generation-blockers`)**: 🟡 **2026-04-27 セッション末で実装完了、commit 提案 → user push 待ち**。本番 Run 10 で発見した 2 真因 (candidate_departures 1 件 / LLM hallucination) + Codex review 1+2+3 で発覚した追加 Blocker 2 / Major 4 / Minor 2 を網羅的に修正。フロント canonical 8 点 + 早期 throw、バック retry guidance + previous_issues 累積化 (recency 保証 `pop + 再挿入`) + regex robust 抽出。test 全 PASS / tsc clean / build PASS / Codex 最終 review Blocker 0。push → 本番 Run 11 で **`/api/plans/generate → 200` + `/plan/[id]` 遷移**を必須条件で確認。詳細は `tasks/plans/2026-04-27-plan-generation-blockers.md` + lessons.md「2026-04-27: 全塞ぎモード」エントリ。
+> ⚠️ **本セッション末の git 状態（2026-04-27 セッション終了時点、次セッション要対処）**:
+> - ローカル `develop` に 4 commits（`6f1b025` docs / `c7c343d` フロント / `1402778` バック / `ddb0aa9` merge）
+> - origin/develop に別端末の 5 commits（design 仕事: 「生成中の画面を変更」「カレンダー入力 UI」「DateRangePicker」「FlyingPlane」）= **divergence**
+> - **衝突が予測される 3 ファイル**: `apps/web/src/app/plan/[id]/generating/page.tsx` / `tasks/lessons.md` / `tasks/todo.md`
+> - **⚠️ origin/develop の `tasks/todo.md` には既に conflict marker (`<<<<<<< HEAD`) が残ったまま push されている**（前 merge での conflict 未解決 commit、別タスク化必要）
+> - **次セッション最初のタスク**: user 手動で `git pull origin develop --no-rebase` → conflict 解決（origin design 仕事 + 私の fix を両方統合 + 残存 marker 消去）→ commit + push → 本番 Run 11
+
+**Phase 1.10 後段: 422 真因全塞ぎ (`fix/plan-generation-blockers`)**: 🟡 **2026-04-27 セッション末で実装完了 → ローカル merge 済 → user push 待ち（divergence 解決必要）**。本番 Run 10 で発見した 2 真因 (candidate_departures 1 件 / LLM hallucination) + Codex review 1+2+3 で発覚した追加 Blocker 2 / Major 4 / Minor 2 を網羅的に修正。フロント canonical 8 点 + 早期 throw、バック retry guidance + previous_issues 累積化 (recency 保証 `pop + 再挿入`) + regex robust 抽出。test 全 PASS / tsc clean / build PASS / Codex 最終 review Blocker 0。push → 本番 Run 11 で **`/api/plans/generate → 200` + `/plan/[id]` 遷移**を必須条件で確認。詳細は `tasks/plans/2026-04-27-plan-generation-blockers.md` + lessons.md「2026-04-27: 全塞ぎモード」エントリ。
 
 **Phase 1.10 後段 chore: Flask logging.basicConfig(INFO) 追加**: ✅ **2026-04-27 セッションで実装 + push + 本番 deploy 反映完了**（`chore/api-logging-config` ブランチ → commit 148f4be → develop merge 13ba685 → push 済）。`apps/api/src/app.py` 冒頭に `logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), ...)` 追加。`LOG_LEVEL` env で上書き可。API unit test 381/381 PASS。**効果実証**: 本番 Run 10 で Render Live tail に `[INFO] src.llm.generator: LLM attempt 1 (model=gpt-4.1) assembly error (kind=unknown_place_id), retrying: ...` のような retry 詳細 4 行 + assembler self-healing の `[WARNING] src.llm.assembly: LLM picked ineligible place ... swapped to ...` まで取得できた。詳細は lessons.md「2026-04-27: Flask デフォルト logger は WARNING 以上のみ」エントリ。
 
