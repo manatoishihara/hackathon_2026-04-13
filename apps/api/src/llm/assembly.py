@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from difflib import SequenceMatcher
 from typing import Iterator
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,49 @@ from .validator import _categories_indicate_lodging, _categories_indicate_meal
 JST = ZoneInfo("Asia/Tokyo")
 
 logger = logging.getLogger(__name__)
+
+
+# Phase 2 polish v4 (2026-04-28、本番 Run 13d 失敗を受けて):
+# gpt-4.1 が `ChIJ` を `ChIJJ` のような短縮/prefix duplication で出力するハルシ
+# (本番 Run 13d で 3 attempts 連続観測) を救済するための fuzzy match safety net。
+#
+# 動作: SequenceMatcher.ratio() ≥ FUZZY_MATCH_RATIO かつ長さ差 ≤ FUZZY_MAX_LEN_DIFF
+# かつ pack 内で **唯一** マッチする place_id だけを採用 (false positive を厳しく排除)。
+# 複数候補が同条件で hit するなら救済せず raise (誤 canonical 化リスク回避)。
+FUZZY_MATCH_RATIO = 0.95
+FUZZY_MAX_LEN_DIFF = 2
+
+
+def _resolve_fuzzy_place_id(
+    llm_id: str, places_by_id: dict[str, PlacePoint]
+) -> str | None:
+    """LLM が出した近似 place_id を pack 内 ID に救済する。
+
+    pack の place_id 集合と LLM 出力を比較し:
+    - 両方とも `ChIJ` prefix を保持している (Google Places ID 共通形式、Codex Minor 1)
+    - 長さ差 ≤ FUZZY_MAX_LEN_DIFF
+    - SequenceMatcher.ratio() ≥ FUZZY_MATCH_RATIO
+    のうち **唯一** マッチするものを返す。0 件 or 複数なら None。
+
+    例: "ChIJJE69IgAHnHWARDJVsAgxtjCQ" (LLM 出力、頭の J 1 文字余分) →
+        "ChIJE69IgAHnHWARDJVsAgxtjCQ" (pack 正解)
+        ratio=0.963、len_diff=1 → 救済される
+    """
+    # ChIJ prefix を持たない LLM 出力は救済対象外 (false positive 抑制)
+    if not llm_id.startswith("ChIJ"):
+        return None
+    matches: list[str] = []
+    for pid in places_by_id:
+        if not pid.startswith("ChIJ"):
+            continue
+        if abs(len(pid) - len(llm_id)) > FUZZY_MAX_LEN_DIFF:
+            continue
+        ratio = SequenceMatcher(None, llm_id, pid).ratio()
+        if ratio >= FUZZY_MATCH_RATIO:
+            matches.append(pid)
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 # ==============================
@@ -214,10 +258,23 @@ def assemble_plan(
                 )
                 place_id = canonical.place_id
             else:
-                # canonical is None: 厳密一致なし、かつ case-insensitive で 0 件 or ambiguous
-                raise UnknownPlaceInSlotError(
-                    f"LLM assigned unknown place_id {place_id!r} to slot {slot_meta['slot_id']!r}"
-                )
+                # Phase 2 polish v4: case-insensitive miss 後の最後の救済手段として
+                # SequenceMatcher.ratio() による fuzzy match を試す。本番 Run 13d で
+                # gpt-4.1 が "ChIJJE69I..." (頭 J 余分) と systematic ハルシしたケースを救済。
+                fuzzy_canonical = _resolve_fuzzy_place_id(place_id, places_by_id)
+                if fuzzy_canonical is not None:
+                    logger.warning(
+                        "LLM produced fuzzy-matched place_id %r; resolved to canonical %r (slot=%s)",
+                        place_id,
+                        fuzzy_canonical,
+                        slot_meta["slot_id"],
+                    )
+                    place_id = fuzzy_canonical
+                else:
+                    # 厳密一致なし、case-insensitive で 0 件 or ambiguous、fuzzy も unique 化失敗
+                    raise UnknownPlaceInSlotError(
+                        f"LLM assigned unknown place_id {place_id!r} to slot {slot_meta['slot_id']!r}"
+                    )
 
         day_index = _day_index_from_slot_id(slot_meta["slot_id"])
         slot_date = start_date + timedelta(days=day_index - 1)
