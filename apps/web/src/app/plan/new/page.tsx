@@ -1,19 +1,21 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowRight, Spinner } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight, Spinner, WarningCircle, WifiSlash } from "@phosphor-icons/react/dist/ssr";
 
 import type { StartMode } from "shared-types";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  checkApiHealth,
   createPlanAndParticipants,
   postEvidencePlaces,
   updatePlanStatus,
+  ApiError,
 } from "@/lib/api";
 import { formatJpy } from "@/lib/format";
 import {
@@ -84,11 +86,41 @@ const DEFAULT_VALUES: PlanFormValues = {
  * デザイナーは className / 余白 / 入力 UX の調整をしてよい。
  * ロジック（submit 手順・API 呼び出し順）は触らない。
  */
+type SubmitStep = "session" | "plan" | "evidence" | null;
+
+function classifyError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 0 || err.message.includes("fetch")) {
+      return "サーバーに接続できませんでした。ネットワーク接続を確認してください。";
+    }
+    if (err.status >= 500) {
+      return `サーバーエラーが発生しました（${err.status}）。しばらくしてから再試行してください。`;
+    }
+    if (err.status === 401 || err.status === 403) {
+      return "認証エラーが発生しました。ページを再読み込みしてください。";
+    }
+    return `エラーが発生しました: ${err.message}`;
+  }
+  if (err instanceof TypeError && err.message.includes("fetch")) {
+    return "サーバーに接続できませんでした。ネットワーク接続を確認してください。";
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return "プラン生成の開始に失敗しました。";
+}
+
 export default function NewPlanPage() {
   const router = useRouter();
   const setSession = useGenerationSessionStore((s) => s.setSession);
   const [activeParticipantIndex, setActiveParticipantIndex] = useState(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
+  const [submitStep, setSubmitStep] = useState<SubmitStep>(null);
+
+  useEffect(() => {
+    checkApiHealth().then(setApiAvailable);
+  }, []);
 
   const form = useForm<PlanFormValues>({
     resolver: zodResolver(planFormSchema),
@@ -207,9 +239,11 @@ export default function NewPlanPage() {
 
   const onSubmit = async (values: PlanFormValues) => {
     setSubmitError(null);
+    setSubmitStep(null);
     let planId: string | null = null;
     try {
       // 1. 匿名サインイン（session_id を確定）
+      setSubmitStep("session");
       await ensureAnonymousSession();
       const sessionId = await getCurrentUserId();
       if (!sessionId) {
@@ -220,6 +254,7 @@ export default function NewPlanPage() {
       planId = crypto.randomUUID();
 
       // 3. plans + participants を INSERT
+      setSubmitStep("plan");
       await createPlanAndParticipants({
         planId,
         sessionId,
@@ -227,6 +262,7 @@ export default function NewPlanPage() {
       });
 
       // 4. /api/evidence/places
+      setSubmitStep("evidence");
       const evidenceResponse = await postEvidencePlaces(values);
 
       // 注: status は 'draft' のまま維持。サーバ側 acquire_plan_generation_lock RPC が
@@ -245,8 +281,8 @@ export default function NewPlanPage() {
       // 6. 遷移
       router.push(`/plan/${planId}/generating`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "プラン生成の開始に失敗しました。";
-      setSubmitError(message);
+      setSubmitError(classifyError(err));
+      setSubmitStep(null);
       if (planId) {
         void updatePlanStatus(planId, "failed").catch((e) => {
           console.warn("updatePlanStatus(failed) failed", e);
@@ -255,8 +291,26 @@ export default function NewPlanPage() {
     }
   };
 
+  const SUBMIT_STEP_LABELS: Record<NonNullable<SubmitStep>, string> = {
+    session: "セッション確認中...",
+    plan: "プランを保存中...",
+    evidence: "スポット情報を取得中...",
+  };
+
+  const isApiDown = apiAvailable === false;
+  const canSubmit = !isSubmitting && !isApiDown;
+
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-12">
+      {isApiDown ? (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <WifiSlash size={18} weight="bold" className="mt-0.5 shrink-0" />
+          <span>
+            サーバーに接続できません。ネットワーク接続を確認するか、しばらくしてから再試行してください。
+          </span>
+        </div>
+      ) : null}
+
       <header className="flex flex-col gap-6">
         <StepProgressRunway progress={progress} isSubmitting={isSubmitting} />
         <div className="flex flex-col gap-3">
@@ -445,21 +499,28 @@ export default function NewPlanPage() {
         </section>
 
         {submitError ? (
-          <div className="rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/5 p-4 text-sm leading-relaxed text-[color:var(--color-danger)]">
-            {submitError}
+          <div className="flex items-start gap-3 rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/5 p-4 text-sm leading-relaxed text-[color:var(--color-danger)]">
+            <WarningCircle size={18} weight="bold" className="mt-0.5 shrink-0" />
+            <span>{submitError}</span>
           </div>
         ) : null}
 
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={!canSubmit}
+            aria-busy={isSubmitting}
             className="inline-flex items-center gap-2 rounded-full bg-[color:var(--color-primary)] px-7 py-3.5 text-base font-medium text-[color:var(--color-background)] shadow-[0_8px_24px_rgba(4,44,83,0.18)] transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {isSubmitting ? (
               <>
                 <Spinner size={18} weight="bold" className="animate-spin" />
-                生成を開始中...
+                {submitStep ? SUBMIT_STEP_LABELS[submitStep] : "生成を開始中..."}
+              </>
+            ) : isApiDown ? (
+              <>
+                <WifiSlash size={18} weight="bold" />
+                サーバー未接続
               </>
             ) : (
               <>
