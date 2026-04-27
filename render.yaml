@@ -41,3 +41,10 @@ services:
       # legacy v1.0.0 を試したい時のみセットする。
       - key: PROMPT_VERSION
         sync: false
+      # Phase 2 polish (2026-04-27): 楽天トラベル API 連携。両方未設定なら lodging は
+      # fail-soft で skip される（既存挙動）。https://webservice.rakuten.co.jp/ で
+      # アプリ ID + Affiliate ID を発行して dashboard 経由で投入する（無料）。
+      - key: RAKUTEN_APPLICATION_ID
+        sync: false
+      - key: RAKUTEN_AFFILIATE_ID
+        sync: false
