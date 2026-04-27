@@ -80,6 +80,19 @@ def fetch_lodging_options(
         resp = requests.get(_ENDPOINT, params=params, timeout=_TIMEOUT_SEC)
         resp.raise_for_status()
         data = resp.json()
+    except requests.HTTPError as e:
+        # Phase 2 polish v6: 楽天 API の error response 本文を log に残す。
+        # 「400 Client Error」だけでは原因不明 (applicationId 無効 / maxCharge 低すぎ /
+        # not_found / wrong_parameter のどれか) なので、rakuten が返す JSON の
+        # error / error_description フィールドを extract する。
+        body_summary = ""
+        try:
+            body_summary = resp.text[:500]
+        except Exception:
+            pass
+        raise RakutenLodgingError(
+            f"楽天トラベル API リクエスト失敗: {e} (response body: {body_summary!r})"
+        ) from e
     except requests.RequestException as e:
         raise RakutenLodgingError(f"楽天トラベル API リクエスト失敗: {e}") from e
 

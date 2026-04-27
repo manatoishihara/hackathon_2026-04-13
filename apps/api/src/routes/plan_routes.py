@@ -201,18 +201,52 @@ def _log_pack_missing(pack_id: str, owner_session_id: str) -> None:
     )
 
 
+def _format_opening_hours_summary(slots: list) -> str | None:
+    """OpeningHoursSlot list を表示用の短い文字列に変換する。
+
+    Phase 2 polish v6 (Codex review 1 Major 2 反映): **全 7 曜日分** が揃っていて
+    かつ全部同じ open-close のときだけ "09:00–22:00" 短縮表示。曜日が一部欠けている
+    (週末休み等) ケースを「全曜日 09:00–22:00」と誤誘導しないため、`len(slots) == 7`
+    かつ 7 つの day_of_week (0〜6) を揃えてから短縮する厳密判定にする。
+    さもなくば「N 日分の営業時間情報あり」表記で実情を Evidence Modal に伝える。
+    フロントの EvidenceModal で「営業時間」フィールドに直接表示される想定。
+    """
+    if not slots:
+        return None
+    days_present = {s.day_of_week for s in slots}
+    ranges = {(s.open_hhmm, s.close_hhmm) for s in slots}
+    # 全 7 曜日 + 全曜日同 open-close のときだけ短縮表示。1 曜日複数枠 (ランチ+ディナー)
+    # を許容するため `len(slots) == 7` ではなく `len(days_present) == 7` で判定する
+    # (Codex review 2 Minor 1 反映、`len(slots)` だと 1 曜日 2 枠で +1 過大表示する)。
+    if len(days_present) == 7 and len(ranges) == 1:
+        open_, close = next(iter(ranges))
+        return f"{open_}–{close}"
+    return f"曜日別 ({len(days_present)} 曜日 / {len(slots)} 枠の営業時間情報あり)"
+
+
 def _serialize_plan_item(item: LlmPlanItem, pack: EvidencePack) -> dict:
     """LlmPlanItem を plan_items テーブル行の JSONB dict に変換する。
 
     LLM は place_id しか出さないので、`pack.places` から引いて place_name / lat / lng /
     address を埋める（1.7 MapView が lat/lng を必須とするため）。
     `transit_to_next` は Phase 1.3d では未設定（Phase 2.4 の隣接アイテム間経路で使う予定）。
-    `evidence.sources` は Phase 1.3d では最小限（Phase 2 で場所別根拠を埋める）。
+
+    Phase 2 polish v6 (2026-04-28、demo UX 改善):
+    `evidence` を pack.places の verified data から populate する (旧実装は空 hardcode)。
+    フロント EvidenceBadge / EvidenceModal で「✓ Places verified」「営業時間 09:00-22:00」
+    「評価 4.5」「出典 Google Places」が表示されるようになる。
     """
+    from datetime import datetime, timezone
+
     place_name: str | None = None
     lat: float | None = None
     lng: float | None = None
     address: str | None = None
+    opening_hours_summary: str | None = None
+    rating: float | None = None
+    price_level: int | None = None
+    sources: list[str] = []
+
     if item.place_id is not None:
         place = next((p for p in pack.places if p.place_id == item.place_id), None)
         if place is not None:
@@ -220,6 +254,28 @@ def _serialize_plan_item(item: LlmPlanItem, pack: EvidencePack) -> dict:
             lat = place.lat
             lng = place.lng
             address = place.address
+            opening_hours_summary = _format_opening_hours_summary(place.opening_hours)
+            rating = place.rating
+            price_level = place.price_level
+            # 出典: place_id prefix で判別 (rakuten lodging は `rakuten_<id>` 形式、
+            # Google Places は `ChIJ...` 形式)
+            if place.place_id.startswith("rakuten_"):
+                sources = ["楽天トラベル"]
+            else:
+                sources = ["Google Places"]
+
+    # transit item は place を持たないので evidence は空 (sources のみ空 list で型整合)
+    evidence: dict = {"sources": sources}
+    if opening_hours_summary is not None:
+        evidence["opening_hours"] = opening_hours_summary
+    if rating is not None:
+        evidence["rating"] = rating
+    if price_level is not None:
+        evidence["price_level"] = price_level
+    if sources:
+        # verified_at は plan 生成時刻 (= 現在時刻、UTC)。これにより EvidenceModal で
+        # 「2026-04-28 17:36 verified」のように検証日時を表示できる。
+        evidence["verified_at"] = datetime.now(timezone.utc).isoformat()
 
     return {
         "order_index": item.order_index,
@@ -235,7 +291,7 @@ def _serialize_plan_item(item: LlmPlanItem, pack: EvidencePack) -> dict:
         "address": address,
         "cost_jpy": item.cost_jpy,
         "cost_confidence": item.cost_confidence,
-        "evidence": {"sources": []},
+        "evidence": evidence,
         "transit_to_next": None,
         "notes": None,
     }

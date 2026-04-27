@@ -18,6 +18,7 @@ from src.evidence.pack import (
     BudgetBreakdownJPY,
     BudgetConstraints,
     EvidencePack,
+    OpeningHoursSlot,
     PlacePoint,
     QueryContext,
     QueryContextParticipant,
@@ -937,3 +938,194 @@ def test_integration_invalid_transit_returns_400(client):
             get_supabase_client().auth.admin.delete_user(user_id)
         except Exception:
             pass
+
+
+# ==============================
+# Phase 2 polish v6: _serialize_plan_item で evidence を pack から populate
+# ==============================
+
+
+def test_serialize_plan_item_populates_evidence_from_pack():
+    """v6 (demo UX 改善): plan_item の evidence が空 hardcode ではなく
+    pack.places の opening_hours / rating / price_level / sources を埋めること。
+    フロント EvidenceModal で「✓ Places verified」が出る前提。
+    """
+    from src.routes.plan_routes import _serialize_plan_item
+    from src.llm.schema import LlmPlanItem
+
+    place = PlacePoint(
+        place_id="ChIJtest123",
+        name="箱根湯本駅",
+        category=["train_station", "transit_station"],
+        lat=35.234,
+        lng=139.107,
+        address="神奈川県箱根町湯本",
+        opening_hours=[
+            OpeningHoursSlot(day_of_week=dow, open_hhmm="06:00", close_hhmm="23:00")
+            for dow in range(7)
+        ],
+        opening_hours_unknown_days=[],
+        price_level=2,
+        rating=4.3,
+        user_ratings_total=1234,
+        relevance_tags=[],
+    )
+    pack = EvidencePack(
+        query_context=QueryContext(
+            region="箱根",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 1),
+            departure_point="東京",
+            start_mode="auto",
+            mode_payload=None,
+            participants=[],
+        ),
+        places=[place],
+        transit_matrix=[],
+        lodging_options=None,
+        budget_constraints=BudgetConstraints(
+            total_jpy_per_person=30000,
+            breakdown_percent=BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10),
+            breakdown_jpy=BudgetBreakdownJPY(lodging=12000, meal=9000, activity=6000, transit=3000),
+        ),
+        temporal_constraints=TemporalConstraints(
+            start_datetime="2026-06-01T09:00:00+09:00",
+            end_datetime="2026-06-01T22:00:00+09:00",
+            total_days=1,
+            check_in_earliest="15:00",
+            check_out_latest="10:00",
+        ),
+    )
+    item = LlmPlanItem(
+        order_index=0,
+        item_type="activity",
+        title="箱根湯本駅で出発",
+        description="箱根の玄関口で旅をスタート。",
+        start_time="2026-06-01T09:00:00+09:00",
+        end_time="2026-06-01T10:30:00+09:00",
+        place_id="ChIJtest123",
+        cost_jpy=0,
+        cost_confidence="estimated",
+        transit_ref=None,
+    )
+    serialized = _serialize_plan_item(item, pack)
+    evidence = serialized["evidence"]
+    assert evidence["sources"] == ["Google Places"]
+    assert evidence["opening_hours"] == "06:00–23:00"
+    assert evidence["rating"] == 4.3
+    assert evidence["price_level"] == 2
+    assert "verified_at" in evidence
+
+
+def test_serialize_plan_item_evidence_for_rakuten_lodging():
+    """v6: rakuten_<id> 形式の place_id は出典を「楽天トラベル」として扱う。"""
+    from src.routes.plan_routes import _serialize_plan_item
+    from src.llm.schema import LlmPlanItem
+
+    place = PlacePoint(
+        place_id="rakuten_12345",
+        name="箱根温泉旅館",
+        category=["lodging", "ryokan"],
+        lat=35.20,
+        lng=139.10,
+        address="神奈川県箱根町",
+        opening_hours=[],
+        opening_hours_unknown_days=[],
+        price_level=3,
+        rating=4.5,
+        user_ratings_total=None,
+        relevance_tags=[],
+    )
+    pack = EvidencePack(
+        query_context=QueryContext(
+            region="箱根",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 2),
+            departure_point="東京",
+            start_mode="auto",
+            mode_payload=None,
+            participants=[],
+        ),
+        places=[place],
+        transit_matrix=[],
+        lodging_options=None,
+        budget_constraints=BudgetConstraints(
+            total_jpy_per_person=30000,
+            breakdown_percent=BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10),
+            breakdown_jpy=BudgetBreakdownJPY(lodging=12000, meal=9000, activity=6000, transit=3000),
+        ),
+        temporal_constraints=TemporalConstraints(
+            start_datetime="2026-06-01T15:00:00+09:00",
+            end_datetime="2026-06-02T10:00:00+09:00",
+            total_days=2,
+            check_in_earliest="15:00",
+            check_out_latest="10:00",
+        ),
+    )
+    item = LlmPlanItem(
+        order_index=0,
+        item_type="lodging",
+        title="箱根温泉旅館で宿泊",
+        description="温泉でゆっくり寛ぐ。",
+        start_time="2026-06-01T20:00:00+09:00",
+        end_time="2026-06-01T22:00:00+09:00",
+        place_id="rakuten_12345",
+        cost_jpy=12000,
+        cost_confidence="verified",
+        transit_ref=None,
+    )
+    serialized = _serialize_plan_item(item, pack)
+    assert serialized["evidence"]["sources"] == ["楽天トラベル"]
+
+
+def test_serialize_plan_item_evidence_empty_for_transit():
+    """v6: transit item は place_id=None なので evidence.sources は空 list、
+    opening_hours / rating 等のキーも未設定 (型整合のみ維持)。
+    """
+    from src.routes.plan_routes import _serialize_plan_item
+    from src.llm.schema import LlmPlanItem, LlmTransitRef
+
+    pack = EvidencePack(
+        query_context=QueryContext(
+            region="箱根",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 1),
+            departure_point="東京",
+            start_mode="auto",
+            mode_payload=None,
+            participants=[],
+        ),
+        places=[],
+        transit_matrix=[],
+        lodging_options=None,
+        budget_constraints=BudgetConstraints(
+            total_jpy_per_person=30000,
+            breakdown_percent=BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10),
+            breakdown_jpy=BudgetBreakdownJPY(lodging=12000, meal=9000, activity=6000, transit=3000),
+        ),
+        temporal_constraints=TemporalConstraints(
+            start_datetime="2026-06-01T09:00:00+09:00",
+            end_datetime="2026-06-01T22:00:00+09:00",
+            total_days=1,
+            check_in_earliest="15:00",
+            check_out_latest="10:00",
+        ),
+    )
+    item = LlmPlanItem(
+        order_index=1,
+        item_type="transit",
+        title="JR 山手線で移動",
+        description="3 分、train",
+        start_time="2026-06-01T10:30:00+09:00",
+        end_time="2026-06-01T10:33:00+09:00",
+        place_id=None,
+        cost_jpy=200,
+        cost_confidence="verified",
+        transit_ref=LlmTransitRef(
+            from_place_id="ChIJa", to_place_id="ChIJb", departure_time="10:30",
+        ),
+    )
+    serialized = _serialize_plan_item(item, pack)
+    assert serialized["evidence"]["sources"] == []
+    assert "opening_hours" not in serialized["evidence"]
+    assert "rating" not in serialized["evidence"]
