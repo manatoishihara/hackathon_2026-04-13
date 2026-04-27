@@ -13,6 +13,19 @@
 
 **楽天トラベルAPI連携 (DB-7)**: ✅ 2026-04-26 実装完了。`apps/api/src/evidence/lodging.py` 新規作成（`RAKUTEN_APPLICATION_ID` / `RAKUTEN_AFFILIATE_ID` 環境変数から読み込み、ホテル名・料金・緯度経度・URL を `LodgingOption` で返す、fail-soft 設計）。`pack.py` に `lat`/`lng` フィールド追加、`builder.py` に組み込み（日帰りスキップ）。`tests/test_lodging.py` 5 件 PASS。
 
+**DB-8 Supabase ロギング基盤**: ✅ 2026-04-26 SQL migration 作成完了。`supabase/migrations/20260426_08_logging_setup.sql` を新規作成。`pg_stat_statements` 拡張有効化 + `routeful_query_stats`（上位 50 クエリ、total_time 降順）/ `routeful_slow_queries`（mean_exec_time > 100ms）ビュー + `reset_routeful_query_stats()` リセット関数。**Supabase SQL Editor での適用が必要**（冪等設計）。
+
+**サイトアイコン (favicon / apple-icon)**: ✅ 2026-04-26 完了。`apps/web/public/icon.svg`（Deep Navy 角丸 + Coral 経路曲線 + waypoint ドット）/ `apps/web/src/app/apple-icon.tsx`（Next.js ImageResponse 180×180）/ `layout.tsx` の `metadata.icons` + `openGraph` を設定。
+
+**フロント UX 改善（連続クリック防止・エラー分類・API 死活確認）**: ✅ 2026-04-26 実装完了（commit 提案待ち）。
+- `apps/web/src/lib/api.ts` に `checkApiHealth()` 追加（`GET /healthz`、5s timeout、MOCKS 時は常に `true`）
+- `apps/web/src/app/plan/new/page.tsx` に以下を追加:
+  - マウント時 API ヘルスチェック → `apiAvailable` state。API 未接続時は amber バナー + submit ボタン「サーバー未接続」表示 + disabled
+  - `classifyError()` でネットワーク障害 / 5xx サーバーエラー / 401/403 認証エラー を日本語メッセージに分類
+  - submit 中は `SUBMIT_STEP_LABELS`（session / plan / evidence の 3 ステップ）をボタン内テキストで逐次表示
+  - submit ボタンに `aria-busy` 属性追加（アクセシビリティ対応）
+  - エラー表示に `WarningCircle` アイコン追加
+
 ## 🏁 進捗サマリ（2026-04-25 更新）
 
 **Phase 0**: ✅ 完了
@@ -190,7 +203,7 @@
 - [ ] **Manato**: Phase 1.10 デプロイ準備（Vercel + Render）。次セッション着手時の最初の一手は **CORS 追加 + gunicorn 追加 + render.yaml 作成** を `feat/deploy-prep` で実装。`apps/api/src/app.py` に CORS 設定なし / `requirements.txt` に gunicorn なしが本番ブロッカーとして 2026-04-25 セッションで判明。Vercel/Render アカウント作成と本番ドメイン方針の判断はユーザ側で必要（詳細は 1.10 節）
 - [x] **Manato（Codex Minor、2026-04-25 完了）**: item_type vs category 整合性 validator を追加（`feat/deploy-prep` ブランチ）。`IssueKind.ITEM_TYPE_CATEGORY_MISMATCH` 新設、`_check_item_type_category_consistency` 実装、`_MEAL_CATEGORIES` / `_LODGING_CATEGORIES` allowlist + `*_restaurant` 接尾辞対応。テスト 10 件 PASS、unit 全 283 件 PASS
 - [ ] **Manato（残課題、優先度低、Phase 2 scope）**: Codex (latent) 営業時間 parser 日跨ぎ対応（"22:00-02:00" のような夜またぎ）。MVP 箱根デモは日中観光のみで影響なし
-- [x] **メンバー B**: DB-4/DB-5 共有 API 実装 + テスト完了（2026-04-26）。`share_routes.py` / `plan_cache.py` / `extensions.py` 実装済み、`tests/test_share_routes.py` 11 件 PASS。残: DB-7 楽天申請 / DB-8 Supabase ログ（@tasks/handoff-db.md）
+- [x] **メンバー B**: DB-4/DB-5 共有 API 実装 + テスト完了（2026-04-26）。`share_routes.py` / `plan_cache.py` / `extensions.py` 実装済み、`tests/test_share_routes.py` 11 件 PASS。DB-7 楽天 API 実装済み（`lodging.py`）。DB-8 logging migration 作成済み（SQL Editor 適用が必要）。（@tasks/handoff-db.md）
 - [ ] **メンバー C**: 1.4〜1.9 の見た目仕上げ（@tasks/handoff-frontend.md）
 
 詳細は下の各セクション参照。

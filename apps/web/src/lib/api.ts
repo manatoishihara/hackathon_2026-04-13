@@ -69,6 +69,16 @@ async function authedFetch<T>(path: string, init: RequestInit = {}): Promise<T> 
 // Flask API 呼び出し
 // ==============================
 
+export async function checkApiHealth(): Promise<boolean> {
+  if (USE_MOCKS) return true;
+  try {
+    const res = await fetch(`${API_URL}/healthz`, { signal: AbortSignal.timeout(5000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function postEvidencePlaces(
   req: GeneratePlanRequest,
 ): Promise<EvidencePlacesResponse> {
