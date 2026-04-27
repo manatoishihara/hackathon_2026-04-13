@@ -27,6 +27,24 @@
 
 ## ログ
 
+## 2026-04-28: Phase 2 polish v3 実装完了、Codex review 5 で `attempted=0` 抜け穴発覚 → Major 1 fix → review 6 Blocker 0
+- **状況**: Phase 2 polish v3 計画 (T1+T2+T4+T7+T5) を `fix/pack-transit-stability` ブランチで 4 commits 構成で実装。計画段階の Codex review 1+2+3+4 (Blocker 0 認定済) → 実装 → review 5 で予想外の Major 1 + Minor 2 件発覚 → 全反映 → review 6 で Blocker 0 / Major 0 確認 → commit 提案
+- **review 5 で発覚した Major 1 (重要、実装後 review でしか発見できなかった盲点)**:
+  - **問題**: 旧 `shouldEarlyThrowOnTransit` は `stats.attempted === 0` を無条件許容。この設計だと「`places.length > 1` だが距離フィルタで pair 全落ち」のケースを素通しさせ、空 `transit_matrix` で `/api/plans/generate` に流れて A6 系 422 連発が再発しうる
+  - **検出経路**: Codex が `transit.test.ts` の既存 test (`遠すぎる pair は除外`、line 81) を読み込んで「実装と test の組み合わせから抜け穴を逆算」し指摘。**実装段階で初めて観測可能になる組み合わせ問題**で、計画段階の review では catch 不可能だった
+  - **修正**: シグネチャを `shouldEarlyThrowOnTransit(stats, placeCount)` に拡張し、`placeCount <= 1` のときだけ許容、`placeCount > 1 && attempted === 0` は throw。caller (`page.tsx`) も `session.places.length` を渡すよう更新、test 9 件で境界を validate
+- **review 5 Minor 2 件**:
+  - tier3 全落ち時の `return None` に warning log 漏れ → tier3 専用 log を追加
+  - `docs/evidence-pack.md` のコスト節 + `transit.ts` のコメントが旧値 (`10km / 20 / 10s`) のまま → `15km / 40 / 15s` に同期
+- **学び (重要、ルール昇格候補)**:
+  - **「計画段階の Codex review」と「実装後の Codex review」は別物**。本日は計画段階で 4 サイクル回して Blocker 0 認定したが、実装後にも独立した盲点 (Major 1) が見つかった。**計画 review は設計矛盾を catch、実装 review は「実装と既存 test / コードの組み合わせ」由来の盲点を catch** という非対称な役割
+  - **既存 test ファイル / 関連コードを review 対象 diff の文脈として渡す重要性**: 計画段階では存在しない「実装 + 既存コードの相互作用」が事故源。Codex に diff だけでなく test ファイルや関連 lib の path/line を読ませる context が catch 率を上げる
+  - **「`attempted === 0` 無条件許容」のような『安全側に倒したつもりの default』が抜け穴になる**: 「places ≤ 1 で transit 不要」と「places 多数 + 距離分散で pair 0 件」を **同じ stats で区別できない**。stats だけでは情報不足、呼び出し側の文脈 (places.length) を判定材料に追加するのが正解
+  - **シグネチャ変更は localized**: `shouldEarlyThrowOnTransit(stats)` → `(stats, placeCount)` のような小さな拡張は caller 1 箇所更新で済むので恐れずやる。固定 signature を守るために stats 構造体を膨張させる方が技術的負債になる
+- **検証結果**: API 413 PASS / Web 164 PASS / tsc clean / build PASS / secret 0 hit / Codex review 6 Blocker 0
+- **次セッション (user 手動)**: 4 commits を順に push → 本番 Run 13d (草津 4 日 / お任せ) で `/api/plans/generate → 200` を確認、もし残れば Commit C で追加した `kind_summary` log で支配 issue 切り分け
+- **副次の zsh 落とし穴 (user 手動 commit 時)**: `git add apps/web/src/app/plan/[id]/generating/...` は zsh の glob で `[id]` が char class として展開されエラー。**パスをダブルクォートで囲うか `setopt no_nomatch`** が必要
+
 ## 2026-04-27: Phase 2 polish v3 計画書を Codex review 4 サイクルで Blocker 0 認定、次セッション実装で 422 根本解消狙う
 - **Codex review サイクル**: review 1 (Critical 1 + High 4 + Medium 2) → review 2 (Major 2 + Minor 1) → review 3 (Major 1 + Minor 3) → **review 4 (Blocker 0 認定 + Major 1 同時 fix 推奨 + Minor 2 で確定)**
 - 各 review で発覚した重要な落とし穴 (本実装に進んでいたら本番障害):
