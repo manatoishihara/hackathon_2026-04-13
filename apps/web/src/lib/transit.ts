@@ -22,7 +22,19 @@
  */
 
 import { importLibrary, setOptions } from "@googlemaps/js-api-loader";
-import type { ClientTransitEdge, EvidencePlacesPlaceSummary } from "shared-types";
+import type {
+  ClientTransitEdge,
+  EvidencePlacesPlaceSummary,
+  TransportMode,
+} from "shared-types";
+
+/**
+ * Phase 2 polish (2026-04-27): 公共交通機関のみシナリオで徒歩 edge の上限。
+ * 徒歩 30 分超を plan に組み込むと assembler の opening_hours 違反が量産されるため、
+ * `parseDirectionsResult` が WALKING 結果に対してこの値を超えていたら null を返す。
+ * 近距離 fallback (2km 上限) と整合し、徒歩 30 分は plan として現実的な上限。
+ */
+const PUBLIC_TRANSIT_WALK_DURATION_LIMIT_MIN = 30;
 
 // ==============================
 // Defaults（options で上書き可）
@@ -77,6 +89,12 @@ export type FetchTransitOptions = {
   perCallTimeoutMs?: number;
   globalDeadlineMs?: number;
   distanceKm?: number;
+  /**
+   * Phase 2 polish (2026-04-27): 移動手段指定。
+   * - 'all_modes' (default): 距離分岐 fallback (TRANSIT → WALKING/DRIVING) で経路探索
+   * - 'public_transit_only': DRIVING を fallback chain から除外し、徒歩 30 分超 edge を drop
+   */
+  transportMode?: TransportMode;
 };
 
 export type FetchTransitStats = {
@@ -291,6 +309,14 @@ export function parseDirectionsResult(
     return null;
   }
 
+  // Phase 2 polish (2026-04-27、Codex Major 3): 徒歩 30 分超は plan に組み込まない。
+  // 'public_transit_only' で TRANSIT 失敗 → WALKING fallback の長距離徒歩を防ぐ目的。
+  // 'all_modes' でも 30 分超の徒歩は通常 fallback chain が DRIVING を優先するので
+  // 副作用は最小（< 2km ペアでのみ WALKING 到達 = 30 分以下のはず）。
+  if (requestedMode === "WALKING" && durationMin > PUBLIC_TRANSIT_WALK_DURATION_LIMIT_MIN) {
+    return null;
+  }
+
   let fareJpy: number | null = null;
   // @types/google.maps は DirectionsLeg に fare を持たないが、ランタイムでは
   // 存在する場合がある（transit 区間のみの運賃）。route.fare を優先、無ければ leg.fare にフォールバック。
@@ -420,6 +446,12 @@ async function callDirectionsWithTimeout(
  * 距離 > WALKING_DISTANCE_KM のペア: TRANSIT → DRIVING → WALKING
  *   (徒歩 30 分超を plan に乗せたくないため、車を優先)
  *
+ * Phase 2 polish (2026-04-27): `transportMode === "public_transit_only"` の場合は
+ * DRIVING を chain から除外。距離 > WALKING_DISTANCE_KM のペアでは TRANSIT 失敗後
+ * WALKING のみ試行し、徒歩 30 分超は parseDirectionsResult で drop されるため、
+ * 結果として遠距離 place は transit_matrix から落ちて plan の選択肢から外れる
+ * （user の「公共交通機関のみ」意図と整合、Risk 2）。
+ *
  * 各モード呼び出し前に global deadline を確認し、超過していれば即 timeout で抜ける。
  * 1 つでも `ok` で返れば即 return。全モード失敗なら最後に試した結果を return。
  */
@@ -430,12 +462,17 @@ async function callDirectionsWithFallback(
   departureTime: Date,
   perModeTimeoutMs: number,
   deadlineEpochMs: number,
+  transportMode: TransportMode = "all_modes",
 ): Promise<CallResult> {
   const distanceKm = haversineKm(from, to);
-  const modes: ("TRANSIT" | "WALKING" | "DRIVING")[] =
+  const baseModes: ("TRANSIT" | "WALKING" | "DRIVING")[] =
     distanceKm <= WALKING_DISTANCE_KM
       ? ["TRANSIT", "WALKING", "DRIVING"]
       : ["TRANSIT", "DRIVING", "WALKING"];
+  const modes =
+    transportMode === "public_transit_only"
+      ? baseModes.filter((m) => m !== "DRIVING")
+      : baseModes;
 
   let lastResult: CallResult = {
     kind: "error",
@@ -480,6 +517,7 @@ export async function fetchTransitMatrix(
   const perCallTimeoutMs = Math.max(1, options.perCallTimeoutMs ?? DEFAULT_PER_CALL_TIMEOUT_MS);
   const globalDeadlineMs = Math.max(1, options.globalDeadlineMs ?? DEFAULT_GLOBAL_DEADLINE_MS);
   const distanceKm = Math.max(0, options.distanceKm ?? DEFAULT_DISTANCE_KM);
+  const transportMode: TransportMode = options.transportMode ?? "all_modes";
 
   // 締切は SDK ロードも含めて「関数呼び出し開始から」10 秒で管理する。
   // バッチ投入時と per-call timeout の両方でこの deadline を参照する。
@@ -530,6 +568,7 @@ export async function fetchTransitMatrix(
           departureTime,
           perCallTimeoutMs,
           deadlineEpochMs,
+          transportMode,
         ),
       ),
     );

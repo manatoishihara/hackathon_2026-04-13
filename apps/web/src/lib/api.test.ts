@@ -42,6 +42,7 @@ describe("postEvidencePlaces", () => {
       budget_breakdown: { lodging: 40, meal: 30, activity: 20, transit: 10 },
       start_mode: "auto",
       mode_payload: null,
+      transport_mode: "all_modes",
       participants: [],
     };
 
@@ -76,6 +77,7 @@ describe("postEvidencePlaces", () => {
         budget_breakdown: { lodging: 40, meal: 30, activity: 20, transit: 10 },
         start_mode: "auto",
         mode_payload: null,
+        transport_mode: "all_modes",
         participants: [],
       }),
     ).rejects.toBeInstanceOf(ApiError);

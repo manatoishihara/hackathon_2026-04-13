@@ -24,6 +24,8 @@ ItemType = Literal["activity", "meal", "transit", "lodging"]
 CostConfidence = Literal["verified", "estimated", "unknown"]
 TransitMode = Literal["train", "bus", "walk", "car"]
 PlanStatus = Literal["draft", "generating", "succeeded", "failed"]
+# Phase 2 polish (2026-04-27): 移動手段指定（user 選択、Plan 保存はスコープ外）。
+TransportMode = Literal["all_modes", "public_transit_only"]
 
 # Phase 2.1: ThemeKey は themes.py で単一情報源として定義（Codex Minor 5）。
 # Pydantic からは re-export して参照経路の後方互換を保つ。
@@ -169,6 +171,9 @@ class GeneratePlanRequest(_StrictBase):
     budget_breakdown: BudgetBreakdown
     start_mode: StartMode
     mode_payload: dict[str, Any] | None
+    # Phase 2 polish (2026-04-27): default 'all_modes' で後方互換確保
+    # （フロント既存 client が transport_mode 未送信でも 422 にならない、Codex Q6）。
+    transport_mode: TransportMode = "all_modes"
     participants: list[ParticipantInput]
 
     @model_validator(mode="after")
@@ -367,6 +372,7 @@ __all__ = [
     "ItemType",
     "CostConfidence",
     "TransitMode",
+    "TransportMode",
     # entities
     "BudgetBreakdown",
     "Plan",

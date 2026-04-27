@@ -102,7 +102,11 @@ export default function GeneratingPage() {
         const departureTime = new Date();
         let transitMatrix: Awaited<ReturnType<typeof fetchTransitMatrix>>["edges"] = [];
         try {
-          const result = await fetchTransitMatrix(session.places, departureTime);
+          // Phase 2 polish: session の transport_mode を fetchTransitMatrix に伝播。
+          // 'public_transit_only' のとき DRIVING fallback を抑制 + 徒歩 30 分超 edge を drop。
+          const result = await fetchTransitMatrix(session.places, departureTime, {
+            transportMode: session.transport_mode,
+          });
           transitMatrix = result.edges;
           // 全 pair 失敗 → サーバー 422 へ流さず早期エラー化（Codex review 2 Blocker 1）。
           // attempted === 0 (places 1 件以下) は transit_matrix=[] で続行（既存挙動）。

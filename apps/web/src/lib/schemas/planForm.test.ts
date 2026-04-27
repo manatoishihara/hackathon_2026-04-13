@@ -10,6 +10,8 @@ const baseValid = {
   departure_point: "新宿駅",
   budget_per_person_jpy: 30000,
   budget_breakdown: { lodging: 40, meal: 30, activity: 20, transit: 10 },
+  // Phase 2 polish: 必須化
+  transport_mode: "all_modes" as const,
   participants: [
     {
       display_name: "太郎",
@@ -138,5 +140,58 @@ describe("planFormSchema (Phase 2.1: discriminated union for start_mode)", () =>
       mode_payload: null,
     });
     expect(result.success).toBe(false);
+  });
+
+  // Phase 2 polish (2026-04-27): transport_mode（移動手段指定）
+  it("rejects when transport_mode is omitted (form must always set it)", () => {
+    // form の DEFAULT_VALUES で必ず "all_modes" がセットされるため、ここでは
+    // schema 側で省略されたら fail するのが正しい挙動。
+    const { transport_mode: _omitted, ...withoutTransport } = baseValid;
+    const result = planFormSchema.safeParse({
+      ...withoutTransport,
+      start_mode: "auto",
+      mode_payload: null,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts transport_mode='public_transit_only' explicitly", () => {
+    const result = planFormSchema.safeParse({
+      ...baseValid,
+      start_mode: "auto",
+      mode_payload: null,
+      transport_mode: "public_transit_only",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.transport_mode).toBe("public_transit_only");
+    }
+  });
+
+  it("rejects unknown transport_mode value", () => {
+    const result = planFormSchema.safeParse({
+      ...baseValid,
+      start_mode: "auto",
+      mode_payload: null,
+      transport_mode: "bicycle_only",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("transport_mode flows through anchor and theme variants", () => {
+    const anchorResult = planFormSchema.safeParse({
+      ...baseValid,
+      start_mode: "anchor",
+      mode_payload: { anchor_place_ids: ["ChIJ_one"] },
+      transport_mode: "public_transit_only",
+    });
+    expect(anchorResult.success).toBe(true);
+    const themeResult = planFormSchema.safeParse({
+      ...baseValid,
+      start_mode: "theme",
+      mode_payload: { theme: "onsen" },
+      transport_mode: "public_transit_only",
+    });
+    expect(themeResult.success).toBe(true);
   });
 });

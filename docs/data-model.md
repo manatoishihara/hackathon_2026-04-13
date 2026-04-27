@@ -187,6 +187,13 @@ export type CostConfidence = 'verified' | 'estimated' | 'unknown';
 
 export type PlanStatus = 'draft' | 'generating' | 'succeeded' | 'failed';
 
+// Phase 2 polish (2026-04-27): 移動手段指定。
+// - all_modes: フォールバック chain (TRANSIT → WALKING / DRIVING) で経路探索（既存挙動）
+// - public_transit_only: 車利用不可シナリオで DRIVING を経路から除外
+// Plan には保存しない（DB / RPC 列追加スコープ外）。GeneratePlanRequest と内部 QueryContext
+// にだけ載せ、Pack 経由で LLM プロンプトと transit fetch にだけ届ける。
+export type TransportMode = 'all_modes' | 'public_transit_only';
+
 // Phase 2.1 出発モード切替で使う theme key（テーマモードの選択肢）
 export type ThemeKey =
   | 'onsen'
@@ -299,6 +306,8 @@ export type GeneratePlanRequest = {
   budget_breakdown: BudgetBreakdown;
   start_mode: StartMode;
   mode_payload: Record<string, unknown> | null;
+  // Phase 2 polish: 移動手段指定。デフォルトは 'all_modes'（既存挙動）
+  transport_mode: TransportMode;
   participants: Omit<Participant, 'id' | 'plan_id'>[];
 };
 

@@ -1021,3 +1021,216 @@ describe("fetchTransitMatrix — fallback chain", () => {
     expect(result.stats.deadlineReached || result.stats.timedOut > 0).toBe(true);
   });
 });
+
+
+// ==============================
+// Phase 2 polish (2026-04-27): transport_mode（移動手段指定）
+// ==============================
+
+describe("parseDirectionsResult — WALKING duration upper bound (Phase 2 polish)", () => {
+  it("WALKING で duration > 30 分 → null を返して edge を drop", () => {
+    const result = {
+      routes: [
+        {
+          legs: [
+            // 1 時間 = 3600 秒、30 分上限を超える
+            { duration: { value: 3600, text: "" }, steps: [{ travel_mode: "WALKING" }] },
+          ],
+        },
+      ],
+    } as unknown as google.maps.DirectionsResult;
+    const edge = parseDirectionsResult(
+      result,
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "WALKING",
+    );
+    expect(edge).toBeNull();
+  });
+
+  it("WALKING で duration = 30 分（境界）→ edge 返却", () => {
+    const result = {
+      routes: [
+        {
+          legs: [
+            // 30 分ちょうどは drop されない（<= 30 min）
+            { duration: { value: 1800, text: "" }, steps: [{ travel_mode: "WALKING" }] },
+          ],
+        },
+      ],
+    } as unknown as google.maps.DirectionsResult;
+    const edge = parseDirectionsResult(
+      result,
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "WALKING",
+    );
+    expect(edge).not.toBeNull();
+    expect(edge!.duration_min).toBe(30);
+  });
+
+  it("WALKING で duration = 31 分（境界の直上）→ null で drop（Codex review 2 Minor 2）", () => {
+    const result = {
+      routes: [
+        {
+          legs: [
+            // 31 分 = 1860 秒、Math.round(1860 / 60) = 31 min > 30 → drop
+            { duration: { value: 1860, text: "" }, steps: [{ travel_mode: "WALKING" }] },
+          ],
+        },
+      ],
+    } as unknown as google.maps.DirectionsResult;
+    const edge = parseDirectionsResult(
+      result,
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "WALKING",
+    );
+    expect(edge).toBeNull();
+  });
+
+  it("DRIVING で duration > 30 分 → drop しない（WALKING 限定の制約）", () => {
+    const result = {
+      routes: [
+        {
+          legs: [
+            { duration: { value: 3600, text: "" }, steps: [{ travel_mode: "DRIVING" }] },
+          ],
+        },
+      ],
+    } as unknown as google.maps.DirectionsResult;
+    const edge = parseDirectionsResult(
+      result,
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "DRIVING",
+    );
+    expect(edge).not.toBeNull();
+    expect(edge!.duration_min).toBe(60);
+  });
+
+  it("TRANSIT で duration > 30 分 → drop しない", () => {
+    const result = {
+      routes: [
+        {
+          legs: [
+            {
+              duration: { value: 3600, text: "" },
+              steps: [
+                {
+                  travel_mode: "TRANSIT",
+                  transit: {
+                    line: { name: "テスト線", vehicle: { type: "HEAVY_RAIL" } },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as google.maps.DirectionsResult;
+    const edge = parseDirectionsResult(
+      result,
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
+    );
+    expect(edge).not.toBeNull();
+    expect(edge!.duration_min).toBe(60);
+  });
+});
+
+
+describe("fetchTransitMatrix — transportMode='public_transit_only'", () => {
+  beforeEach(() => {
+    _resetLoaderForTests();
+    process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY = "pk-fake";
+  });
+
+  afterEach(() => {
+    uninstallMockGoogle();
+    delete process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY;
+  });
+
+  it("public_transit_only かつ近距離 (≤ 2km): TRANSIT 失敗 → WALKING にフォールバック (DRIVING 呼ばれない)", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      if (mode === "TRANSIT") throw new Error("ZERO_RESULTS");
+      // WALKING で短い時間（30 分以下）を返す
+      return fakeResult({ durationSec: 600 });
+    });
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)], // ~0.1km
+      new Date("2026-06-01T09:00:00+09:00"),
+      { transportMode: "public_transit_only" },
+    );
+    expect(result.stats.succeeded).toBe(2);
+    expect(calls.filter((c) => c === "DRIVING")).toHaveLength(0);
+    expect(calls.filter((c) => c === "WALKING")).toHaveLength(2);
+    expect(result.edges.every((e) => e.mode === "walk")).toBe(true);
+  });
+
+  it("public_transit_only かつ遠距離 (> 2km): TRANSIT 失敗 → WALKING のみ試行 (DRIVING 呼ばれない)", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      if (mode === "TRANSIT") throw new Error("ZERO_RESULTS");
+      // WALKING で 30 分以下なので edge は parse 成功
+      return fakeResult({ durationSec: 600 });
+    });
+    // ~5km
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.045, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+      { transportMode: "public_transit_only" },
+    );
+    expect(calls.filter((c) => c === "DRIVING")).toHaveLength(0);
+    expect(calls.filter((c) => c === "WALKING")).toHaveLength(2);
+    expect(calls.filter((c) => c === "TRANSIT")).toHaveLength(2);
+  });
+
+  it("public_transit_only で TRANSIT 失敗 + WALKING > 30 分 → edge 0、DRIVING も呼ばない (Risk 2)", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      if (mode === "TRANSIT") throw new Error("ZERO_RESULTS");
+      // WALKING 結果は 1 時間 (3600 秒) → parseDirectionsResult が null を返して drop
+      return fakeResult({ durationSec: 3600 });
+    });
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.045, 139.0)], // ~5km
+      new Date("2026-06-01T09:00:00+09:00"),
+      { transportMode: "public_transit_only" },
+    );
+    expect(calls.filter((c) => c === "DRIVING")).toHaveLength(0);
+    // WALKING は呼ばれるが parse で null → callDirectionsWithTimeout は kind=error を返す
+    expect(result.stats.succeeded).toBe(0);
+    expect(result.edges).toEqual([]);
+  });
+
+  it("all_modes (default) では DRIVING も fallback chain に含まれる (regression)", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      if (mode === "TRANSIT") throw new Error("ZERO_RESULTS");
+      return fakeResult({ durationSec: 1800 });
+    });
+    // > 2km なので chain は TRANSIT → DRIVING → WALKING
+    await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.045, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+      // transportMode を渡さない = all_modes default
+    );
+    expect(calls.filter((c) => c === "DRIVING").length).toBeGreaterThan(0);
+  });
+});

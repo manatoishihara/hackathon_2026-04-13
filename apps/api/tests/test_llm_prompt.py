@@ -252,6 +252,137 @@ def test_build_user_prompt_v2_anchor_with_unknown_payload_skip(sample_pack):
 
 
 # =================================================================
+# Phase 2 polish (2026-04-27): transport_mode（移動手段指定）
+# =================================================================
+
+
+def _pack_with_transport(sample_pack, transport_mode):
+    """sample_pack の query_context.transport_mode だけ差し替え。"""
+    return sample_pack.model_copy(
+        update={
+            "query_context": sample_pack.query_context.model_copy(
+                update={"transport_mode": transport_mode}
+            )
+        }
+    )
+
+
+def test_build_user_prompt_v2_public_transit_only_includes_transport_section(sample_pack):
+    """transport_mode='public_transit_only' のとき公共交通明示の section が出る。"""
+    pack = _pack_with_transport(sample_pack, "public_transit_only")
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    assert "公共交通機関のみ" in prompt
+    assert "車を運転しない" in prompt
+
+
+def test_build_user_prompt_v2_all_modes_no_transport_section(sample_pack):
+    """transport_mode='all_modes'（default）では transport section は出ない。"""
+    pack = _pack_with_transport(sample_pack, "all_modes")
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    assert "公共交通機関のみ" not in prompt
+    assert "車を運転しない" not in prompt
+
+
+def test_build_user_prompt_v2_anchor_and_public_transit_compose_both_sections(sample_pack):
+    """anchor + public_transit_only を併用したとき、両方の section が prompt に出る。
+
+    Codex Major 2 の「合成方式」refactor で旧の早期 return 設計が落としていた組み合わせ。
+    """
+    pack = sample_pack.model_copy(
+        update={
+            "query_context": sample_pack.query_context.model_copy(
+                update={
+                    "start_mode": "anchor",
+                    "mode_payload": {"anchor_place_ids": ["P_hakone_jinja"]},
+                    "transport_mode": "public_transit_only",
+                }
+            )
+        }
+    )
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    # anchor section
+    assert "アンカー" in prompt or "必須" in prompt
+    assert "P_hakone_jinja" in prompt
+    # transport section も同時に出る（旧の早期 return では落ちていた）
+    assert "公共交通機関のみ" in prompt
+
+
+def test_build_user_prompt_v2_theme_and_public_transit_compose_both(sample_pack):
+    """theme + public_transit_only でも両方の section が出る。"""
+    pack = sample_pack.model_copy(
+        update={
+            "query_context": sample_pack.query_context.model_copy(
+                update={
+                    "start_mode": "theme",
+                    "mode_payload": {"theme": "onsen"},
+                    "transport_mode": "public_transit_only",
+                }
+            )
+        }
+    )
+    prompt = build_user_prompt(pack, previous_issues=[], version="v2.0.0")
+    assert "テーマ" in prompt
+    assert "温泉" in prompt
+    assert "公共交通機関のみ" in prompt
+
+
+def test_build_user_prompt_v2_mode_context_section_order(sample_pack):
+    """Codex review 2 Minor 1: anchor + theme + transport の合成順序を固定検証。
+
+    `_build_mode_context_md` は anchor → theme → transport の順で連結する。
+    anchor と theme は discriminated union で同時には出ないので、anchor + transport
+    と theme + transport の各順序を assert。
+
+    Codex review 3 Minor 1 修正: 「P_anchor_test」「温泉」のような汎用語で find する
+    と query_context_json / participants wishes 側にもヒットして偽陽性になる。
+    mode_context_md 特有の section 見出し文字列（query_context_json には現れない
+    日本語フレーズ）で順序を判定する。
+    """
+    # 各 section の section 見出し（mode_context_md 専用フレーズ）
+    ANCHOR_HEADER = "アンカー（必須スポット）"
+    THEME_HEADER = "テーマ:"
+    TRANSPORT_HEADER = "移動手段:"
+
+    # anchor + transport
+    pack_anchor = sample_pack.model_copy(
+        update={
+            "query_context": sample_pack.query_context.model_copy(
+                update={
+                    "start_mode": "anchor",
+                    "mode_payload": {"anchor_place_ids": ["P_anchor_test"]},
+                    "transport_mode": "public_transit_only",
+                }
+            )
+        }
+    )
+    p1 = build_user_prompt(pack_anchor, previous_issues=[], version="v2.0.0")
+    anchor_idx = p1.find(ANCHOR_HEADER)
+    transport_idx = p1.find(TRANSPORT_HEADER)
+    assert anchor_idx >= 0, f"anchor section header {ANCHOR_HEADER!r} がない"
+    assert transport_idx >= 0, f"transport section header {TRANSPORT_HEADER!r} がない"
+    assert anchor_idx < transport_idx, "anchor section が transport より前に来るはず"
+
+    # theme + transport
+    pack_theme = sample_pack.model_copy(
+        update={
+            "query_context": sample_pack.query_context.model_copy(
+                update={
+                    "start_mode": "theme",
+                    "mode_payload": {"theme": "onsen"},
+                    "transport_mode": "public_transit_only",
+                }
+            )
+        }
+    )
+    p2 = build_user_prompt(pack_theme, previous_issues=[], version="v2.0.0")
+    theme_idx = p2.find(THEME_HEADER)
+    transport_idx = p2.find(TRANSPORT_HEADER)
+    assert theme_idx >= 0, f"theme section header {THEME_HEADER!r} がない"
+    assert transport_idx >= 0, f"transport section header {TRANSPORT_HEADER!r} がない"
+    assert theme_idx < transport_idx, "theme section が transport より前に来るはず"
+
+
+# =================================================================
 # Phase 2.2: 予算配分の制約化（_build_budget_context_md）
 # =================================================================
 
