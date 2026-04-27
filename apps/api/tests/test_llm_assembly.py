@@ -1345,3 +1345,103 @@ def test_find_eligible_alternate_tier3_emits_warning_when_filtered_out(caplog):
     assert any(
         "tier3 filtered out" in rec.getMessage() for rec in caplog.records
     ), [rec.getMessage() for rec in caplog.records]
+
+
+# ==============================
+# Phase 2 polish v4: _resolve_fuzzy_place_id (本番 Run 13d 短縮ハルシ救済)
+# ==============================
+
+
+def test_resolve_fuzzy_place_id_catches_prefix_duplication():
+    """Run 13d で観測された「先頭 J 1 文字余分」ハルシを救済できる。
+
+    LLM 出力: ChIJJE69IgAHnHWARDJVsAgxtjCQ (28 chars)
+    Pack 正解: ChIJE69IgAHnHWARDJVsAgxtjCQ (27 chars)
+    """
+    from src.llm.assembly import _resolve_fuzzy_place_id
+
+    pack_id = "ChIJE69IgAHnHWARDJVsAgxtjCQ"
+    places_by_id = {
+        pack_id: object(),  # value は使われない
+        "ChIJUnrelatedDifferentPlaceXYZ123": object(),
+    }
+    llm_id = "ChIJJE69IgAHnHWARDJVsAgxtjCQ"  # 頭の J 余分
+    assert _resolve_fuzzy_place_id(llm_id, places_by_id) == pack_id
+
+
+def test_resolve_fuzzy_place_id_returns_none_when_unique_match_absent():
+    """全く似ていない ID では None を返す (false positive 防止)。"""
+    from src.llm.assembly import _resolve_fuzzy_place_id
+
+    places_by_id = {"ChIJabc123def456ghi789jkl012": object()}
+    assert _resolve_fuzzy_place_id("CompletelyDifferent_XYZ", places_by_id) is None
+
+
+def test_resolve_fuzzy_place_id_returns_none_when_ambiguous():
+    """複数の pack ID に同程度マッチするときは救済せず None (誤 canonical 化防止)。"""
+    from src.llm.assembly import _resolve_fuzzy_place_id
+
+    places_by_id = {
+        "ChIJN1t_tDeuEmsRUsoyG83frY4": object(),
+        "ChIJN2t_tDeuEmsRUsoyG83frY4": object(),  # 1 文字違い
+    }
+    # LLM 出力が両方に等距離 → ambiguous → None
+    llm_id = "ChIJN3t_tDeuEmsRUsoyG83frY4"
+    assert _resolve_fuzzy_place_id(llm_id, places_by_id) is None
+
+
+def test_resolve_fuzzy_place_id_rejects_large_length_diff():
+    """長さ差が FUZZY_MAX_LEN_DIFF=2 を超えるなら ratio 高くても救済しない。"""
+    from src.llm.assembly import _resolve_fuzzy_place_id
+
+    pack_id = "ChIJabc"  # 7 chars
+    places_by_id = {pack_id: object()}
+    llm_id = "ChIJabcdefghij"  # 14 chars (差 7)
+    assert _resolve_fuzzy_place_id(llm_id, places_by_id) is None
+
+
+def test_resolve_fuzzy_place_id_requires_chij_prefix():
+    """Codex review 1 Minor 1: ChIJ prefix を持たない LLM 出力は救済しない (false positive 抑制)。"""
+    from src.llm.assembly import _resolve_fuzzy_place_id
+
+    # pack 側は正しい ChIJ prefix
+    pack_id = "ChIJOriginalAttractionXYZ123"
+    places_by_id = {pack_id: object()}
+    # LLM が ChIJ prefix を失った出力 → 救済しない
+    llm_id = "XYZJOriginalAttractionXYZ123"
+    assert _resolve_fuzzy_place_id(llm_id, places_by_id) is None
+
+
+def test_assemble_plan_resolves_fuzzy_match_in_assembly(caplog):
+    """assembly が unknown place_id 出力を fuzzy match で救済して plan 生成成功する。"""
+    import logging
+
+    p1 = _place("ChIJOriginalAttraction001", category=["tourist_attraction"])
+    p2 = _place("ChIJOriginalRestaurant002", category=["restaurant"])
+    edges = [_edge("ChIJOriginalAttraction001", "ChIJOriginalRestaurant002"),
+             _edge("ChIJOriginalRestaurant002", "ChIJOriginalAttraction001")]
+    pack = _make_pack(places=[p1, p2], edges=edges, total_days=1)
+    # LLM が頭に余分な J を付けたケース (Run 13d パターン)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_morning",
+                place_id="ChIJJOriginalAttraction001",  # 頭に J 余分
+                rationale="朝の観光地でゆっくり過ごす",
+            ),
+            LlmSlotAssignment(
+                slot_id="day1_lunch",
+                place_id="ChIJOriginalRestaurant002",  # 正解
+                rationale="人気のレストランでランチ",
+            ),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    # 救済されてエラーなく組み上がる
+    final_pids = [it.place_id for it in result.items if it.place_id is not None]
+    assert "ChIJOriginalAttraction001" in final_pids
+    # warning log で fuzzy match 動作確認
+    assert any(
+        "fuzzy-matched place_id" in rec.getMessage() for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
