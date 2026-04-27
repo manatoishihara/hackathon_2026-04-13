@@ -229,10 +229,28 @@ export function AnchorPicker({ value, onChange }: Props) {
           aria-labelledby="anchor_search_label"
           aria-hidden={isFull ? "true" : undefined}
           data-testid="anchor-autocomplete-host"
+          // PlaceAutocompleteElement は shadow DOM 内で Material 3 をデフォルト採用し、
+          // OS の prefers-color-scheme=dark で暗い surface に切り替わる。CSS custom
+          // properties を継承させて、他の <Input /> （bg-card）と背景・テキスト・
+          // 枠線・focus 色を blue hour に揃える。
+          style={
+            {
+              "--gmp-mat-color-surface": "var(--color-surface)",
+              "--gmp-mat-color-on-surface": "var(--color-text-primary)",
+              "--gmp-mat-color-on-surface-variant":
+                "var(--color-text-tertiary)",
+              "--gmp-mat-color-outline": "var(--color-border)",
+              "--gmp-mat-color-outline-decorative": "var(--color-border)",
+              "--gmp-mat-color-primary": "var(--color-primary)",
+              "--gmp-mat-color-secondary-container":
+                "color-mix(in oklab, var(--color-primary) 8%, var(--color-surface))",
+              "--gmp-mat-color-on-secondary-container":
+                "var(--color-text-primary)",
+            } as React.CSSProperties
+          }
           className={[
-            // PlaceAutocompleteElement は shadow DOM。外側ラッパで blue hour テーマと
-            // 整合する border / radius / 背景を当てる。Element 自身の input 高さは
-            // shadow DOM 内 CSS で制御されるが、外枠と font は親 CSS が継承可能。
+            // 外枠と背景は Tailwind で他 input と揃える（shadow DOM 内は上記 custom
+            // property で継承）。focus-within で枠線を Deep Navy に。
             "rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-surface)]",
             "transition-colors focus-within:border-[color:var(--color-primary)]",
             isFull ? "pointer-events-none opacity-50" : "",
