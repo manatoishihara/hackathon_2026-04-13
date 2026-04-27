@@ -314,3 +314,53 @@ def test_generate_plan_request_accepts_multiple_participants():
         ],
     )
     assert len(req.participants) == 3
+
+
+# ==============================
+# Phase 2 polish (2026-04-27, A 案撤回): transport_mode の deprecated 受信互換
+# ==============================
+# 本番 Run 13 で「公共交通機関のみ」モードが NoFeasibleTransitError を誘発したため
+# transport_mode toggle 自体を撤回。frontend (TS) は field を完全削除し、新 client は
+# 送信しないが、開きっぱなしタブの旧 client が引き続き送ってきても 400 で reject しない
+# よう、Pydantic 側は default=None の deprecated field として残置している。
+# 本セクションの 2 件で「受信は許容、内部処理は無視」の振る舞いを担保する。
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_generate_plan_request_default_transport_mode_is_none():
+    """transport_mode 省略時の default は None（旧 client の互換用 placeholder）。"""
+    req = GeneratePlanRequest(
+        **_base_request_kwargs(), start_mode="auto", mode_payload=None
+    )
+    assert req.transport_mode is None
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_generate_plan_request_accepts_deprecated_transport_mode():
+    """旧 client が transport_mode='all_modes' / 'public_transit_only' を送ってきても
+    ValidationError なく parse 成功（受信 OK、内部処理は QueryContext へ伝播しない）。"""
+    for legacy_value in ("all_modes", "public_transit_only"):
+        req = GeneratePlanRequest(
+            **_base_request_kwargs(),
+            start_mode="auto",
+            mode_payload=None,
+            transport_mode=legacy_value,
+        )
+        # 受信値はそのまま field に保持されるが、内部 (builder._build_query_context) は
+        # この値を使わない。pack/prompt 配線は完全削除済み。
+        assert req.transport_mode == legacy_value
+
+
+def test_generate_plan_request_rejects_unknown_transport_mode():
+    """deprecated でも Literal 型の値域は維持する（未知値はバリデーションで弾く）。
+
+    deprecated field でも Pydantic はバリデーションを通す。`req.transport_mode` への
+    属性アクセスは行わないので DeprecationWarning は出ない。
+    """
+    with pytest.raises(ValidationError):
+        GeneratePlanRequest(
+            **_base_request_kwargs(),
+            start_mode="auto",
+            mode_payload=None,
+            transport_mode="walk_only",  # type: ignore[arg-type]
+        )

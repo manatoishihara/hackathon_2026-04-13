@@ -24,7 +24,12 @@ ItemType = Literal["activity", "meal", "transit", "lodging"]
 CostConfidence = Literal["verified", "estimated", "unknown"]
 TransitMode = Literal["train", "bus", "walk", "car"]
 PlanStatus = Literal["draft", "generating", "succeeded", "failed"]
-# Phase 2 polish (2026-04-27): 移動手段指定（user 選択、Plan 保存はスコープ外）。
+# Phase 2 polish (2026-04-27): 移動手段指定の Literal 型。
+# **deprecated since 2026-04-27**: 本番 Run 13 で「公共交通機関のみ」モードが
+# `NoFeasibleTransitError` を誘発、UX 上もタクシー前提でこの toggle 自体に意味がないと判断。
+# `GeneratePlanRequest.transport_mode` の deprecated field の type 注釈用にのみ残置。
+# 内部処理（builder / pack / prompt）からは配線を完全削除済み。
+# 次回 cleanup release で field と Literal 型を一緒に削除する想定。
 TransportMode = Literal["all_modes", "public_transit_only"]
 
 # Phase 2.1: ThemeKey は themes.py で単一情報源として定義（Codex Minor 5）。
@@ -171,9 +176,16 @@ class GeneratePlanRequest(_StrictBase):
     budget_breakdown: BudgetBreakdown
     start_mode: StartMode
     mode_payload: dict[str, Any] | None
-    # Phase 2 polish (2026-04-27): default 'all_modes' で後方互換確保
-    # （フロント既存 client が transport_mode 未送信でも 422 にならない、Codex Q6）。
-    transport_mode: TransportMode = "all_modes"
+    # Phase 2 polish (2026-04-27): **deprecated**。旧 client 互換のため受信は許容するが
+    # 内部で無視される。本番 Run 13 で「公共交通機関のみ」モードが NoFeasibleTransitError を
+    # 誘発したため A 案で撤回（タクシー前提で toggle の意味がない）。default は None にし、
+    # 旧値（"all_modes" / "public_transit_only"）を送ってきた client も `extra="forbid"` で
+    # 400 reject されないようにする。次回 cleanup release で field 自体を削除予定。
+    transport_mode: TransportMode | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated since 2026-04-27. Field is accepted for backward compatibility but ignored.",
+    )
     participants: list[ParticipantInput]
 
     @model_validator(mode="after")

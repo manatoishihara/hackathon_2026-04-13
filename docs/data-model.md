@@ -187,12 +187,15 @@ export type CostConfidence = 'verified' | 'estimated' | 'unknown';
 
 export type PlanStatus = 'draft' | 'generating' | 'succeeded' | 'failed';
 
-// Phase 2 polish (2026-04-27): 移動手段指定。
-// - all_modes: フォールバック chain (TRANSIT → WALKING / DRIVING) で経路探索（既存挙動）
-// - public_transit_only: 車利用不可シナリオで DRIVING を経路から除外
-// Plan には保存しない（DB / RPC 列追加スコープ外）。GeneratePlanRequest と内部 QueryContext
-// にだけ載せ、Pack 経由で LLM プロンプトと transit fetch にだけ届ける。
-export type TransportMode = 'all_modes' | 'public_transit_only';
+// Phase 2 polish (2026-04-27) で導入した TransportMode は本番 Run 13 で
+// 「公共交通機関のみ × 徒歩前提地方」で 422 を量産することが判明したため
+// 同日中に撤回。toggle UI 自体を削除し、`apps/web/src/lib/transit.ts` の
+// `callDirectionsWithFallback` で **距離分岐 fallback chain** に統一:
+// - 距離 ≤ 2km: TRANSIT → WALKING → DRIVING（徒歩 30 分以内で plan 自然）
+// - 距離 > 2km: TRANSIT → DRIVING → WALKING（車を優先、徒歩は最後の砦）
+// ただし Pydantic (apps/api/src/schemas/__init__.py) は backward compat のため
+// `transport_mode` field を deprecated として残しているので、TS と Pydantic の
+// 間に意図的な非対称が存在する点に注意。
 
 // Phase 2.1 出発モード切替で使う theme key（テーマモードの選択肢）
 export type ThemeKey =
@@ -306,8 +309,6 @@ export type GeneratePlanRequest = {
   budget_breakdown: BudgetBreakdown;
   start_mode: StartMode;
   mode_payload: Record<string, unknown> | null;
-  // Phase 2 polish: 移動手段指定。デフォルトは 'all_modes'（既存挙動）
-  transport_mode: TransportMode;
   participants: Omit<Participant, 'id' | 'plan_id'>[];
 };
 

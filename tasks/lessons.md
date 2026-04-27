@@ -27,6 +27,43 @@
 
 ## ログ
 
+## 2026-04-27: Run 13 失敗を受けて A 案 (transport_mode toggle 撤回) を 3 並列 sub-agent + Codex review 2 サイクルで実装完了
+- **状況**: 下の Run 13 失敗エントリを受けて user 判断: タクシー利用可の前提で「公共交通機関のみ」モードに本質的な意味がない、user 指定で plan 失敗は UX 最悪 → **A 案 (toggle 自体を削除、内部は常に距離分岐 fallback chain に統一)**
+- **設計 (Codex review 1 反映済 Major 1)**: 即時削除は旧 client 400 reject を量産するため **段階的 deprecation** で対応:
+  - Pydantic 側: `transport_mode: TransportMode | None = Field(default=None, deprecated=True)` で受信は許容、内部処理は無視
+  - TS 側: `TransportMode` 型 + `GeneratePlanRequest.transport_mode` を完全削除 (新 client が送らないように)
+  - QueryContext / pack / prompt から transport_mode 配線完全削除
+  - `parseDirectionsResult` の WALKING > 30min hard drop 撤廃 (草津のような徒歩 30〜45 分が通常の観光地で transit_matrix を確保)
+- **ブランチ**: `fix/remove-transport-mode-toggle` (develop から派生)
+- **実装手段**: 3 並列 sub-agent (Backend Python / Frontend TS / Docs) で削除作業を分散実行 → 全 ✅ 完了
+  - Agent 1 (Backend): Pydantic deprecated field 残置 + QueryContext / pack / prompt 配線削除 + test 5 件削除 + backward compat test 3 件追加
+  - Agent 2 (Frontend): shared-types / 全 UI / store / transit.ts から完全削除 + WALKING 30 min hard drop 撤廃 + test 13 件削除 + documenting test 1 件追加 + `TransportModeSelector.tsx` + `.test.tsx` ファイル削除
+  - Agent 3 (docs): data-model.md の TransportMode 型節を撤回注記に置換、TS ↔ Pydantic 意図的非対称を明記
+- **Codex review 2 で発覚した Major 1 (即時 fix 済)**: 旧版で `evidence_pack_sessions` テーブルに保存済みの pack に `query_context.transport_mode` field が含まれており、新版で `_PackBase` の `extra="forbid"` で復元失敗 → 404。`QueryContext` のみ `model_config = ConfigDict(extra="ignore")` を追加して旧 pack を黙って読み捨てる + regression test 1 件追加
+- **検証結果**: API **403 PASS** (既知 env 依存 2 件 fail) / Web **159 PASS** (0 fail) / tsc clean / build PASS / secret preflight 0 hit
+- **学び (次に同種パターンが出たら昇格候補)**:
+  - **Pydantic schema から field を削除する前に段階的 deprecation 期間を 1 release 設ける**: `Field(default=None, deprecated=True)` で field 自体は残し、内部処理側で無視する形が最小コストの互換維持パターン (CLAUDE rule 昇格候補: `.claude/rules/api-rules.md`)
+  - **キャッシュレイヤー (evidence_pack_sessions 等) の Pydantic 復元は schema 変更時の旧データ復元失敗を検討する必要がある**: TTL 15 分でも deploy 直後の旧 pack 復元は 404 を生む。`model_config = ConfigDict(extra="ignore")` を一時的に該当 model のみ適用して旧 field を黙って読み捨てる対処が必要
+  - **3 並列 sub-agent パターンは「機能撤回」のような大量削除作業に特に有効**: Backend / Frontend / Docs は disjoint なので衝突なし、~5 分で並列実行完了
+- 関連 commits 想定: `fix/remove-transport-mode-toggle` ブランチ、user 手動 commit + push 待ち
+
+## 2026-04-27: 本番 Run 13 で **`public_transit_only` × 草津 4 日 × アンカー 2 件** で 422 連発 — 公共交通機関のみモードのカバレッジ不足
+- **状況**: Phase 2 polish 全 deploy 後、user 入力 `草津 / 11/21〜11/24 (4 日) / 80,000 円 / アンカー: 漫画堂 + 湯畑 / 公共交通機関のみ / 参加者 2 名` で本番 Playwright verify。フォーム送信 → `/api/evidence/places ✅` → `/plan/<UUID>/generating` 遷移 ✅ → `fetchTransitMatrix` ✅ → **`/api/plans/generate → 422 "plan generation failed after retries"`**。画面に「離陸できませんでした」エラー表示
+- **想定される根本原因（強→弱）**:
+  1. **公共交通機関のみ × 草津エリアの致命的相性**: 草津温泉は JR 吾妻線「長野原草津口駅」からバス連絡のみで JR 駅自体が無い。フロント `callDirectionsWithFallback` が `transport_mode='public_transit_only'` で `DRIVING` を chain から除外 → 多くの観光地ペアで TRANSIT が `ZERO_RESULTS`、WALKING も 30 分超で `parseDirectionsResult` が null drop → **`transit_matrix` がスカスカ**。assembler が `_find_alternate_place` で代替探しても候補枯渇 → `NoFeasibleTransitError` を 4 attempts (gpt-4.1 × 3 + gpt-4.1-mini × 1) 連発で 422
+  2. **4 日 ≒ 18 slot × アンカー 2 件 × 限定 places 数の組合せ過酷**: 重複防止の `exclude_place_ids` が transit 制約と相互作用して候補が早期枯渇する可能性
+  3. **楽天 env 未投入 → lodging 欠落**: 3 泊分の lodging slot を Google Places 由来の店で埋める必要、ただし fallback は assembler 内で動く設計なので決定的原因にはならない想定
+- **学んだこと（次の polish に活かす）**:
+  - `transport_mode='public_transit_only'` は **都市圏（東京、大阪、京都等）でのみ実用的**。地方温泉地（草津、湯布院、登別等）では JR 駅から数 km 離れる + バス本数が薄い + WALKING 30 分上限で edge が取れない、という 3 重苦で transit_matrix が組めない
+  - 対処方針候補:
+    - (a) 公共交通モード時に WALKING 上限を 30 分 → 60 分 / 90 分に緩める（地方の徒歩許容範囲を拡大、ただし plan 体験が悪化）
+    - (b) 公共交通モード時に DRIVING を完全除外せず「タクシー扱い」で残し、UI で「公共交通機関 + タクシー」と表記する
+    - (c) **行き先エリアによって UI で「公共交通機関のみは都市部推奨」の hint を出す**（地方は「車も使う」誘導）
+    - (d) 公共交通モード時に Maps Directions の `TransitMode.RAIL`/`BUS` を細分化して、TRANSIT の zero results 時に `TransitMode.BUS` 単独 retry する
+  - 実装着手前に **Render Live tail でアタックプラン別の `[INFO] LLM attempt N` log** を読み、`NoFeasibleTransitError` が支配的か `unknown_place_id` ハルシネーション再発か切り分けるのが先決
+- **redo 計画**: 同フォーム値で `transport_mode = 車も使う (all_modes)` に切替えた Run 13b で切り分け → all_modes で通れば仮説 1 確定 → 上記 (c) 都市部推奨 hint を Phase 3 polish 候補に昇格、(a)/(b)/(d) は plan で評価
+- 次に同種失敗が出たら `.claude/rules/llm-rules.md` 昇格候補（地理的制約と transit 入手可能性の相互作用は LLM 側ではなく Pack 構築側で守る）
+
 ## 2026-04-27: Phase 2 polish の実装完了 — Codex review 2 で発覚した「defense-in-depth の要素削除が隣接参照の整合性を壊す」設計バグ
 - 状況: Phase 2 polish の 3 課題 (A 重複防止 / B 楽天 env / C transport_mode) を 1 ブランチ + 3 commits 構成で実装完了。Codex review 1 (計画段階、Blocker 2 / Major 3 / Minor 2 全反映) → 実装 → Codex review 2 (実装後、**Critical 0 / Major 1 / Minor 3**) → Major + Minor 1, 2 反映 → Codex review 3 (**Blocker 0 → OK to commit**) の 3 サイクルで詰めた。最終 API 404 PASS / Web 175 PASS / tsc clean / build PASS / secret preflight 0 hit
 - **Codex review 2 で発覚した Major 1**（採用設計には含まれていなかった見落とし）:

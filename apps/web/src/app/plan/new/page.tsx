@@ -30,7 +30,6 @@ import { DateRangePicker } from "@/components/DateRangePicker";
 import { ModeSelector } from "@/components/ModeSelector";
 import { ParticipantTabs } from "@/components/ParticipantTabs";
 import { ThemePicker } from "@/components/ThemePicker";
-import { TransportModeSelector } from "@/components/TransportModeSelector";
 import { StepProgressRunway } from "@/components/plan-new/StepProgressRunway";
 import { useGenerationSessionStore } from "@/stores/generationSessionStore";
 
@@ -53,8 +52,6 @@ const DEFAULT_VALUES: PlanFormValues = {
   budget_breakdown: { lodging: 40, meal: 30, activity: 20, transit: 10 },
   start_mode: "auto",
   mode_payload: null,
-  // Phase 2 polish (2026-04-27): 移動手段デフォルトは 'all_modes'（既存挙動互換）
-  transport_mode: "all_modes",
   participants: [
     {
       display_name: "",
@@ -279,7 +276,6 @@ export default function NewPlanPage() {
         plan_id: planId,
         evidence_pack_id: evidenceResponse.evidence_pack_id,
         places: evidenceResponse.places,
-        transport_mode: values.transport_mode,
         createdAt: Date.now(),
       });
 
@@ -459,26 +455,6 @@ export default function NewPlanPage() {
               <ThemePicker value={currentTheme} onChange={handleThemeChange} />
             </div>
           ) : null}
-        </section>
-
-        <section className="flex flex-col gap-3">
-          <h2
-            id="transport-mode-heading"
-            className="text-sm font-semibold text-[color:var(--color-text-secondary)]"
-          >
-            移動手段
-          </h2>
-          <Controller
-            control={control}
-            name="transport_mode"
-            render={({ field }) => (
-              <TransportModeSelector
-                value={field.value}
-                onChange={field.onChange}
-                ariaLabelledBy="transport-mode-heading"
-              />
-            )}
-          />
         </section>
 
         <section className="flex flex-col gap-3">

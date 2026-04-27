@@ -248,6 +248,40 @@ def test_load_pack_returns_none_when_pack_dict_fails_validation(mock_factory):
 
 
 @patch("src.evidence.cache.get_supabase_client")
+def test_load_pack_handles_legacy_pack_with_transport_mode_in_query_context(mock_factory):
+    """A 案撤回 review 2 Major 1 fix の regression test。
+
+    旧版 (Phase 2 polish C) で `evidence_pack_sessions` に保存された pack の
+    `query_context.transport_mode` field を新版で復元する時、QueryContext の
+    `extra="ignore"` により黙って読み捨てて成功することを確認。
+    fix がないと `extra="forbid"` で ValidationError → load_pack が None 返却 → 404。
+    """
+    client, table = _chain_mock()
+    mock_factory.return_value = client
+
+    future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    pack = _sample_pack()
+    pack_dict = pack.model_dump(mode="json")
+    # 旧版で保存された pack を simulate: query_context に transport_mode を含める
+    pack_dict["query_context"]["transport_mode"] = "all_modes"
+    table.execute.return_value = MagicMock(
+        data=[
+            {
+                "owner_session_id": "owner-1",
+                "pack": pack_dict,
+                "expires_at": future,
+            }
+        ]
+    )
+
+    result = load_pack("some-id", owner_session_id="owner-1")
+    assert result is not None  # fix が無いと None になる
+    assert result.query_context.region == "箱根"
+    # transport_mode は読み捨てられているので QueryContext に残らない (extra="ignore" の挙動)
+    assert not hasattr(result.query_context, "transport_mode")
+
+
+@patch("src.evidence.cache.get_supabase_client")
 def test_load_pack_returns_none_when_expires_at_is_null(mock_factory):
     """expires_at が欠損（None）している破損レコードでも AttributeError を raise しない。"""
     client, table = _chain_mock()
