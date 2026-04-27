@@ -27,6 +27,20 @@
 
 ## ログ
 
+## 2026-04-27: Flask デフォルト logger は WARNING 以上のみ → 本番デバッグ視認性ゼロ問題（chore/api-logging-config で解消）
+- 状況: 本番 Run 9 で `/api/plans/generate → 422` が再現したあと、Render Live tail を確認すると **アクセスログ (gunicorn `--access-logfile -`) は流れているが、Python の `logger.info()` 出力が一切ない**。具体的には `apps/api/src/llm/generator.py:290` の `logger.info("LLM attempt %d produced %d validation issues, retrying")` や、`apps/api/src/llm/generator.py:270` の `logger.info("LLM attempt %d assembly error (kind=%s)")` が **3 retry 分流れているはずなのに 0 行**。validator がどの IssueKind で reject しているか、構造的に見えない
+- 真因: `apps/api/src/app.py` で **`logging.basicConfig()` を呼んでいなかった**ため、Flask の root logger は default level `WARNING` のまま。`logger = logging.getLogger(__name__)` で取得した logger も親 (root) の level に従うので、`logger.info(...)` は **silently discarded** される。gunicorn は Python logging の自動設定をしない（access_log は別系統で gunicorn 自身の logger 経由で stderr に流れる）
+- 学び:
+  - **Flask + gunicorn 構成で `logging.basicConfig()` を呼ばないのは「default で WARNING 以上のみ」という落とし穴**。`.claude/rules/api-rules.md`「ロギング」節は「`print` を使うな、`logging` モジュール」「外部 API 呼び出しは必ず `INFO` でログ」と書いているが、**実際に INFO が出力されるための basicConfig 設定がなかった**。ルールと設定の不整合
+  - **Flask debug mode は app.logger だけ INFO 化する** が、`apps/api/src/llm/generator.py` のように `logger = logging.getLogger(__name__)` で取得した module-level logger は app.logger とは別系統なので影響を受けない。production gunicorn では debug mode がそもそも off なので意味なし
+  - **本番デバッグの視認性は INFO log を流すかで決まる**。validator が 422 で reject するルートを通っても、retry 詳細が log に出ない＝何が悪かったか調べようがない＝本番デバッグ不能
+  - **本来は Phase 1.10 deploy preflight checklist に「Python logging 設定が production で有効か」を入れるべき**。今回は本番で 422 が出てから初めて気づいた、本来は deploy 前 verify で「INFO log が Render Live tail に流れる」ことを確認すべきだった
+- 解決策: `apps/api/src/app.py` 冒頭で `logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format=...)` を呼ぶ。`LOG_LEVEL` env で本番 INFO / test WARNING を切り替え可。これにより Render Live tail に `logger.info` が流れ、422 の真因（IssueKind 別 retry log）が見えるようになる
+- ルール:
+  - **新規 Flask アプリの最初の commit で `logging.basicConfig()` を必ず明示する**。`.claude/rules/api-rules.md` 「ロギング」節を「`logging.basicConfig(level=INFO)` を `create_app()` の前に呼ぶ」に強化候補
+  - **本番 deploy 前に Render Live tail で「INFO log が出る」ことを smoke test**（healthz だけでは不十分、validator や generator のような application logger が出力されることを確認）
+- → 1 回目だが「ルールと設定の不整合」は他にもありそう（CORS / MAX_CONTENT_LENGTH / MAX_RETRIES 等）。次セッションで `.claude/rules/api-rules.md` 全項目について「設定が実際に有効か」をチェック list 化する候補
+
 ## 2026-04-27: ローカル verify で「transit fallback fix は完璧、ただし 422 は別問題」と判明（仮説の修正）
 - 状況: 同日完了の transit fallback fix を `pnpm dev` + Playwright で `/plan/new` 提出 verify。`transit-debug` 仕掛けの console.log で stats / mode breakdown / duration 統計を取得
 - 観測値（箱根 / 1 泊 2 日 / auto モード / 30,000円 budget）:

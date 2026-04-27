@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 
 from dotenv import find_dotenv, load_dotenv
@@ -12,6 +13,15 @@ from werkzeug.exceptions import HTTPException
 # 本番（Render 等）では環境変数が直接注入されるので override=False で上書きしない。
 load_dotenv(find_dotenv(".env", usecwd=True), override=False)
 load_dotenv(find_dotenv(".env.local", usecwd=True), override=True)
+
+# Python logging の出力先を gunicorn / flask run 経由で stderr に流す。
+# `LOG_LEVEL` env で上書き可（本番デフォルト INFO、test で WARNING に絞りたい時用）。
+# Flask デフォルトは WARNING 以上のみ。INFO の logger.info を Render Live tail で
+# 拾えないと validator/generator の retry 状況がデバッグできないため明示設定する。
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 
 _DEFAULT_CORS_ORIGINS = ["http://localhost:3000"]
