@@ -27,6 +27,35 @@
 
 ## ログ
 
+## 2026-04-28: Phase 2 polish v4 実装 + 本番 Run 13e で別パターンの 422 再発 — 「Codex 指摘の false positive 抑制が最頻ハルシパターンを逆に除外する」教訓
+- **状況**: 本番 Run 13d (草津 4 日 / 80,000 円) の 422 真因 (pack 12 places で 4 日 19 slot に対し重複防止詰み + gpt-4.1 の `ChIJJ` 短縮ハルシ) を v4 で fix:
+  - **A**: `max_places_for(total_days)` で pack cap 動的化 (4 日 = 22)、`_bucket_quota` 4+ 日拡張、`fill_threshold = cap` で bucket 偏り時も buffer 維持
+  - **C**: assembly に `_resolve_fuzzy_place_id` 追加 (SequenceMatcher.ratio ≥ 0.95 / len_diff ≤ 2 / **`ChIJ` prefix 必須** / unique-match)
+- **Codex review 1+2 サイクル**: Major 3 (fill_threshold cap-3 buffer 消失 / quota contract 不一致 / docs drift) + Minor 1 (`ChIJ` prefix guard で false positive 抑制) を全反映、Blocker 0 認定 → push → 本番 deploy
+- **本番 Run 13e (同条件再現) 失敗の breakdown**:
+  - attempt 1: `outside_opening_hours` (草津店舗が **2026-11-22 日曜日** に定休、新パターン)
+  - attempt 2: `unknown_place_id` `ChIHhY2RO4...` (LLM が `ChIJh` を `ChIH` に typo)
+  - attempt 3: `unknown_place_id` `ChIhY2RO4...` (`ChIJh` を `ChIh` に typo)
+  - attempt 4: `unknown_transit_edge` (重複防止 swap 連発で候補枯渇、`total_places=17 / used=9`)
+- **致命的発見 1 (重要、ルール昇格候補)**: **Codex review 1 Minor 1 で追加した `ChIJ` prefix guard が裏目に出た**。
+  - guard の意図: 「ChIJ 以外で始まる ID を fuzzy 救済から除外し false positive 抑制」
+  - 実害: gpt-4.1 の最頻ハルシパターンは `ChIJ` → `ChIH` / `ChIh` (J を H or h に typo) で、これが **guard で除外されて救済されない**
+  - 教訓: **「false positive 抑制 guard」を入れる前に、実際の本番 typo パターンを先に観測すべき**。Codex 指摘の理論的安全性 (false positive 0%) と本番 attack surface (実際の typo パターン) が乖離していた
+  - 本来の意図 (false positive 抑制) は unique-match + ratio 0.95 + len_diff ≤ 2 で十分達成されているので、prefix guard 自体不要だった
+- **致命的発見 2**: 構造的 pack 不足。草津エリアの Google Places search 結果が薄く、`max_places_for(4)=22` に対し pack=17 で停止 (5 places 不足、search 候補絶対量不足)。`fill_threshold=cap` でも leftover_by_bucket が空なら補填不能
+  - 教訓: **pack cap を上げても search 結果の絶対量が制約**。地方エリアは Google Places の retrievable 候補が少ない傾向、pack 拡張だけで詰みは解消しない
+- **致命的発見 3**: 4 日 plan の lodging slot=3 + 草津 lodging 候補薄 で構造的詰み。重複完全禁止前提では「19 slot を 17 places で埋める」が原理的に不可能
+  - 教訓: **「重複完全禁止」は MVP の自然な要件だが、4+ 日 plan + 地方エリアでは緩和必要**。candidate options:
+    - day-scoped duplicate prevention (同日内のみ unique、日跨ぎ許容)
+    - lodging 連泊許容 (4 日 plan で 1 連泊して lodging slot を 2 に)
+    - search keyword 大幅拡張 (4 軸 → 7+ 軸、quota 維持しつつ候補増)
+- **モグラ叩き感**: v3 (transit) → v4 (pack + fuzzy) → 422 再発の系譜。**Phase 2 polish の場当たり対症療法が限界**、demo 提出後に重複防止設計そのものを見直す必要 (構造的 fix v5 は別タスク)
+- **commits 関連**: v4 = `cb39aa5 / 4b96a37`、develop merge + push 済。v5 fix は別 plan で起案
+- **次の判断 (user 要)**:
+  - **MVP-pragmatic 路線**: fuzzy guard 緩和 (`ChIJ` → 削除) + lodging 連泊許容 (quota 3→2) で ~10 分の hot fix
+  - **構造的根治路線**: day-scoped duplicate prevention 設計変更 (~30 分、demo 後の安定運用向き)
+  - **諦め路線**: Run 13d/13e の知見を docs/lessons に残し、demo は 1〜2 日プランか箱根/京都/東京での動作確認に切替
+
 ## 2026-04-28: Phase 2 polish v3 実装完了、Codex review 5 で `attempted=0` 抜け穴発覚 → Major 1 fix → review 6 Blocker 0
 - **状況**: Phase 2 polish v3 計画 (T1+T2+T4+T7+T5) を `fix/pack-transit-stability` ブランチで 4 commits 構成で実装。計画段階の Codex review 1+2+3+4 (Blocker 0 認定済) → 実装 → review 5 で予想外の Major 1 + Minor 2 件発覚 → 全反映 → review 6 で Blocker 0 / Major 0 確認 → commit 提案
 - **review 5 で発覚した Major 1 (重要、実装後 review でしか発見できなかった盲点)**:
