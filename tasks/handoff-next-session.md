@@ -1,4 +1,4 @@
-# 次セッション再開プロンプト（2026-04-26 終了時点 → 次セッション）
+# 次セッション再開プロンプト（2026-04-27 終了時点 → 次セッション）
 
 このファイルの中身をそのまま新しい会話の冒頭に貼り付けて使ってください。
 
@@ -7,139 +7,197 @@
 ## 再開プロンプト本文（コピペ用）
 
 ```
-Routeful プロジェクト（hackathon 2026-04-13）の作業継続。前セッション（2026-04-26）から
-最優先 blocker を引き継ぐ。
+Routeful プロジェクト（hackathon 2026-04-13）の作業継続。本番 Run 12 で
+プラン生成は完全動作 (200 + /plan/[id] 完全レンダリング) しているが、
+demo 観察で 3 つの polish 課題が発覚済み。前セッション（2026-04-27）末で
+Phase 1 探索 + Codex review 1 反映済の実装計画書まで作ってある。
 
-## 🔴 最優先タスク: プラン生成が動かない（demo の core が壊れている）
+## 🎯 本セッションのゴール
 
-本番 / ローカル両方で `/plan/new` から submit するとプラン生成中画面で 422 エラー
-「plan generation failed after retries」になり、プラン閲覧画面に到達しない。これは
-hackathon 提出のブロッカー。
+`tasks/plans/2026-04-27-plan-quality-improvements.md` の計画書通り実装 →
+Codex review 2 → 本番 Run 13 verify で demo 完成度を最大化する。
+想定 4 時間で A + B + C を 1 ブランチ + 3 commits で完遂。
 
-### 真因（前セッションで切り分け済）
+## 課題と設計（計画書から要約、詳細は plan 参照）
 
-`apps/web/src/lib/transit.ts:333` の `service.route({travelMode: "TRANSIT"})` 固定が
-原因。Maps Directions の TRANSIT モードは「駅・停留所間の公共交通機関」を返す SDK で、
-観光地（彫刻の森美術館 / 箱根神社 / 強羅公園 等）のような徒歩アクセス前提の地点間では
-**40 ペア全部 ZERO_RESULTS** を返し、結果として transit_matrix=[] のままサーバへ POST
-され、LLM が plan を組めず validator 3 回 retry 後 422 になる。
+### A: slot 跨ぎ place_id 重複防止
+本番 Run 12 で「箱根食堂」が day1_lunch と day2_lunch 両方に採用される現象。
+Phase 1.3e assembler は各 slot 独立に place を選ぶ logic で slot 跨ぎ
+uniqueness 制約皆無。
 
-ローカル Run 8 verify 結果（2026-04-26）:
-- places 12 件（観光地 7 + 飲食 5、距離 0.64〜9.57 km）→ Phase 1.10 多様性 fix は完璧
-- fetchTransitMatrix stats: `{attempted: 40, succeeded: 0, errors: 40, deadlineReached: false}`
-- console error は `/api/plans/generate → 422` のみ、Maps SDK 自体は動作
+修正:
+- `apps/api/src/llm/assembly.py:196-337` の slot ループに
+  `used_place_ids: set[str]` accumulate + 重複検出 → swap
+- `_find_eligible_alternate_for_slot` (line 529) と `_find_alternate_place`
+  (line 598) の **両方** に `exclude_place_ids: set[str]` 引数追加
+- ループ末尾で **最終 invariant check**（重複ゼロ確認、違反は logger.error +
+  item drop で fail-soft）
+- `apps/api/src/llm/prompts/v2.0.0/system.md` に第 8 項「同じ place_id を
+  複数 slot に割当て禁止」を独立ルールで追加
+- test_llm_assembly.py に重複 swap test 3 件
 
-詳細は @tasks/todo.md の Phase 1.10 本番 E2E 動作確認 Run 1〜8 節 +
-@tasks/lessons.md の「Maps Directions TRANSIT モードは観光地間で ZERO_RESULTS を返す」
-エントリ。
+### B: 楽天 lodging env 設定（コード変更ゼロ）
+`apps/api/src/evidence/lodging.py` は実装済 / test PASS だが Render に
+`RAKUTEN_APPLICATION_ID` env 未設定で fail-soft skipped。
 
-### 次セッションのタスク（branch: `fix/transit-fallback-walking-driving`）
+修正:
+- `docs/setup-guide.md` に楽天 App ID 取得 + Render env 設定手順追記
+- `render.yaml` に `RAKUTEN_APPLICATION_ID` / `RAKUTEN_AFFILIATE_ID` を
+  `sync: false` で追加（Blueprint 初回構築漏れ防止）
+- `.env.example` 確認 / 追記
+- user 手動: https://webservice.rakuten.co.jp/ で App ID 取得 →
+  Render Dashboard で env 設定 → auto redeploy
 
-`apps/web/src/lib/transit.ts:333` の travelMode 固定を **TRANSIT → WALKING → DRIVING の
-フォールバック chain** に変更:
+### C: 移動手段指定（form + shared-types + Pydantic + prompt + transit + session）
+全員車運転可とは限らない demo シナリオで「公共交通のみ」モード指定が必要。
 
-1. `callDirectionsWithTimeout` を「mode を引数に取る」設計に変更
-2. `fetchTransitMatrix` の per-pair 処理で「TRANSIT 試行 → 失敗なら WALKING → 失敗なら
-   DRIVING」を順次実行
-3. 各 mode で per-call 2s timeout 維持、全体 deadline 10s 維持（mode あたり 2s × 3 = 6s
-   までは収まる、ペア並列で実時間は短縮）
-4. `mapVehicleToMode` を拡張: WALKING → mode='walk'、DRIVING → mode='car'
-5. `parseDirectionsResult` は既に `step.travel_mode` で判別済なので最小修正
-6. test 追加（`apps/web/src/lib/transit.test.ts`）:
-   - TRANSIT で ZERO_RESULTS なら WALKING を試す
-   - WALKING も ZERO_RESULTS なら DRIVING を試す
-   - すべて失敗なら kind: error、edges に追加されない
-   - per-call timeout は mode あたり 2s
+**重要な軌道修正（Codex review 1 反映）**:
+- `Plan.transport_mode` への DB 保存は **スコープ外**（migration / RPC 列追加で
+  4 時間枠オーバー）。`GeneratePlanRequest` / `QueryContext` のみで prompt 注入
 
-規模: 実装 ~50 LOC、test ~30 LOC、1〜2 時間。
+修正:
+- `packages/shared-types/src/index.ts`:
+  `TransportMode = "all_modes" | "public_transit_only"` 型追加 +
+  `GeneratePlanRequest.transport_mode` (default "all_modes") +
+  `QueryContext.transport_mode`
+- `apps/api/src/schemas/__init__.py`: 上 2 モデル同期（Plan は変更なし）
+- `apps/api/tests/test_schema_parity.py`: EXPECTED_FIELDS 同期
+- `apps/web/src/lib/schemas/planForm.ts`: zod schema に追加
+- `apps/web/src/components/TransportModeSelector.tsx` 新設（ModeSelector
+  pattern 踏襲）
+- `apps/web/src/app/plan/new/page.tsx`: 出発モード radio 直後に配置 +
+  submit で session 格納
+- `apps/web/src/stores/generationSessionStore.ts`: session type に
+  `transport_mode` 追加（**Codex Blocker 1**: 生成処理に届ける伝播経路必須）
+- `apps/web/src/app/plan/[id]/generating/page.tsx`: `postPlanGenerate` に
+  `transport_mode` 含める
+- `apps/api/src/llm/prompt.py`: `_build_mode_context_md` を **合成方式に
+  refactor**（Codex Major 2: 現状の anchor/theme 早期 return だと transport
+  指示が落ちる）。anchor / theme / transport を独立 string + `\n\n` で連結
+- `apps/web/src/lib/transit.ts`:
+  - `fetchTransitMatrix(places, departureTime, options: { transportMode? })`
+  - `callDirectionsWithFallback` で `transportMode === "public_transit_only"`
+    なら DRIVING 除外 (`["TRANSIT", "WALKING"]`)
+  - `parseDirectionsResult` で `requestedMode === "WALKING"` かつ
+    `duration_min > 30` のとき null 返却で edge を drop（**Codex Major 3**:
+    徒歩 2 時間 plan 防止）
+- test 各層: schema_parity / planForm / TransportModeSelector / prompt 合成 /
+  transit DRIVING 除外 / 徒歩 30 分上限 / session 伝播
 
-### 進め方（前セッションと同じパターンで）
+## 進め方（前セッションパターン踏襲）
 
-1. 設計 plan を `tasks/plans/2026-04-26-transit-fallback.md` に書く
-2. Codex review 1 回目
-3. 反映
-4. TDD で実装（branch `fix/transit-fallback-walking-driving`）
-5. Codex review 2 回目
-6. 反映
-7. ローカル `pnpm dev` で verify（前セッションで使った debug log の手法、generating
-   page で `console.log("[transit-debug]", result.stats)` を一時的に仕込んで stats を見る）
-8. secret プリフライト + commit 提案 → user push
-9. 本番 deploy → Run 9 で本番 E2E 確認
+1. **計画書通読**: `tasks/plans/2026-04-27-plan-quality-improvements.md`
+   を最後まで読み、§変更ファイル一覧 / TDD 手順を完全把握
+2. **branch 切り替え**: user 手動で `feat/plan-quality-improvements` を
+   develop から派生
+3. **TDD 実装**: subagent に委任可能（前セッション同様）。Step 1 = A 重複防止、
+   Step 2 = C 移動手段、Step 3 = B docs（test 不要）
+4. **Codex review 2**: 実装後に変更全体を review 依頼、Blocker 0 確認
+5. **secret プリフライト**: 0 hit 確認
+6. **commit 提案**: 3 commit に分割（A / C / docs+lessons+todo）→ user 手動 push
+7. **本番 Run 13 verify**: Vercel + Render auto deploy 後、Playwright で
+   2 シナリオ確認:
+   - default モード → DAY 重複なし + 宿情報あり + 200 + `/plan/[id]` 完全 render
+   - `transport_mode = public_transit_only` モード → DRIVING edge 0 +
+     徒歩 30 分超なし + 200 + `/plan/[id]` 完全 render
 
-### 制約 / 守ってほしいこと
+## 制約 / 守ってほしいこと
 
 - CLAUDE.md / .claude/rules/ を必ず読んでから着手
-- develop に直接コミットしない、必ず `fix/transit-fallback-walking-driving` ブランチ
+- develop に直接コミットしない、必ず `feat/plan-quality-improvements` ブランチ
 - git commit / push は user が手動でやる、Claude は提案だけ
 - commit 提案前に必ず secret プリフライト（CLAUDE.md ルール）
-- subagent は適材適所で活用 OK（Explore で transit.ts 周辺の現状調査、codex で plan / 実装 review）
+- TDD 厳守: test 先行 → 失敗確認 → 最小実装 → 通る → refactor
+- subagent は適材適所で活用 OK（Explore / general-purpose / codex で plan 実装 review）
 
-### 副次的な未解決タスク（hackathon 提出に致命的ではない）
+## 軌道修正された重要な設計判断（Codex review 1 反映済）
 
-- `tasks/lessons.md` で 1 回目記録した教訓のうち、`.claude/rules/` 昇格候補が複数あり:
-  - 「外部経路 SDK は単一モード固定にせずフォールバック設計」(今回 1 回目、修正で実証)
-  - 「migration 適用漏れ checklist」
-  - 「LLM prompt 拡張は helper pattern + 挿入順 test」
+絶対に踏襲すべき:
+
+1. **Plan.transport_mode を DB に保存しない** — `GeneratePlanRequest` /
+   `QueryContext` のみで prompt 注入（DB / RPC スコープ回避）
+2. **transport_mode を session 経由で生成処理に伝播** —
+   `generationSessionStore` 拡張 + generating page で
+   `postPlanGenerate` に渡す
+3. **`exclude_place_ids` を 2 関数両方に伝播 + 最終 invariant** —
+   transit 代替経路でも再重複しない、最後に絶対重複ゼロ確認
+4. **`_build_mode_context_md` を合成方式に refactor** —
+   anchor / theme / transport の組み合わせで指示が落ちない
+5. **徒歩 30 分上限で edge drop** — 「徒歩 2 時間」が plan に組み込まれない
+6. **prompt に「place 重複禁止」を独立第 8 項として追加** —
+   既存ルールの拡張ではなく独立化が誤解されにくい
+
+## 副次的な未解決タスク（hackathon 提出に致命的ではない）
+
+- `tasks/lessons.md` で 1 回目記録した教訓のうち、`.claude/rules/` 昇格候補:
+  - 「外部経路 SDK は単一モード固定にせずフォールバック」(2 回目記録済)
+  - 「commit 前 conflict marker grep」(1 回目記録済、2 回目で昇格)
+  - 「component の data access は必ず optional chaining」(1 回目記録済)
+  - 「Phase 跨ぎ contract drift」(2 回目記録済)
+  - 「Plan の data shape 変更は DB / RPC スコープ連動」(本セッション 1 回目)
 - Phase 1.7 / 1.8 / 1.9 の見た目仕上げ（メンバー C スコープ）
 - Phase 2.4 手動編集 + 部分再提案（時間あれば）
+- 食事クリック式 UX（提出後 Phase 2.x で plan 起案）
 
-### 関連参照
+## 関連参照
 
 - @CLAUDE.md
-- @tasks/todo.md（Phase 1.10 本番 E2E Run 1〜8、最優先タスク節）
-- @tasks/lessons.md（直近の Maps TRANSIT 限界 / 本番 E2E 7 連続 Run / Evidence Pack 多様性 等）
-- @tasks/plans/2026-04-26-evidence-pack-diversity.md（前セッションの Phase 1.10 fix 設計）
-- @apps/web/src/lib/transit.ts（line 333 の travelMode 固定が修正対象）
-- @apps/web/src/lib/transit.test.ts（既存 25 件 test）
-- @apps/web/src/app/plan/[id]/generating/page.tsx（fetchTransitMatrix 呼び出し元）
+- @tasks/todo.md（Phase 1.10 進捗サマリ + 最優先タスク節）
+- @tasks/lessons.md（直近の Run 11/12 学び + Phase 2 polish 計画策定の学び）
+- @tasks/plans/2026-04-27-plan-quality-improvements.md
+  （**最重要、まずこれを最後まで読んで**）
+- @apps/api/src/llm/assembly.py（slot ループ + self-healing helper）
+- @apps/web/src/lib/transit.ts（fallback chain + parseDirectionsResult）
+- @apps/web/src/components/ModeSelector.tsx（TransportModeSelector の参考 pattern）
 
-まずは todo.md の最優先タスク節を読んで現状把握 → plan 起案 → 推奨で進めて。
+まずは plan を最後まで読んで現状把握 → Step 1 (A 重複防止) から TDD 実装で進めて。
 ```
 
 ---
 
 ## 補足（このファイル自体は次セッションの context に入らないので参考）
 
-### 前セッション (2026-04-26) で完了したもの
+### 前セッション (2026-04-27) で完了したもの
 
 | 項目 | 状態 | branch / commit |
 |---|---|---|
-| Phase 2.5 Evidence 詳細モーダル | ✅ develop merge 済 | 98e37fe + 872140d |
-| API key 漏洩対応 + secret preflight rule 昇格 | ✅ develop merge 済 | 16bc5d0 |
-| Phase 2.2 予算配分 (prompt v2 絶対制約 Markdown) | ✅ develop merge 済 | 2c000e2 + aa007b9 |
-| Phase 1.10 plan_status 設計バグ fix | ✅ develop merge 済 | b97567b + bd835f2 |
-| Phase 1.10 Evidence Pack 多様性 fix | ✅ develop merge 済（ユーザがマージ） | feat/evidence-pack-diversity |
+| Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック | ✅ develop merge + push 済 | `fix/transit-fallback-walking-driving` (ce3dabd) |
+| Phase 1.10 後段 chore: Flask logging.basicConfig(INFO) | ✅ develop merge + push 済 | `chore/api-logging-config` (148f4be / 13ba685) |
+| Phase 1.10 後段: 422 真因全塞ぎ（canonical 8 点 + retry guidance + previous_issues 累積化） | ✅ develop merge + push 済 | `fix/plan-generation-blockers` (6f1b025 / c7c343d / 1402778 / ddb0aa9) |
+| Phase 1.10 後段 fix: EvidenceModal / MapView location undefined セーフガード | ✅ develop merge + push 済 | `fix/evidence-modal-undefined-location` (72b2c93 / 96e228b) |
 
-### 前セッションで判明した問題（解決順）
+### 前セッションで判明 + 解決した本番 Run の系譜
 
 | Run | 状況 | 解消 |
 |---|---|---|
-| 1 | FK 23503 (auth.users → public.sessions mirror なし) | migration 05 適用 |
-| 2-3 | Maps Directions REQUEST_DENIED (key allowlist 漏れ) | Vercel key 再設定 |
-| 4-5 | 同 + `failed to acquire plan lock` | migration 04 適用 |
-| 6 | `plan is already being generated`（フロント PATCH 先打ち） | フロント fix |
-| 7 | places 10 件全部湯本駅前飲食店 100m 圏 → TRANSIT ZERO_RESULTS | Phase 1.10 多様性 fix |
-| 8 (ローカル) | places 12 件多様化 OK、しかし TRANSIT が観光地ペアで全 ZERO_RESULTS | **次セッションで TRANSIT fallback** |
+| 8 (ローカル) | TRANSIT が観光地ペアで全 ZERO_RESULTS | distance-based fallback で解決 |
+| 9 (本番) | Run 8 の本番版、transit fallback 動作確認 | logging.basicConfig で次の調査準備 |
+| 10 (本番) | logging 反映後、422 の真因 4 attempts 全 breakdown 取得 | candidate_departures 1 件 + LLM hallucination の 2 真因確定 |
+| 11 (本番) | 全塞ぎ fix 反映、200 + /plan/[id] 遷移成功、ただし React render error | EvidenceModal optional chaining で解決 |
+| 12 (本番) | プラン閲覧画面まで完全動作確認 | demo 完成、観察で 3 polish 課題発覚 |
 
 ### 次セッション開始時の git 状態（想定）
 
-- branch: develop（直前に user が `fix/transit-fallback-walking-driving` を切る）
+- branch: develop（直前に user が `feat/plan-quality-improvements` を切る）
 - working tree: clean（前セッション最後で全 commit + push 済）
-- background process: なし（dev server は前セッション末で kill 済）
 
 ### 環境変数（再開時に確認すべき）
 
-- `apps/api/.env`: `GOOGLE_MAPS_API_KEY` / `OPENAI_API_KEY` / `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`
-- `apps/web/.env.local`: `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` / `NEXT_PUBLIC_API_BASE_URL=http://localhost:5000` / `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `NEXT_PUBLIC_MAPBOX_TOKEN`
-- ブラウザキー (`NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY`) の Cloud Console allowlist:
-  - Maps JavaScript API ✅
-  - Places API (New) ✅
-  - Directions API ✅（前セッションで user が追加済、TRANSIT / WALKING / DRIVING 全て同じ Directions API allowlist で動く）
-- HTTP referrer: `https://hackathon-2026-04-13.vercel.app/*` + `http://localhost:3000/*`
+- `apps/api/.env`: `GOOGLE_MAPS_API_KEY` / `OPENAI_API_KEY` /
+  `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`
+- `apps/web/.env.local`: `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` /
+  `NEXT_PUBLIC_API_BASE_URL=http://localhost:5000` /
+  `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` /
+  `NEXT_PUBLIC_MAPBOX_TOKEN`
+- 本番 Render（user 作業）: `RAKUTEN_APPLICATION_ID` /
+  `RAKUTEN_AFFILIATE_ID` を Phase B で設定する
 
-### 次セッションで「やらない」こと（hackathon 提出優先で）
+### 想定実装時間内訳
 
-- Phase 2.3 楽天宿泊 API の本格運用（既に builder.py に組み込み済、demo で動けば良い）
-- Phase 2.4 手動編集（規模大、提出後）
-- Phase 1.7/1.8/1.9 デザイン仕上げ（メンバー C スコープ、Claude が触らない）
-- Codex 残課題の (latent) 営業時間 parser 日跨ぎ対応（MVP 箱根 demo は日中観光のみ）
+- Step 1 (A): ~1 時間（assembler 改修 + test）
+- Step 2 (C): ~2 時間（フロント + バック + 3 点同期 + 5 層 test）
+- Step 3 (B): ~15 分（docs + render.yaml）
+- Codex review 2 + 反映: ~30 分
+- 本番 Run 13 verify (Playwright): ~30 分
+
+合計: ~4 時間

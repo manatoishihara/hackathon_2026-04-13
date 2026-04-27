@@ -27,6 +27,21 @@
 
 ## ログ
 
+## 2026-04-27: Phase 2 polish の実装完了 — Codex review 2 で発覚した「defense-in-depth の要素削除が隣接参照の整合性を壊す」設計バグ
+- 状況: Phase 2 polish の 3 課題 (A 重複防止 / B 楽天 env / C transport_mode) を 1 ブランチ + 3 commits 構成で実装完了。Codex review 1 (計画段階、Blocker 2 / Major 3 / Minor 2 全反映) → 実装 → Codex review 2 (実装後、**Critical 0 / Major 1 / Minor 3**) → Major + Minor 1, 2 反映 → Codex review 3 (**Blocker 0 → OK to commit**) の 3 サイクルで詰めた。最終 API 404 PASS / Web 175 PASS / tsc clean / build PASS / secret preflight 0 hit
+- **Codex review 2 で発覚した Major 1**（採用設計には含まれていなかった見落とし）:
+  - 当初設計: `_drop_duplicate_place_items` を「重複した non-transit item を log + drop する fail-soft 防御」として実装。proactive duplicate-detection swap path がカバーする想定だが、想定外パス用の defense-in-depth として配置
+  - 問題: `_drop_duplicate_place_items` が単純に **non-transit だけを drop** すると、その place を指す `transit_ref.from / to` の transit item が dangling になる。validator (`_check_transit_edges`) は **edge の存在のみ check** で plan 内 semantic 整合は見ないため、「validator は通るが意味は壊れた」状態のプランが本番に出る穴があった
+  - 解法: 2 pass 化。1 pass 目で重複 non-transit を識別 + `surviving_pids` 確定 → 2 pass 目で `transit_ref.from/to` のどちらかが `surviving_pids` に居ない transit も drop。test 2 件追加 (`test_drop_duplicate_place_items_drops_dangling_transit` + `test_drop_duplicate_place_items_drops_transit_with_dangling_from`) で `to` 欠落 / `from` 欠落の対称カバレッジを担保 (Codex review 3 Minor 2 反映)
+- **Codex review 2 で発覚した Minor 1（テスト精度の罠）**:
+  - prompt 合成順序を test するために `find("P_anchor_test")` と `find("温泉")` で index 比較していたが、これらの汎用文字列は **`query_context_json` (anchor mode_payload) や `participants[].wishes_text`** にも現れるため、section 順序が壊れていても test が通る偽陽性リスクがあった
+  - 解法: section 専用見出し文字列 (`"アンカー（必須スポット）"` / `"テーマ:"` / `"移動手段:"`) で index 比較に変更。これらは json 形式の output には現れず、mode_context_md 内のみ現れる
+- **学んだルール候補（次に同種パターンが出たら昇格）**:
+  - 「validator が通った = 意味的に正しい」ではない。Pydantic の field 制約や個別 check が独立に通っても、**plan 全体の参照整合性 (transit ↔ place_id、anchor ↔ items 等) は別軸の invariant** で別途守る必要がある
+  - defense-in-depth の path で要素を drop / 削除するときは、その要素を**参照している隣接構造**（前後の transit 等）の整合性まで同時に保つ責務がある。「該当要素だけ drop して他は触らない」は post-condition を破壊しがち
+  - prompt 順序のような **「文字列出現位置」を assert する test は固有マーカーで判定**せよ。一般語 (`"P_xxx"` / 日本語名詞) は他フィールドに混入するため index 比較が偽陽性化する
+- 詳細: 設計書 `tasks/plans/2026-04-27-plan-quality-improvements.md` の Codex review 全反映セクション、commit 提案 3 件 (A 重複防止 / C transport_mode / B 楽天 env docs)。次は user 手動 commit + push → Render dashboard で楽天 env 投入 → 本番 Run 13 verify (default + public_transit_only の 2 シナリオ)
+
 ## 2026-04-27: Phase 2 polish 計画書を Codex review 1 で確定（実装は次セッション）
 - 状況: 本セッション末で 3 課題（重複 / 楽天 / 移動手段）の実装計画書を `tasks/plans/2026-04-27-plan-quality-improvements.md` に作成、Codex review 1 で **Blocker 2 / Major 3 / Minor 2 / OK 2** を全反映
 - 軌道修正された設計判断:
