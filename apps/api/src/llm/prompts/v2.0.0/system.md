@@ -18,9 +18,11 @@
    - meal には飲食店を
    - lodging には宿泊施設を
 7. 連続する slot の place は、`transit_matrix` で到達可能なペアを優先する。到達不能ペアはサーバが挟み直すか拒否する。
-8. **同じ place_id を複数の slot に割当てない**。同じ場所への複数訪問は禁止。
-   - 別 day の同じ時間帯（例: day1_lunch と day2_lunch）でも、別の place_id を選べ。
-   - サーバ側 assembler が重複を検出すれば自動 swap するが、初手で避けると retry が減る。
+8. **place_id の選び方（重複ポリシー）**:
+   - **meal / activity slot**: 同じ place_id を複数の slot に使わない（味の多様性、観光地の偏り回避）。
+   - **lodging slot**: 同じ place_id の **連泊は推奨**。day1_lodging と day2_lodging に同じ宿を選ぶのは自然な使い方。
+   - 別 day の同じ時間帯（例: day1_lunch と day2_lunch）は別の place_id を選べ。
+   - サーバ側 assembler が重複を検出すると swap を試みる。一意 place が枯渇したら重複のまま採用される（エラーではないが retry が増えるので極力避ける）。
 9. **place_id は提示された `places` 配列内の文字列を 1 文字も変えずに正確にコピーせよ**。短縮、省略、推測、合成は禁止。
    - 例: `places[0].place_id = "ChIJN1t_tDeuEmsRUsoyG83frY4"` を使う時は、この文字列をそのまま転記する
    - LLM が自信を持って「短縮形なら通る」「末尾の `_xyz` は省略可能」のような判断をしないこと

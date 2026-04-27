@@ -43,22 +43,22 @@ def _resolve_fuzzy_place_id(
     """LLM が出した近似 place_id を pack 内 ID に救済する。
 
     pack の place_id 集合と LLM 出力を比較し:
-    - 両方とも `ChIJ` prefix を保持している (Google Places ID 共通形式、Codex Minor 1)
     - 長さ差 ≤ FUZZY_MAX_LEN_DIFF
     - SequenceMatcher.ratio() ≥ FUZZY_MATCH_RATIO
     のうち **唯一** マッチするものを返す。0 件 or 複数なら None。
 
-    例: "ChIJJE69IgAHnHWARDJVsAgxtjCQ" (LLM 出力、頭の J 1 文字余分) →
-        "ChIJE69IgAHnHWARDJVsAgxtjCQ" (pack 正解)
-        ratio=0.963、len_diff=1 → 救済される
+    Phase 2 polish v5 (Codex review 1 Minor 1 reverse): 旧 `ChIJ` prefix guard を削除。
+    本番 Run 13e で gpt-4.1 が `ChIJ` を `ChIH` / `ChIh` (J→H or J→h typo) に間違える
+    最頻ハルシパターンが guard で逆に救済対象外になっていた事故の対処。
+    false positive 抑制は unique-match + ratio 0.95 + len_diff ≤ 2 で十分。
+
+    例:
+    - "ChIJJE69IgAHnHWARDJVsAgxtjCQ" (LLM、J 余分) → "ChIJE69IgAHnHWARDJVsAgxtjCQ" (pack)
+    - "ChIHhY2RO4XnHWAReFs51v9XU3A" (LLM、J→H typo) → "ChIJhY2RO4XnHWAReFs51v9XU3A" (pack)
+    - "ChIhY2RO4XnHWAReFs51v9XU3A" (LLM、J→h lowercase) → "ChIJhY2RO4XnHWAReFs51v9XU3A" (pack)
     """
-    # ChIJ prefix を持たない LLM 出力は救済対象外 (false positive 抑制)
-    if not llm_id.startswith("ChIJ"):
-        return None
     matches: list[str] = []
     for pid in places_by_id:
-        if not pid.startswith("ChIJ"):
-            continue
         if abs(len(pid) - len(llm_id)) > FUZZY_MAX_LEN_DIFF:
             continue
         ratio = SequenceMatcher(None, llm_id, pid).ratio()
@@ -283,11 +283,11 @@ def assemble_plan(
             prev_entry["place"].place_id if prev_entry else None
         )
 
-        # Phase 2 polish (A): slot 跨ぎ重複検出 + swap。
-        # 既存の transit-failure swap path は from==target かつ self-edge 不在の場合のみ
-        # 救うため、非隣接 slot（DAY1 と DAY2 の lunch 重複等）を取りこぼす。proactive に
-        # 重複を検出し _find_eligible_alternate_for_slot で別 place に差し替える。
-        if place_id in used_place_ids:
+        # Phase 2 polish v5 (2026-04-28、user 「重複は best-effort、エラー回避優先」):
+        # lodging slot は連泊許容のため重複検出から除外。meal/activity slot は重複検出
+        # するが、swap 失敗時は raise/drop ではなく **warn + accept** で続行する
+        # (Codex review 1 で plan 確定、本番 Run 13e で対症療法の限界が露呈)。
+        if place_id in used_place_ids and slot_meta["item_type"] != "lodging":
             alternate = _find_eligible_alternate_for_slot(
                 pack=pack,
                 target_place=place,
@@ -296,26 +296,27 @@ def assemble_plan(
                 prev_place_id=prev_place_id_for_swap,
                 exclude_place_ids=used_place_ids,
             )
-            if alternate is None:
-                # fail-soft: 代替が見つからない場合は item を drop して継続（Risk 1）。
-                # validator で「slot 欠損」は許容されるため retry を誘発しない。
-                logger.error(
-                    "Duplicate place_id %r in slot %r; no eligible alternate (used=%s); dropping item",
-                    place_id, slot_meta["slot_id"], sorted(used_place_ids),
+            if alternate is not None:
+                logger.warning(
+                    "Duplicate place_id %r in slot %r; swapped to %r",
+                    place_id, slot_meta["slot_id"], alternate.place_id,
                 )
-                continue
-            logger.warning(
-                "Duplicate place_id %r in slot %r; swapped to %r",
-                place_id, slot_meta["slot_id"], alternate.place_id,
-            )
-            place = alternate
-            place_id = place.place_id
+                place = alternate
+                place_id = place.place_id
+            else:
+                # 旧設計: drop item (or raise)。新設計 (v5): warn + accept で続行。
+                # 重複は意図された feature (multi-day plan で候補枯渇時の妥協)、validator も
+                # 重複自体を issue とせず通す。
+                logger.warning(
+                    "Duplicate place_id %r in slot %r (item_type=%s); no alternate, "
+                    "accepting duplicate (best-effort policy)",
+                    place_id, slot_meta["slot_id"], slot_meta["item_type"],
+                )
 
         # Phase 1.3e (iv) hard self-healing: LLM が opening_hours 不適合 place を
         # 選んだ場合、assembler が pack 内の eligible 代替に自動差し替え（同カテゴリ優先）。
-        # eligible_for_slots を per-place で渡しているので LLM は本来この slot に充てるべき
-        # でないが、soft hint を無視するケースを救済する（validator で OUTSIDE_OPENING_HOURS
-        # を出して retry に頼るより自動修復が早い）。
+        # Phase 2 polish v5: swap 失敗時は raise せず warn + accept で続行
+        # (validator が後段で OUTSIDE_OPENING_HOURS を catch して retry guidance に流す)。
         if not is_place_eligible_for_slot(
             place,
             slot_start_hhmm=slot_meta["start_hhmm"],
@@ -330,21 +331,24 @@ def assemble_plan(
                 prev_place_id=prev_place_id_for_swap,
                 exclude_place_ids=used_place_ids,
             )
-            if alternate is None:
-                raise IneligiblePlaceForSlotError(
-                    f"Place {place_id!r} is not eligible for slot {slot_meta['slot_id']!r} "
-                    f"(opening_hours mismatch on {slot_date}); "
-                    f"no eligible alternate place in pack"
+            if alternate is not None:
+                logger.warning(
+                    "LLM picked ineligible place %r for slot %r; swapped to %r (category=%s)",
+                    place_id,
+                    slot_meta["slot_id"],
+                    alternate.place_id,
+                    alternate.category[0] if alternate.category else None,
                 )
-            logger.warning(
-                "LLM picked ineligible place %r for slot %r; swapped to %r (category=%s)",
-                place_id,
-                slot_meta["slot_id"],
-                alternate.place_id,
-                alternate.category[0] if alternate.category else None,
-            )
-            place = alternate
-            place_id = place.place_id
+                place = alternate
+                place_id = place.place_id
+            else:
+                # 旧設計: raise IneligiblePlaceForSlotError。
+                # 新設計 (v5): warn + accept、validator が後段で catch して retry へ。
+                logger.warning(
+                    "Place %r ineligible for slot %r (opening_hours mismatch on %s); "
+                    "no alternate, accepting (validator will catch and retry)",
+                    place_id, slot_meta["slot_id"], slot_date,
+                )
 
         # opening_hours に収まる範囲に時刻を調整（不適合は slot 時間帯に収められなければ skip せず強行、
         # validator で拾う。将来は代替 place 選定に回す）
@@ -359,61 +363,92 @@ def assemble_plan(
         if prev_entry is not None:
             prev_place: PlacePoint = prev_entry["place"]
             prev_end_dt: datetime = prev_entry["end_dt"]
-            edge = _lookup_transit_edge(prev_place.place_id, place_id, pack.transit_matrix)
-            if edge is None:
-                # 代替選定: 同カテゴリ近接 + slot 適合 place に差し替え（設計書 §「代替選定ロジック」）
-                alternate = _find_alternate_place(
-                    pack=pack,
-                    from_place_id=prev_place.place_id,
-                    target_place=place,
-                    slot_meta=slot_meta,
-                    slot_date=slot_date,
-                    exclude_place_ids=used_place_ids,
+            # Phase 2 polish v5 (Codex review 2 Major 3): 連続同 place (lodging 連泊等) は
+            # self-loop transit edge が transit_matrix で禁止のため transit item 生成 skip。
+            # ただし時刻の単調増加は維持する必要があるので start_dt = max(start_dt, prev_end_dt) で補正。
+            if prev_place.place_id == place_id:
+                logger.info(
+                    "Same place as previous slot (slot=%s, place_id=%r); skipping transit item (self-loop forbidden)",
+                    slot_meta["slot_id"], place_id,
                 )
-                if alternate is None:
-                    raise NoFeasibleTransitError(
-                        f"No transit edge from {prev_place.place_id!r} to "
-                        f"{place_id!r} and no alternate place for category "
-                        f"{place.category[0] if place.category else None!r} found"
+                if prev_end_dt > start_dt:
+                    shift = prev_end_dt - start_dt
+                    start_dt = prev_end_dt
+                    end_dt = end_dt + shift
+            else:
+                edge = _lookup_transit_edge(prev_place.place_id, place_id, pack.transit_matrix)
+                if edge is None:
+                    # 代替選定: 同カテゴリ近接 + slot 適合 place に差し替え
+                    alternate = _find_alternate_place(
+                        pack=pack,
+                        from_place_id=prev_place.place_id,
+                        target_place=place,
+                        slot_meta=slot_meta,
+                        slot_date=slot_date,
+                        exclude_place_ids=used_place_ids,
                     )
-                # 差し替え先の place / place_id / opening_hours 合わせの時刻を再計算
-                place = alternate
-                place_id = place.place_id
-                start_dt, end_dt = _fit_to_opening_hours(
-                    date_=slot_date,
-                    slot_start=slot_meta["start_hhmm"],
-                    slot_end=slot_meta["end_hhmm"],
-                    place=place,
-                )
-                edge = _lookup_transit_edge(
-                    prev_place.place_id, place_id, pack.transit_matrix
-                )
-                assert edge is not None, "alternate selection invariant broken"
-            transit_start = prev_end_dt
-            transit_end = transit_start + timedelta(minutes=edge.duration_min)
-            # activity 開始を transit 到着に合わせて繰り下げ
-            if transit_end > start_dt:
-                shift = transit_end - start_dt
-                start_dt = transit_end
-                end_dt = end_dt + shift
-            # Codex Critical fix: post-shift で start_dt が place の opening close を
-            # 超えるケースを assembler 側で raise する。validator が後段で catch する
-            # 経路は retry ロジック上不安定（issue 単位で LLM 解釈が散漫になる）
-            if not is_place_open_at_dt(place, start_dt):
-                raise IneligiblePlaceForSlotError(
-                    f"Place {place_id!r} closed at post-shift start "
-                    f"{start_dt.strftime('%Y-%m-%d %H:%M')} (transit shift "
-                    f"moved start past opening_hours close)"
-                )
-            items.append(
-                _build_transit_item(
-                    order_index=order_index,
-                    edge=edge,
-                    start_dt=transit_start,
-                    end_dt=transit_end,
-                )
-            )
-            order_index += 1
+                    if alternate is not None:
+                        # 差し替え先の place / place_id / opening_hours 合わせの時刻を再計算
+                        place = alternate
+                        place_id = place.place_id
+                        start_dt, end_dt = _fit_to_opening_hours(
+                            date_=slot_date,
+                            slot_start=slot_meta["start_hhmm"],
+                            slot_end=slot_meta["end_hhmm"],
+                            place=place,
+                        )
+                        edge = _lookup_transit_edge(
+                            prev_place.place_id, place_id, pack.transit_matrix
+                        )
+                        assert edge is not None, "alternate selection invariant broken"
+
+                if edge is None:
+                    # Phase 2 polish v5: alternate も無いとき、旧設計は raise NoFeasibleTransitError。
+                    # 新設計: transit item を skip + place_id をそのまま採用 (Codex review 1 Critical 1
+                    # 反映、Codex review 2 Major 1 反映で時刻補正を transit 経路と統一)。
+                    logger.warning(
+                        "No transit edge from %r to %r; skipping transit item, accepting place as-is",
+                        prev_place.place_id, place_id,
+                    )
+                    if prev_end_dt > start_dt:
+                        shift = prev_end_dt - start_dt
+                        start_dt = prev_end_dt
+                        end_dt = end_dt + shift
+                else:
+                    transit_start = prev_end_dt
+                    transit_end = transit_start + timedelta(minutes=edge.duration_min)
+                    # activity 開始を transit 到着に合わせて繰り下げ
+                    if transit_end > start_dt:
+                        shift = transit_end - start_dt
+                        start_dt = transit_end
+                        end_dt = end_dt + shift
+                    # Phase 2 polish v5: post-shift で opening close 超えのとき、
+                    # 旧設計は raise IneligiblePlaceForSlotError。
+                    # 新設計: warn + accept、validator が後段で OUTSIDE_OPENING_HOURS を catch。
+                    if not is_place_open_at_dt(place, start_dt):
+                        logger.warning(
+                            "Place %r closed at post-shift start %s (transit shift moved start past close); "
+                            "accepting (validator will catch)",
+                            place_id, start_dt.strftime('%Y-%m-%d %H:%M'),
+                        )
+                    # Phase 2 polish v5: `_pick_departure_time` が候補時刻不足で raise する
+                    # ケースも transit skip 扱いに緩和。`candidate_departures` 全部が
+                    # start_hhmm より前なら transit を生成せず place のみ採用する。
+                    try:
+                        items.append(
+                            _build_transit_item(
+                                order_index=order_index,
+                                edge=edge,
+                                start_dt=transit_start,
+                                end_dt=transit_end,
+                            )
+                        )
+                        order_index += 1
+                    except NoFeasibleTransitError as exc:
+                        logger.warning(
+                            "Transit edge %r->%r departure infeasible (%s); skipping transit item, accepting place",
+                            prev_place.place_id, place_id, exc,
+                        )
 
         cost_jpy, cost_conf = _resolve_cost(slot_meta["item_type"], place.price_level)
         items.append(
@@ -431,13 +466,19 @@ def assemble_plan(
             )
         )
         order_index += 1
-        used_place_ids.add(place_id)
+        # Phase 2 polish v5: lodging slot は連泊許容のため used_place_ids に加えない。
+        # 他 type 副作用の補足 (Codex review 1 Minor 3 反映、validator 仕様の正確化):
+        #   - meal slot で lodging place を再使用するケースは validator の
+        #     item_type_category_mismatch (lodging category は meal allowlist 外) で catch される
+        #   - lodging slot で meal place を再使用するケースも同様に validator が catch
+        #   - activity slot は validator が category 整合を check しないので素通りリスクあり、
+        #     ただし LLM 側で eligible_for_slots 機構で誘導されるため実害は限定的
+        if slot_meta["item_type"] != "lodging":
+            used_place_ids.add(place_id)
         prev_entry = {"place": place, "end_dt": end_dt}
 
-    # Phase 2 polish (A): 最終 invariant — defense-in-depth で重複が残ったら drop。
-    # 上の proactive swap で網羅できているはずだが、想定外パスでの混入を log で可視化。
-    items = _drop_duplicate_place_items(items)
-
+    # Phase 2 polish v5: 旧 v1 の `_drop_duplicate_place_items` 最終 invariant drop は削除。
+    # 重複は best-effort 政策で意図的に許容するため、最終 drop は矛盾する。
     # Phase 2.1: anchor モード post-check（swap で anchor が落ちたケースも catch）
     _check_anchors_present(pack, items)
 
