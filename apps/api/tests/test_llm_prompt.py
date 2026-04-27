@@ -24,6 +24,8 @@ from src.evidence.pack import (
 from src.llm.prompt import (
     PROMPT_VERSION_DEFAULT,
     _build_budget_context_md,
+    _build_retry_guidance_md,
+    _extract_unknown_place_ids,
     build_system_prompt,
     build_user_prompt,
     count_prompt_tokens,
@@ -417,3 +419,126 @@ def test_load_prompt_version_reads_env(monkeypatch):
 def test_load_prompt_version_falls_back_to_default(monkeypatch):
     monkeypatch.delenv("PROMPT_VERSION", raising=False)
     assert load_prompt_version() == "v2.0.0"
+
+
+# ==============================
+# Phase 1.10 後段 fix: retry guidance（Codex review 2 反映）
+# ==============================
+
+
+def test_build_retry_guidance_md_empty():
+    """previous_issues が空なら空文字列を返す（初回試行で template 形状が崩れない）。"""
+    assert _build_retry_guidance_md([]) == ""
+
+
+def test_build_retry_guidance_md_unknown_place_id_assembly_format():
+    """assembly UnknownPlaceInSlotError 由来の message から place_id を抽出して禁止リストに。"""
+    issues = [
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="assembly error: LLM assigned unknown place_id 'ChIJ123' to slot 'day1_lunch'",
+            item_index=None,
+        ),
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="assembly error: LLM assigned unknown place_id 'ChIJ456' to slot 'day1_dinner'",
+            item_index=None,
+        ),
+    ]
+    md = _build_retry_guidance_md(issues)
+    assert "ChIJ123" in md
+    assert "ChIJ456" in md
+    assert "絶対に再使用するな" in md
+
+
+def test_build_retry_guidance_md_unknown_place_id_validator_format():
+    """validator 由来の `place_id='XXX'` 形式 message も regex で拾えること。"""
+    issues = [
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="place_id='ChIJ789' は evidence_pack.places に存在しない",
+            item_index=0,
+        ),
+    ]
+    md = _build_retry_guidance_md(issues)
+    assert "ChIJ789" in md
+
+
+def test_build_retry_guidance_md_dedup():
+    """同じ unknown_place_id が複数 issue に含まれていても 1 つに dedup（Codex Major 1）。"""
+    issues = [
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="LLM assigned unknown place_id 'ChIJ123' to slot 'day1_lunch'",
+            item_index=None,
+        ),
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="LLM assigned unknown place_id 'ChIJ123' to slot 'day1_dinner'",
+            item_index=None,
+        ),
+    ]
+    md = _build_retry_guidance_md(issues)
+    assert md.count("ChIJ123") == 1
+
+
+def test_build_retry_guidance_md_ignores_other_kinds():
+    """UNKNOWN_PLACE_ID 以外の IssueKind は無視（regex 誤動作防止）。"""
+    issues = [
+        ValidationIssue(
+            kind=IssueKind.OUTSIDE_OPENING_HOURS,
+            message="place_id='ChIJ_other' の営業時間外",
+            item_index=0,
+        ),
+        ValidationIssue(
+            kind=IssueKind.BUDGET_EXCEEDED,
+            message="activity 合計超過",
+            item_index=None,
+        ),
+    ]
+    assert _build_retry_guidance_md(issues) == ""
+
+
+def test_extract_unknown_place_ids_returns_sorted_unique():
+    """`_extract_unknown_place_ids` は sorted unique list を返す（dedup helper として使う）。"""
+    issues = [
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="LLM assigned unknown place_id 'ChIJ_z' to slot 'day1_lunch'",
+            item_index=None,
+        ),
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="LLM assigned unknown place_id 'ChIJ_a' to slot 'day1_dinner'",
+            item_index=None,
+        ),
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="LLM assigned unknown place_id 'ChIJ_a' to slot 'day1_breakfast'",
+            item_index=None,
+        ),
+    ]
+    assert _extract_unknown_place_ids(issues) == ["ChIJ_a", "ChIJ_z"]
+
+
+def test_build_user_prompt_v2_includes_retry_guidance_when_unknown_place_id(sample_pack):
+    """v2 prompt は retry guidance (`絶対に再使用するな` ブロック) を含む。"""
+    issues = [
+        ValidationIssue(
+            kind=IssueKind.UNKNOWN_PLACE_ID,
+            message="LLM assigned unknown place_id 'ChIJ_bad' to slot 'day1_lunch'",
+            item_index=None,
+        ),
+    ]
+    prompt = build_user_prompt(sample_pack, previous_issues=issues, version="v2.0.0")
+    assert "ChIJ_bad" in prompt
+    assert "絶対に再使用するな" in prompt
+    # placeholder が残ってない
+    assert "{retry_guidance_md}" not in prompt
+
+
+def test_build_user_prompt_v2_no_retry_guidance_on_first_attempt(sample_pack):
+    """初回 attempt は retry guidance が空文字列 → template 形状が崩れない。"""
+    prompt = build_user_prompt(sample_pack, previous_issues=[], version="v2.0.0")
+    assert "絶対に再使用するな" not in prompt
+    assert "{retry_guidance_md}" not in prompt

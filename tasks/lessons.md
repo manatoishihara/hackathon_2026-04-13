@@ -27,6 +27,55 @@
 
 ## ログ
 
+## 2026-04-27: 全塞ぎモード — Codex 3 回 review で 422 真因 4 つ + 副次 Major 4 つを網羅的に修正（Phase 1.10 後段）
+- 状況: 本番 Run 10 で 422 を再現したログから真因 A (candidate_departures 1 件) + 真因 B (LLM hallucination) を特定後、user 指示で「全部特定して塞ぐ」モードに切替。並列 Explore agent 2 件で transit_matrix 構築 path / LLM prompt 詳細を完全把握 → Codex review 3 回（review 1: 設計相談で Blocker 2 / Major 4 / Minor 1、review 2: 計画書 review で 追加 Blocker 2 / Major 3 / Minor 1、review 3: 実装 review で Major 1 / Minor 2）→ 全反映
+- 全塞ぎした問題（複数の独立した穴を網羅的に検出）:
+  - **真因 A (Blocker)**: `candidate_departures = 1 件` → canonical 8 点 (`["00:00","06:00","09:00","12:00","15:00","18:00","21:00","23:59"]`) + observed merge
+  - **真因 B (Major)**: LLM unknown_place_id 繰り返し → retry prompt に `_build_retry_guidance_md` で禁止リスト注入 + regex 抽出（`split('"')` 脆弱性回避）
+  - **追加 Blocker (review 1)**: 5 点だけだと **22:00+ start_hhmm でカバー不能** → `00:00` / `23:59` を必ず含む 8 点に拡張
+  - **追加 Major (review 1)**: retry の `previous_issues = issues` が直前 1 件のみ → 過去全 attempts 累積化 + dedup（UNKNOWN_PLACE_ID は place_id 単位、他は (kind, message)）+ MAX_RETAIN=10 cap
+  - **追加 Major (review 1)**: フロント transit 全滅 (`succeeded === 0`) でも generate 続行 → `shouldEarlyThrowOnTransit` helper で早期 throw
+  - **追加 Blocker (review 2)**: try/catch の **内側 catch で例外を握りつぶす** 穴 → `catch (err) { throw err instanceof Error ? err : new Error(...) }` で再 throw
+  - **追加 Major (review 2)**: `dedup_key = (kind, message)` だと UNKNOWN_PLACE_ID が複数 slot で残る → `_extract_unknown_place_ids` で place_id 単位 dedup
+  - **追加 Major (review 3)**: dict の `__setitem__` は既存 key の挿入順を保持するため、`[-MAX_RETAIN:]` で「先に入って再発した issue が末尾に来ない」 → `pop(key, None) → unique[key] = issue` で recency 保証
+- 学び:
+  - **複数 Codex review で「相互に独立した穴」が次々と見つかる**: review 1 で 5+ 件、計画書 review 2 で +5 件、実装 review 3 で +3 件。**1 回の review では網羅できない**、3 回かけて確実に塞ぐべき複雑なバグ群だった
+  - **「直近優先」は dict update では保証されない**: Python 3.7+ の dict は insertion-ordered だが、同 key への代入で position は更新されない。recency-aware dedup には `pop` + 再挿入が必要 = 暗黙の前提を疑う
+  - **regex 2 種で robust な抽出**: assembly format / validator format 両方の message を 1 helper でカバー、`split` 脆弱性回避
+  - **canonical 値の hardcode 二重化**: フロント `transit.ts` と Python `verify_hallucination_rate.py` で同じ 8 点を hardcode せざるを得ない（言語境界）→ 双方向に drift 警告コメントを残すのが現実的な妥協
+  - **Phase 1.3b と 1.3e の contract drift**: 「フロントが 1 件」「test が 5 点」が長期間共存して発覚せず、本番でようやく顕在化。Phase 跨ぎ contract は production parity test で固定すべき（前 entry の learning と同じ系統）
+- ルール候補:
+  - **複数 review を経ないと網羅できない複雑な fix では「設計 review → 実装 → 実装 review」の 3 ステップを最低限こなす**。1 回 review で済ませない
+  - **dict 系の dedup で「直近優先」が必要なら recency-aware セマンティクスを明示**（`pop + 再挿入` or `OrderedDict`）。単純 update は順序保証なし
+- → 「contract drift（Phase 跨ぎ実装の不整合）」「直近優先 dedup の罠」は **2 回目記録（前 entry とペア）**。次セッションで `.claude/rules/` に複数昇格候補を整理予定
+
+## 2026-04-27: 本番 Run 10 で 422 真因判明 — `candidate_departures` 1 件問題（Phase 1.3b ↔ 1.3e 不整合）+ `unknown_place_id` ハルシネーション再発
+- 状況: chore/api-logging-config で Render Live tail に `logger.info` が流れるようになった直後、本番 Run 10 (plan_id `9b209857-...`、04:54-04:55) で 422 を再現してログを取得。**4 attempts 全失敗**の breakdown:
+  - **attempt 1 (gpt-4.1)**: `unknown_place_id` — day1_lunch slot に place_id `ChIJJS7EfYgChGWARNW9YGF4jb0I` を割当て (Evidence Pack 外)
+  - **attempt 2 (gpt-4.1)**: `unknown_transit_edge` — edge X→Y の `candidate_departures=['13:54']` で required `start_hhmm='16:30'` をカバーできず
+  - **attempt 3 (gpt-4.1)**: `unknown_place_id` — day1_dinner slot に **同じ** `ChIJJS7EfYgChGWARNW9YGF4jb0I` を再割当て
+  - **attempt 4 (gpt-4.1-mini)**: place swap (assembler self-healing) は成功したが、別 edge の `candidate_departures=['13:54']` で required `'16:30'` をカバーできず → 同じ unknown_transit_edge
+- 真因 A — **`candidate_departures` が 1 件しか入っていない構造**:
+  - `apps/web/src/lib/transit.ts:300-302` の `parseDirectionsResult` が `[formatHHmmJST(departureDate ?? requestedDeparture)]` で **常に 1 要素**を返す
+  - フロントは現在時刻 (04:54 JST = `submit` 時刻) で 1 回 fetch → Maps SDK は「13:54 発」を返す → `candidate_departures: ["13:54"]` で固定
+  - assembler は「16:30 以降に出発する transit edge を選ぶ」「但し candidate_departures から最小の有効値を取る」ロジックで、required 16:30 ≧ 13:54 なので **全部 reject**
+  - **構造的乖離**: Phase 1.3e `verify_hallucination_rate.py` では `["09:00","12:00","15:00","18:00","21:00"]` の **5 点** で test していたが、本番フロント (Phase 1.3b 設計) は **1 点だけ**。Phase 1.3e の assembler は「複数 candidate から選ぶ」前提なのに、Phase 1.3b のフロント実装はその要件を出していなかった = **両 phase の独立実装で contract が一致していなかった**
+- 真因 B — **`ChIJJS7EfYgChGWARNW9YGF4jb0I` の繰り返しハルシネーション**:
+  - gpt-4.1 が attempt 1 と 3 で **同じ unknown place_id** を出力。"popular hallucination" pattern
+  - Phase 1.3e `verify_hallucination_rate.py` で hallucination 0% を達成していたのに本番条件で再発 = **prompt 内の pack 構成 / token budget が verify と本番で微妙に違う可能性**
+  - 真因 A 解消後の retry 数減少で B の頻度も下がる可能性があるが、独立 fix（prompt 強化 or assembler の self-healing 拡張）が必要
+- 学び:
+  - **Phase 跨ぎの design contract は明示的に test で固定しないと drift する**。Phase 1.3b (フロント transit fetch) と 1.3e (LLM assembler) は別セッションで実装され、間に「候補時刻が複数必要」という暗黙の contract があった。これを `verify_hallucination_rate.py` 側だけ満たして、本番フロントは満たさない状態が長期間維持された
+  - **Run 9 vs Run 10**: Run 9 では「422」しか分からなかったが、logging.basicConfig 追加だけで **同じ 422 から `unknown_place_id` `unknown_transit_edge` という具体的 IssueKind と該当 place_id まで** 取得できるようになった。「本番デバッグ可視性は logging 設定で大幅に変わる」を実証
+  - **assembler の self-healing は強力**: attempt 4 で `LLM picked ineligible place ... swapped to ...` がログに出ており、Phase 1.3e の hard self-healing が**実際に動いていた**。これは Phase 1.3e の成果が無駄になっていない証拠
+  - **Render Live tail の実用性**: log を仕込むことで本番事象を 1 〜 2 分で特定できる。本番固有問題（ローカルでは再現しない or 再現しにくい問題）の調査では log 設定が最優先
+- 次セッション優先順位:
+  - **🔴 問題 A 修正 (最優先)**: `apps/web/src/lib/transit.ts` の `parseDirectionsResult` を「`candidate_departures` を複数化」する。設計案: (1) フロントで複数 departure_time で並列 fetch (5 倍コール、deadline 危険)、(2) 1 回 fetch 後にフロントで合理的な時刻 list `["09:00","12:00","15:00","18:00","21:00"]` を **fixed list として加算**（精度落ちるが assembler 互換）。**案 2 が現実的**
+  - **🟡 問題 B 調査**: 問題 A 解消後にもう一度 Run で再現するか確認。`apps/api/scripts/verify_hallucination_rate.py` を本番条件 (region=箱根 / auto / 30,000円) で走らせて再現性測定 → 必要なら prompt 強化 or assembler self-healing 拡張
+- ルール候補:
+  - **Phase 跨ぎ contract は schema parity test と並ぶ「production parity test」で固定**。`verify_hallucination_rate.py` のような scenario test を「本番フロント実装と同じ入力形式で動かす」よう統一する。本番固有 path（フロント → サーバ） vs 検証 path（test fixture → サーバ）の **2 つの input path が乖離していた**のが今回の bug
+- → 1 回目だが「Phase 跨ぎ contract drift」は他にも潜んでいる可能性大（mode_payload schema や budget_constraints の format 等）。次セッション以降で **production parity test** を整備する候補
+
 ## 2026-04-27: Flask デフォルト logger は WARNING 以上のみ → 本番デバッグ視認性ゼロ問題（chore/api-logging-config で解消）
 - 状況: 本番 Run 9 で `/api/plans/generate → 422` が再現したあと、Render Live tail を確認すると **アクセスログ (gunicorn `--access-logfile -`) は流れているが、Python の `logger.info()` 出力が一切ない**。具体的には `apps/api/src/llm/generator.py:290` の `logger.info("LLM attempt %d produced %d validation issues, retrying")` や、`apps/api/src/llm/generator.py:270` の `logger.info("LLM attempt %d assembly error (kind=%s)")` が **3 retry 分流れているはずなのに 0 行**。validator がどの IssueKind で reject しているか、構造的に見えない
 - 真因: `apps/api/src/app.py` で **`logging.basicConfig()` を呼んでいなかった**ため、Flask の root logger は default level `WARNING` のまま。`logger = logging.getLogger(__name__)` で取得した logger も親 (root) の level に従うので、`logger.info(...)` は **silently discarded** される。gunicorn は Python logging の自動設定をしない（access_log は別系統で gunicorn 自身の logger 経由で stderr に流れる）

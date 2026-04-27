@@ -16,6 +16,7 @@ vi.mock("@googlemaps/js-api-loader", () => ({
 
 import {
   _resetLoaderForTests,
+  CANONICAL_DEPARTURE_TIMES,
   TransitConfigError,
   fetchTransitMatrix,
   haversineKm,
@@ -190,8 +191,11 @@ describe("parseDirectionsResult", () => {
     expect(edge!.fare_jpy).toBe(2330);
     expect(edge!.mode).toBe("train");
     expect(edge!.route_summary).toBe("小田急線 特急はこね");
-    // departure_time を優先使用（09:15）
-    expect(edge!.candidate_departures).toEqual(["09:15"]);
+    // departure_time (09:15) は canonical 8 点と merge して 9 件で sort 済み
+    expect(edge!.candidate_departures).toContain("09:15");
+    expect(edge!.candidate_departures).toContain("00:00");
+    expect(edge!.candidate_departures).toContain("23:59");
+    expect(edge!.candidate_departures.length).toBe(9);
   });
 
   it("transit step が無ければ walk + 徒歩 + requested departure にフォールバック", () => {
@@ -205,7 +209,9 @@ describe("parseDirectionsResult", () => {
     expect(edge).not.toBeNull();
     expect(edge!.mode).toBe("walk");
     expect(edge!.route_summary).toBe("徒歩");
-    expect(edge!.candidate_departures).toEqual(["08:30"]);
+    // requested 08:30 は canonical と merge → 9 件
+    expect(edge!.candidate_departures).toContain("08:30");
+    expect(edge!.candidate_departures.length).toBe(9);
   });
 
   it("duration 欠損 / 負数 / 24h 超は null", () => {
@@ -566,9 +572,127 @@ describe("fetchTransitMatrix", () => {
   });
 });
 
+// ==============================
+// parseDirectionsResult — canonical candidate_departures (Phase 1.10 後段 fix)
+// ==============================
+
+describe("parseDirectionsResult — canonical candidate_departures", () => {
+  it("CANONICAL_DEPARTURE_TIMES は 8 点で sort 済み", () => {
+    expect(CANONICAL_DEPARTURE_TIMES).toEqual([
+      "00:00",
+      "06:00",
+      "09:00",
+      "12:00",
+      "15:00",
+      "18:00",
+      "21:00",
+      "23:59",
+    ]);
+  });
+
+  it("observed 時刻が canonical 外なら 9 件返す（8 canonical + observed、HH:mm sort）", () => {
+    // departureValue が 13:54 (canonical 外) → merge 後 9 件
+    const edge = parseDirectionsResult(
+      fakeResult({
+        durationSec: 600,
+        transitLineName: "テスト線",
+        vehicleType: "SUBWAY",
+        departureValue: new Date("2026-06-01T13:54:00+09:00"),
+      }),
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
+    );
+    expect(edge!.candidate_departures).toEqual([
+      "00:00",
+      "06:00",
+      "09:00",
+      "12:00",
+      "13:54",
+      "15:00",
+      "18:00",
+      "21:00",
+      "23:59",
+    ]);
+  });
+
+  it("observed 時刻が canonical (例 09:00) なら 8 件返す（dedup）", () => {
+    const edge = parseDirectionsResult(
+      fakeResult({
+        durationSec: 600,
+        transitLineName: "テスト線",
+        vehicleType: "SUBWAY",
+        departureValue: new Date("2026-06-01T09:00:00+09:00"),
+      }),
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
+    );
+    expect(edge!.candidate_departures).toEqual([
+      "00:00",
+      "06:00",
+      "09:00",
+      "12:00",
+      "15:00",
+      "18:00",
+      "21:00",
+      "23:59",
+    ]);
+  });
+
+  it("transit step なし (walk only) は requestedDeparture を observed として merge", () => {
+    const edge = parseDirectionsResult(
+      fakeResult({ durationSec: 600 }),
+      "A",
+      "B",
+      new Date("2026-06-01T08:30:00+09:00"),
+      "TRANSIT",
+    );
+    expect(edge!.candidate_departures).toContain("08:30");
+    expect(edge!.candidate_departures).toContain("00:00");
+    expect(edge!.candidate_departures).toContain("23:59");
+    expect(edge!.candidate_departures.length).toBe(9);
+  });
+
+  it("候補配列は HH:mm 順 sort されている (辞書順 = 時刻順)", () => {
+    const edge = parseDirectionsResult(
+      fakeResult({
+        durationSec: 600,
+        transitLineName: "テスト線",
+        vehicleType: "SUBWAY",
+        departureValue: new Date("2026-06-01T13:54:00+09:00"),
+      }),
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
+    );
+    const sorted = [...edge!.candidate_departures].sort();
+    expect(edge!.candidate_departures).toEqual(sorted);
+  });
+
+  it("max 10 要素以内 (Pydantic ClientTransitEdge.candidate_departures max_length=10)", () => {
+    const edge = parseDirectionsResult(
+      fakeResult({
+        durationSec: 600,
+        transitLineName: "テスト線",
+        vehicleType: "SUBWAY",
+        departureValue: new Date("2026-06-01T13:54:00+09:00"),
+      }),
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
+    );
+    expect(edge!.candidate_departures.length).toBeLessThanOrEqual(10);
+  });
+});
+
 describe("formatHHmm (JST 固定)", () => {
   it("ブラウザ TZ に関係なく JST の HH:mm を返す", async () => {
-    // 2026-06-01T00:00:00Z は JST で 09:00
+    // 2026-06-01T00:00:00Z は JST で 09:00 → canonical (09:00 含む) と一致 → 8 件
     const utcMidnight = new Date("2026-06-01T00:00:00Z");
     const edge = parseDirectionsResult(
       fakeResult({ durationSec: 600 }),
@@ -577,11 +701,12 @@ describe("formatHHmm (JST 固定)", () => {
       utcMidnight,
       "TRANSIT",
     );
-    expect(edge!.candidate_departures).toEqual(["09:00"]);
+    expect(edge!.candidate_departures).toContain("09:00");
+    expect(edge!.candidate_departures.length).toBe(8);
   });
 
   it("transit step の departure_time を JST でフォーマット", () => {
-    // UTC 23:00 は JST 翌日 08:00
+    // UTC 23:00 は JST 翌日 08:00（canonical 外） → merge 後 9 件
     const transitDeparture = new Date("2026-06-01T23:00:00Z");
     const edge = parseDirectionsResult(
       fakeResult({
@@ -595,7 +720,8 @@ describe("formatHHmm (JST 固定)", () => {
       new Date("2026-06-01T10:00:00Z"),
       "TRANSIT",
     );
-    expect(edge!.candidate_departures).toEqual(["08:00"]);
+    expect(edge!.candidate_departures).toContain("08:00");
+    expect(edge!.candidate_departures.length).toBe(9);
   });
 });
 

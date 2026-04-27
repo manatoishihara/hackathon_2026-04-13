@@ -11,6 +11,8 @@ import {
   useGenerationSessionStore,
 } from "@/stores/generationSessionStore";
 
+import { shouldEarlyThrowOnTransit } from "./transit-guard";
+
 type Step =
   | "loading-session"
   | "fetching-transit"
@@ -40,7 +42,9 @@ const STEP_ORDER: Step[] = [
  *
  * フロー:
  *   1. Zustand から generationSession を取り出す（無効なら /plan/new にリダイレクト）
- *   2. fetchTransitMatrix(places) で transit を取得（失敗しても空配列で fail-soft）
+ *   2. fetchTransitMatrix(places) で transit を取得
+ *      - 全 pair 失敗 (succeeded === 0 && attempted > 0) なら早期 throw → エラー表示
+ *      - SDK 例外も catch で再 throw（旧 fail-soft の握りつぶしを排除、Phase 1.10 後段 fix）
  *   3. postPlanGenerate({ plan_id, evidence_pack_id, transit_matrix })
  *   4. 成功レスポンスの plan_id で /plan/<id> に遷移
  *      - 1.3c 時点は { plan_id: null } が返るので:
@@ -85,10 +89,19 @@ export default function GeneratingPage() {
         try {
           const result = await fetchTransitMatrix(session.places, departureTime);
           transitMatrix = result.edges;
-        } catch {
-          // fetchTransitMatrix は fail-soft で空配列を返す設計だが、SDK ロードや
-          // 環境変数未設定の例外もここで拾う。空で続行する。
-          transitMatrix = [];
+          // 全 pair 失敗 → サーバー 422 へ流さず早期エラー化（Codex review 2 Blocker 1）。
+          // attempted === 0 (places 1 件以下) は transit_matrix=[] で続行（既存挙動）。
+          if (shouldEarlyThrowOnTransit(result.stats)) {
+            throw new Error(
+              "経路情報を取得できませんでした。少し時間をおいてお試しください。",
+            );
+          }
+        } catch (err) {
+          // SDK ロード失敗 / API 不到達 / fetch 中の throw / 上の throw を一律 error に集約。
+          // 旧実装は catch で空配列にして続行 → 422 に流れる穴があったため再 throw。
+          throw err instanceof Error
+            ? err
+            : new Error("経路情報の取得中にエラーが発生しました");
         }
 
         setStep("generating-plan");

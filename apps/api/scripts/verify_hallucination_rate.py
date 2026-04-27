@@ -128,10 +128,10 @@ def _build_transit_matrix(
     hard_cap=100 で更に capping）。prompt トークン数を現実のレンジ（10k 前後）に
     収めるための調整（詳細は `tasks/lessons.md` 2026-04-25 エントリ参照）。
 
-    `candidate_departures` は validator で transit_ref.departure_time との厳密一致を
-    求められるため、日中の主要時間帯を 3 件に絞る。10 件並べた run 4 で prompt token
-    が 12k → 14.6k に肥大化し hallucination=66.7% に悪化したため、12k 以下に戻す
-    （tasks/plans/2026-04-25-structured-plan-assembly.md「次セッション最初の一手」）。
+    `candidate_departures` は本番フロント `parseDirectionsResult` の CANONICAL_DEPARTURE_TIMES
+    (8 点) と完全に一致させる（Phase 1.10 後段 fix の Codex Minor、contract drift 防止）。
+    v2 prompt は `_edge_for_llm_v2` で candidate_departures を LLM に見せないので token 影響なし。
+    assembler の `_pick_departure_time` 用に 8 点で morning〜lodging→翌朝 transit を全カバー。
     """
     places = pack.places
     edges: list[TransitEdge] = []
@@ -140,11 +140,16 @@ def _build_transit_matrix(
         route_summary="箱根近隣 想定経路",
         duration_min=20,
         fare_jpy=380,
-        # β で v2 prompt から candidate_departures は除去済み（_edge_for_llm_v2）。
-        # ここの拡張は assembler の _pick_departure_time 用で、prompt token に影響なし。
-        # 5 候補で morning〜lodging 全 transit を覆う（Codex Major fix で過去時刻
-        # fallback 廃止に伴い、十分な candidate を提供する必要があるため）
-        candidate_departures=["09:00", "12:00", "15:00", "18:00", "21:00"],
+        # Phase 1.10 後段 fix: 本番フロント `parseDirectionsResult` (apps/web/src/lib/transit.ts)
+        # の CANONICAL_DEPARTURE_TIMES と一致させる contract drift 防止（Codex Minor）。
+        # 8 点で 00:00 (翌日朝の lodging→morning) / 23:59 (夜遅い lodging→翌朝、start_hhmm >= 22:00)
+        # / 06:00 (早朝 activity slot) / 09:00 / 12:00 / 15:00 / 18:00 / 21:00。
+        # ⚠️ drift 警告: 本 list を変更する時は **必ず** フロントの
+        # `apps/web/src/lib/transit.ts` の `CANONICAL_DEPARTURE_TIMES` も同時に更新せよ。
+        # 言語境界で共有 module 不可なため hardcode。差分があると test と本番が乖離する。
+        candidate_departures=[
+            "00:00", "06:00", "09:00", "12:00", "15:00", "18:00", "21:00", "23:59",
+        ],
     )
     seen: set[tuple[str, str]] = set()
     for a in places:
