@@ -108,11 +108,13 @@ SDK DirectionsService で取得して API に戻す（`tasks/lessons.md` 参照�
 6. base_pack（transit_matrix は空）と evidence_pack_id（TTL 15 分程度）を返す
 
 [フロント] ブラウザ上で Maps JS SDK DirectionsService
-7. places のうち「直線距離 10km 以内」のペアで transit を取得
-   - 最大ペア数: 20（places 15 件なら理論上 105 ペアだが、距離 10km フィルタで大幅削減）
+7. places のうち「直線距離 15km 以内」のペアで transit を取得
+   - 最大ペア数: 40（places 15 件なら理論上 105 ペアだが、距離 15km フィルタで実用域に絞る）
    - 並列呼び出し: 最大 5（DirectionsService のクォータ破裂防止）
-   - 各呼び出しタイムアウト: 2 秒（全体を 10 秒以内に収める）
-   - 上記の具体数値は Phase 1.3 実装時に実測から調整する
+   - 各呼び出しタイムアウト: 2 秒（全体を 15 秒以内に収める、SDK ロード含む）
+   - 各定数は `apps/web/src/lib/transit.ts` の `DEFAULT_MAX_PAIRS` / `DEFAULT_DISTANCE_KM` /
+     `DEFAULT_GLOBAL_DEADLINE_MS` が正典。Phase 2 polish v3 (2026-04-27) で
+     20 / 10km / 10s から 40 / 15km / 15s に倍増（草津 4 日 plan で coverage 不足 → 422 連発のため）
    → TransitEdge[] を組み立てる
    → 各 TransitEdge は有向（A→B と B→A は別レコード）、from/to_place_id は places に含まれる ID
 
@@ -240,7 +242,7 @@ LLM 出力を受け取ったら、以下を全て通すまで reject：
 ## コスト・トークン管理
 
 - Places を全フィールド渡すと 1 place あたり 500 token 超。必要フィールドだけ抽出
-- transit_matrix は全ペアではなく近接ペアのみ（距離 10km 以内）
+- transit_matrix は全ペアではなく近接ペアのみ（距離 15km 以内、Phase 2 polish v3 で 10km から拡張）
 - Evidence Pack 全体で 10,000 token 以内を目安（超えたら上位スコアで絞る）
 
 ## バージョニング

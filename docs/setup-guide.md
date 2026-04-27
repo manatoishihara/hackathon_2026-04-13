@@ -70,6 +70,9 @@ cd ../..
 
 1. https://webservice.rakuten.co.jp/ でアプリ登録
 2. `applicationId` と `affiliateId` をコピー
+   - **`applicationId` は 19-20 桁の数字**（例: `1024711987305213057`）。webservice.rakuten.co.jp のダッシュボードに「アプリ ID」フィールドがあり、そこに表示されている値をそのまま使う
+   - UUID 形式（`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）は **「アプリケーションキー」など別フィールドの値で、楽天トラベル API では使えない**。投入すると `evidence/lodging.py` が log 上 fail-soft で skip され、Evidence Pack に lodging 情報が一切載らないので注意
+   - `affiliateId` は `xxxxxxxx.xxxxxxxx.xxxxxxxx.xxxxxxxx` のようなドット区切り。空文字でも API は動くが、収益化したい場合は設定する
 3. 承認に時間がかかる場合があるので Phase 1 着手時に申請しておく
 
 ## 3. 環境変数設定

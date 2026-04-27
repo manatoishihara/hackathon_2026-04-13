@@ -5,7 +5,7 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-27 更新、エラー詳細化）
+## 🏁 進捗サマリ（2026-04-28 更新）
 
 **フロント UX: API ヘルスチェックバナーの UX 改善**: ✅ **2026-04-27 完了（commit 提案待ち）**。ページ読み込み直後に「サーバーに接続できません」と表示されていた問題を修正。
 - `apiAvailable === null`（確認中）のとき: スピナー + 「サーバーの状態を確認中...」バナー表示、submit ボタンは disabled のまま「プランを生成」
@@ -18,9 +18,27 @@
 - `apps/web/src/app/plan/[id]/generating/page.tsx`: `ApiError` import 追加、catch ブロックで同等のステータス別分岐
 - web test **158/158 PASS** / tsc clean
 
-## 🏁 進捗サマリ（2026-04-27 更新）
 
-**Phase 2 polish v2 (2026-04-27): A 案 = transport_mode toggle 撤回 + 段階的 deprecation 完了**: 🟢 **実装 + Codex review 2 + Major 1 fix 完了 → user 手動 commit + push 待ち** (`fix/remove-transport-mode-toggle` ブランチ、develop から派生)。Run 13 失敗を受けて user 判断: タクシー利用可前提で「公共交通機関のみ」モードに本質的意味なし、user 指定で plan 失敗は UX 最悪 → toggle 撤回。3 並列 sub-agent で実装、~5 分で完了。
+**Phase 2 polish v3 (2026-04-28): 実装完了 + Codex review 5+6 Blocker 0 認定 + 4 commits 提案 → user push 待ち**: 🟢 **`fix/pack-transit-stability` ブランチに T1+T2+T4+T7+T5 を 4 commits で実装**。計画書段階の Codex review 1+2+3+4 で Blocker 0 認定済 → 実装 → **Codex review 5 で Major 1 (`attempted=0 && places.length>1` 抜け穴) + Minor 2 件発覚 → 全反映 → Codex review 6 で Blocker 0 / Major 0 認定**。
+- **実装内容** (4 commits 構成、T3/T6 は計画書段階で却下/削除):
+  - **Commit A (T1 + Major 1 fix)**: フロント `transit.ts` の `DEFAULT_MAX_PAIRS 20→40`/`DEFAULT_DISTANCE_KM 10→15`/`DEFAULT_GLOBAL_DEADLINE_MS 10_000→15_000`、`transit-guard.ts` の `shouldEarlyThrowOnTransit(stats, placeCount)` シグネチャ拡張で deadline 非依存の常時 coverage チェック (placeCount<=1 許容 / placeCount>1 && attempted=0 throw / succeeded<10 throw / coverage<30% throw)、page.tsx caller 更新、test 9 件
+  - **Commit B (T2)**: `_UNKNOWN_PLACE_ID_PATTERNS` に capture group 付き regex `(ChIJ[A-Za-z0-9_\-]{20,30})` 追加、`system.md` v2.0.0 第 9 項「正確コピー」追加 (短縮/省略/推測/合成禁止)、test 3 件
+  - **Commit C (T4 + T7 + Minor 1 fix)**: assembly に新 helper `_is_item_type_compatible` (validator helper 再利用、空 category 許容)、`_find_eligible_alternate_for_slot` tier3 に item_type filter + tier3 全落ち専用 warning log、`_find_alternate_place` 候補枯渇 warning log、generator の validate 失敗 log に `kind_summary` (Counter most_common 5)、test 6 件
+  - **Commit D (T5 + Minor 2 fix + plan + 進捗)**: `setup-guide.md` 楽天 ID 19-20 桁数字注意、`evidence-pack.md` 距離/最大/秒の数値ドリフト解消、`plans/2026-04-27-pack-transit-stability-fix.md` 計画書、tasks/* 進捗反映
+- **検証結果**: API 413 PASS (既知 env 依存 2 件 fail = test_supabase 無関係) / Web 164 PASS / tsc clean / build PASS / secret preflight 0 hit / Codex review 6 Blocker 0
+- **Codex review 5 で発覚した Major 1 (重要)**: 旧設計の `attempted === 0` 無条件許容には「places 多数 + 距離フィルタで pair 全落ち」抜け穴があり、空 transit_matrix で `/api/plans/generate` に流れて A6 系 422 連発しうる。`shouldEarlyThrowOnTransit` のシグネチャを `(stats, placeCount)` に拡張、`placeCount > 1 && attempted === 0` で early throw する設計に変更
+- **次のアクション (user)**:
+  1. 4 commits を順に commit (zsh の `[id]` glob 対策でパスをクォート、Commit A だけ注意): `git add "apps/web/src/app/plan/[id]/generating/transit-guard.ts" ...`
+  2. develop merge → push
+  3. Vercel + Render auto deploy 完了待ち (~3 min)
+  4. **本番 Run 13d (草津 4 日 / 80,000 円 / お任せ、アンカー無し)** で `/api/plans/generate → 200` 期待
+  5. **Run 13e (同条件 + 漫画堂 + 湯畑 アンカー)** で 200 確認
+  6. (理想) 箱根 + 京都 + 東京 各 1 回 200 確認
+- もし 422 残るなら Render Live tail で **Commit C で追加した `kind_summary` log** を確認 → 支配 issue を切り分けて追加 fix を判断可能
+- 詳細: `tasks/plans/2026-04-27-pack-transit-stability-fix.md` + lessons.md「2026-04-28: Phase 2 polish v3 実装完了、Codex review 5 で `attempted=0` 抜け穴発覚 → Major 1 fix → review 6 Blocker 0」エントリ
+- **副次の UX 課題**: フロント画面の「plan generation failed after retries」が英語のまま (RFC 7807 detail 直接表示)、リトライ動線も不親切。エラー文言日本語化 + 「もう一度試す」改善は別タスク候補
+
+**Phase 2 polish v2 完了部分 (Run 13b 失敗とは独立で価値あり)**: 🟢 **実装 + Codex review 2 + Major 1 fix + 本番 deploy 完了**。toggle UI 削除と段階的 deprecation 自体は完成、UX 改善 (移動手段選択の本質的不要性除去) は実現。Run 13 失敗を受けて user 判断: タクシー利用可前提で「公共交通機関のみ」モードに本質的意味なし、user 指定で plan 失敗は UX 最悪 → toggle 撤回。3 並列 sub-agent で実装、~5 分で完了。
 - **設計** (Codex review 1+2 全反映): `parseDirectionsResult` の WALKING > 30 min hard drop 撤廃 + `callDirectionsWithFallback` から DRIVING 除外 logic 削除、常に距離分岐 fallback chain (≤ 2km: TRANSIT → WALKING → DRIVING / > 2km: TRANSIT → DRIVING → WALKING) で全 mode 利用可能
 - **Agent 1 (Backend) 完了**: Pydantic `transport_mode: TransportMode | None = Field(default=None, deprecated=True)` で受信のみ許容 (旧 client 互換)、QueryContext / pack / prompt から配線削除、test 5 件削除 + backward compat test 3 件追加
 - **Agent 2 (Frontend) 完了**: shared-types / transit.ts/.test.ts / planForm / store / page 2 箇所 / api.test.ts から transport_mode 完全削除 + WALKING 30 min hard drop 撤廃 + `TransportModeSelector.tsx`/`.test.tsx` ファイル削除、test 13 件削除 + documenting test 1 件追加
