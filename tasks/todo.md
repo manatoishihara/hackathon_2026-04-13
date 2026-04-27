@@ -7,9 +7,23 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
-**Phase 1.10 後段 chore: Flask logging.basicConfig(INFO) 追加**: 🟡 **2026-04-27 セッション末で実装完了、commit 提案 → user push 待ち**（`chore/api-logging-config` ブランチ）。本番 Run 9 後の Render Live tail で `logger.info` 出力が一切なく、validator/generator の retry 詳細（`LLM attempt %d produced %d validation issues, retrying` 等）が見えなかったため、`apps/api/src/app.py` 冒頭に `logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), ...)` を追加。`LOG_LEVEL` env で上書き可（本番 INFO / test WARNING 想定）。API unit test 381/381 PASS（既知 env 依存 2 件は本変更無関係）。push → Render 再 deploy → 次セッション Run 10 で 422 の IssueKind 別 retry log を Live tail から取得して真因切り分けできる状態に到達。詳細は lessons.md「2026-04-27: Flask デフォルト logger は WARNING 以上のみ → 本番デバッグ視認性ゼロ問題」エントリ。
+**Phase 1.10 後段: 422 真因全塞ぎ (`fix/plan-generation-blockers`)**: 🟡 **2026-04-27 セッション末で実装完了、commit 提案 → user push 待ち**。本番 Run 10 で発見した 2 真因 (candidate_departures 1 件 / LLM hallucination) + Codex review 1+2+3 で発覚した追加 Blocker 2 / Major 4 / Minor 2 を網羅的に修正。フロント canonical 8 点 + 早期 throw、バック retry guidance + previous_issues 累積化 (recency 保証 `pop + 再挿入`) + regex robust 抽出。test 全 PASS / tsc clean / build PASS / Codex 最終 review Blocker 0。push → 本番 Run 11 で **`/api/plans/generate → 200` + `/plan/[id]` 遷移**を必須条件で確認。詳細は `tasks/plans/2026-04-27-plan-generation-blockers.md` + lessons.md「2026-04-27: 全塞ぎモード」エントリ。
 
-**Phase 1.10 本番 Run 9 (2026-04-27 セッション末)**: 🟢 **transit fallback fix が本番でも実証**。Vercel + Render 両方で `develop` の最新 commit が auto deploy 済、`/plan/new → /plan/<id>/generating` まで遷移、Maps SDK 40 回 ZERO_RESULTS の後 fallback で `/api/plans/generate` まで POST 到達（`transit_matrix=[]` でなくなった）。**ただし `/api/plans/generate → 422` はローカル verify と同様に発生**（LLM validator 側の独立問題、本セッションスコープ外）。
+**Phase 1.10 後段 chore: Flask logging.basicConfig(INFO) 追加**: ✅ **2026-04-27 セッションで実装 + push + 本番 deploy 反映完了**（`chore/api-logging-config` ブランチ → commit 148f4be → develop merge 13ba685 → push 済）。`apps/api/src/app.py` 冒頭に `logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), ...)` 追加。`LOG_LEVEL` env で上書き可。API unit test 381/381 PASS。**効果実証**: 本番 Run 10 で Render Live tail に `[INFO] src.llm.generator: LLM attempt 1 (model=gpt-4.1) assembly error (kind=unknown_place_id), retrying: ...` のような retry 詳細 4 行 + assembler self-healing の `[WARNING] src.llm.assembly: LLM picked ineligible place ... swapped to ...` まで取得できた。詳細は lessons.md「2026-04-27: Flask デフォルト logger は WARNING 以上のみ」エントリ。
+
+**Phase 1.10 本番 Run 10 (2026-04-27 セッション末)**: 🔴 **422 真因が完全に判明**。logging.basicConfig(INFO) 反映後の本番 Run 10 (plan_id `9b209857-c9b2-4dba-acfb-d3352936b293`、04:54-04:55) で Render Live tail から **4 attempts 全失敗の breakdown** を取得:
+- attempt 1 (gpt-4.1): `unknown_place_id` (day1_lunch、`ChIJJS7EfYgChGWARNW9YGF4jb0I`)
+- attempt 2 (gpt-4.1): `unknown_transit_edge` (`candidate_departures=['13:54']` で required `start_hhmm='16:30'` カバー不能)
+- attempt 3 (gpt-4.1): `unknown_place_id` (day1_dinner、attempt 1 と**同じ** ID 再出現)
+- attempt 4 (gpt-4.1-mini): place swap 成功 (assembler self-healing 動作) したが、別 edge の `candidate_departures=['13:54']` で `'16:30'` カバー不能
+
+**真因 A（構造、最優先）**: `apps/web/src/lib/transit.ts:300-302` の `parseDirectionsResult` が `candidate_departures` を **常に 1 件しか返さない**。`verify_hallucination_rate.py` は 5 点で test していたが、本番フロント (Phase 1.3b) は submit 時刻 1 点だけ → assembler の「16:30 以降出発」要件を満たせない = **Phase 1.3b ↔ 1.3e の contract drift**。
+
+**真因 B（次点）**: gpt-4.1 が `ChIJJS7EfYgChGWARNW9YGF4jb0I` を 2 回繰り返しハルシネーション。Phase 1.3e で 0% 達成済みのはずが本番条件で再発。問題 A 解消後に再測予定。
+
+詳細は lessons.md「2026-04-27: 本番 Run 10 で 422 真因判明 — `candidate_departures` 1 件問題（Phase 1.3b ↔ 1.3e 不整合）+ `unknown_place_id` ハルシネーション再発」エントリ。次セッション最優先で `tasks/plans/2026-04-28-candidate-departures-multi.md` 起案 → Codex review → 実装。
+
+**Phase 1.10 本番 Run 9 (2026-04-27 セッション中盤)**: 🟢 **transit fallback fix が本番でも実証**。Vercel + Render 両方で `develop` の最新 commit が auto deploy 済、`/plan/new → /plan/<id>/generating` まで遷移、Maps SDK 40 回 ZERO_RESULTS の後 fallback で `/api/plans/generate` まで POST 到達（`transit_matrix=[]` でなくなった）。
 
 **Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック**: 🟢 **2026-04-27 セッションで実装完了 + ローカル verify 完了 + 本番 push 完了 + 本番 Run 9 で fix 実証**（`fix/transit-fallback-walking-driving` ブランチ → develop merge → push 済、commit ce3dabd 含む）。`apps/web/src/lib/transit.ts` の travelMode 固定を「距離 ≤ 2km は TRANSIT → WALKING → DRIVING、> 2km は TRANSIT → DRIVING → WALKING」の fallback chain 化。Codex review 2 回（review 1 で「徒歩 2 時間 plan が assembler 経由で 422 を生む」を Major で発覚 → 距離分岐に軌道修正、review 2 で test 設計 bug 2 件発覚 → 反映）。web test 147/147 PASS / tsc clean / build PASS / API regression 381/381 PASS。**ローカル verify**: stats 40/40 全成功、mode_counts walk 20 / car 20、duration 5-46 min avg 18 min。**仮説修正**: 「transit fallback で 422 も解消する」は誤り、422 は LLM validator 側の独立問題（次の Run 10 で詳細 log 取得予定）。詳細は `tasks/plans/2026-04-27-transit-fallback.md` + lessons.md「2026-04-27」3 エントリ。
 
@@ -126,27 +140,61 @@
 
 **次にやるべきタスク:**
 
-> ## 🟡 **2026-04-27 セッション末で実装完了 → user commit + push 待ち**: Flask logging.basicConfig(INFO) 追加 (`chore/api-logging-config`)
+> ## 🟡 **2026-04-27 セッション末で実装完了 → user commit + push 待ち**: 422 真因全塞ぎ (`fix/plan-generation-blockers`)
 >
-> 本番 Run 9 で 422 が再現したが、Render Live tail に `logger.info` 出力が一切なく validator/generator の retry 詳細が見えない問題を fix。
+> 本番 Run 10 で発見した 2 真因 + Codex review 1+2+3 で発覚した追加 Blocker 2 / Major 4 / Minor 2 を網羅的に修正:
 >
-> **変更**: `apps/api/src/app.py` 冒頭に `logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")` を追加。`LOG_LEVEL` env で上書き可。
+> 1. **真因 A**: フロント `parseDirectionsResult` に `CANONICAL_DEPARTURE_TIMES` (`["00:00","06:00","09:00","12:00","15:00","18:00","21:00","23:59"]`) export const + observed merge → `candidate_departures` を 8〜9 件に
+> 2. **真因 B**: バック `_build_retry_guidance_md` で過去 unknown place_id の禁止リスト注入 + regex 2 種で robust 抽出 + `previous_issues` 累積化 + dedup（UNKNOWN_PLACE_ID は place_id 単位、他は (kind, message)）+ recency 保証 (`pop + 再挿入`) + `MAX_RETAIN=10` cap
+> 3. **早期 throw**: フロント `shouldEarlyThrowOnTransit(stats)` helper + 内側 catch で再 throw（握りつぶし排除）
+> 4. **verify_hallucination_rate.py** を canonical 8 点に同期、双方向 drift 警告コメント
 >
-> **検証**: API unit test 381/381 PASS（既知 env 依存 2 件 は本変更無関係）。secret プリフライト 0 hit。
+> **検証結果**:
+> - フロント `transit.test.ts` 48/48 + 新設 `transit-guard.test.ts` 4/4 PASS
+> - バック `test_llm_prompt.py` 35/35 + `test_llm_generator.py` 22/22 PASS（`_dedup_previous_issues` recency test 含む）
+> - API 全体 394/394 PASS（既知 env 依存 2 件は本変更無関係）
+> - Web 全体 151/151 + 6 件 pre-existing fail（modeSwitch / smoke、本変更無関係）
+> - tsc clean / build PASS
+> - Codex review 3 回完了（最終 Blocker 0）
 >
-> **commit 提案**:
-> ```bash
-> git add apps/api/src/app.py
-> git commit -m "chore(api): Flask に logging.basicConfig(INFO) を追加"
-> ```
+> **ブランチ構成**: `fix/plan-generation-blockers` を 1 ブランチで全 fix。Codex 推奨で 2 commit に分割可能（Commit A: フロント canonical + early throw、Commit B: バック retry guidance + 累積化）。
 >
 > **次のアクション (user)**:
-> 1. 上記 commit → develop merge → push
-> 2. Render auto deploy 完了待ち（~2 min）
-> 3. **本番 Run 10**: もう一度 `/plan/new` から submit、422 を再現
-> 4. **Render Live tail**: `LLM attempt 1 (model=gpt-4o) produced N validation issues, retrying` のような行が **複数表示される** はず → IssueKind 内訳から 422 真因特定 → 次の fix 方針決定（unknown_place_id / outside_opening_hours / budget_exceeded / unknown_transit_edge / ANCHOR_MISSING / ITEM_TYPE_CATEGORY_MISMATCH のどれか）
+> 1. commit → develop merge → push
+> 2. Vercel + Render auto deploy 完了待ち（~3 min）
+> 3. **本番 Run 11**: もう一度 `/plan/new` から submit → **`/api/plans/generate` が 200 で返る + `/plan/[id]` のプラン閲覧画面まで遷移** を必須条件として確認
+> 4. もし 422 のままなら Render Live tail で attempt 別 issue を確認 → ハッカソン提出までに必要な追加 fix を判断
+>
+> **詳細**: `tasks/plans/2026-04-27-plan-generation-blockers.md`（全 Codex review 反映済）+ lessons.md「2026-04-27: 全塞ぎモード — Codex 3 回 review で 422 真因 4 つ + 副次 Major 4 つを網羅的に修正」エントリ参照
 
-> ## 🔴 **次の最優先 (transit fallback verify で判明、Run 10 で IssueKind 取得後に決着)**: `/api/plans/generate → 422` は transit fallback と独立した別問題
+> ## 🔴 **本番で 200 が出るまで継続調査 (Run 11 で判定)**: もし 422 が続くなら次の最優先タスク
+>
+> 本番 Run 10 (plan_id `9b209857-...`、04:54-04:55) で 422 を再現、Render Live tail から **4 attempts 全失敗の breakdown** を取得:
+>
+> - attempt 1 (gpt-4.1): `unknown_place_id` (day1_lunch)
+> - attempt 2 (gpt-4.1): `unknown_transit_edge` — `candidate_departures=['13:54']` で required `start_hhmm='16:30'` カバーできず
+> - attempt 3 (gpt-4.1): `unknown_place_id` (day1_dinner、attempt 1 と同じ ID)
+> - attempt 4 (gpt-4.1-mini): place swap 成功したが `candidate_departures=['13:54']` で `'16:30'` カバーできず
+>
+> **問題 A (構造、最優先)**: `apps/web/src/lib/transit.ts:300-302` の `parseDirectionsResult` が `candidate_departures` を **常に 1 件しか返さない**。Phase 1.3e `verify_hallucination_rate.py` は 5 点 (`["09:00","12:00","15:00","18:00","21:00"]`) で test していたのに、本番フロント (Phase 1.3b) は submit 時刻 1 点だけ → assembler が「16:30 以降に出発」要件を満たせず reject。
+>
+> **問題 B (LLM ハルシネーション、次点)**: gpt-4.1 が `ChIJJS7EfYgChGWARNW9YGF4jb0I` を attempt 1 + 3 で繰り返し出力。Phase 1.3e で 0% 達成済みのはずが本番条件で再発。問題 A 解消後に再測。
+>
+> **次セッション最初のタスク**:
+> 1. 問題 A の plan を `tasks/plans/2026-04-28-candidate-departures-multi.md` に書く
+> 2. Codex review 1 → 反映
+> 3. TDD で実装（branch `fix/candidate-departures-multi`）。設計案 2 つ:
+>    - (1) フロントで 5 つの departure_time で並列 fetch（コール 5x、deadline 10s 危険）
+>    - (2) 1 回 fetch 後にフロント側で fixed list `["09:00","12:00","15:00","18:00","21:00"]` を `candidate_departures` に加算（精度落ちるが assembler 互換、レイテンシ影響なし）→ **案 2 推奨**
+> 4. Codex review 2 → 反映
+> 5. ローカル + 本番 Run 11 で verify
+> 6. 問題 A 解消後、問題 B が残るか測定
+>
+> **詳細**:
+> - 設計の learning は `tasks/lessons.md` 「2026-04-27: 本番 Run 10 で 422 真因判明 — `candidate_departures` 1 件問題（Phase 1.3b ↔ 1.3e 不整合）+ `unknown_place_id` ハルシネーション再発」エントリ参照
+> - 関連実装: `apps/web/src/lib/transit.ts:243-303` (`parseDirectionsResult`), `apps/api/src/llm/assembly.py` (assembler の transit edge selection logic), `apps/api/scripts/verify_hallucination_rate.py` (5 点 candidate を出している test fixture)
+
+> ## ✅ **本セッション (2026-04-27) で完了**: Flask logging.basicConfig(INFO) (`chore/api-logging-config`) → develop merge + push 済
 >
 > 2026-04-27 セッション末のローカル `pnpm dev` verify で **transit_matrix が 40/40 で取れていても 422 が出ること** が判明。前セッション handoff の仮説「transit fallback fix で 422 も解消する」は **誤り**。
 >
