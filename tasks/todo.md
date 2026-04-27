@@ -5,7 +5,30 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-28 更新、v5 で 3 日 plan は通過、4 日 plan は構造的に依然 422、楽天キー無効が副次発覚）
+## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中）
+
+**Phase 2 polish v6 (2026-04-28、本番 deploy 完了): 4 日 plan 生成成功実証**: 🟢 commits `c7c2983 / 586ae86 / 95c3fcd`、`707a4e3` で develop merge + push 済。
+- 主要変更:
+  - assembler **item_type pre-check** (LLM が meal slot に park 等を選んだら事前 swap)
+  - **transit duration_min=0 → 最小 1 分補正** (INVALID_TIME_RANGE 防止)
+  - prompt v2 system.md 第 6 項で activity / meal / lodging slot の category allowlist 厳守強調
+  - Evidence (営業時間 / 評価 / 出典 / verified_at) を pack.places から populate
+  - 楽天 lodging API error response body を log に残す診断 logging
+- Codex review 2 サイクル (Major 2 + Minor 2 → Blocker 0)、API 439 PASS / Web 164 PASS
+- **本番効果実証**: 4 日 plan が初めて 200 達成 (`/plan/[UUID]` 直行)、kind_summary から `item_type_category_mismatch` + `invalid_time_range` が消失
+
+**Phase 2 polish v6.1 (2026-04-28、deploy 後 UX hotfix、user 報告で発覚した 3 件、working tree、未 commit)**:
+- **問題 1: Map 不表示** → `apps/web/src/lib/api.ts` の getPlanItems に `_transformPlanItemRow` 追加 (DB flat columns → `location` ネスト変換)
+- **問題 2: Evidence「不明」表示** → `getEvidenceBadgeInfo` 4 段階判定に: verified > estimated > unknown+sources → verified 表示 > unknown
+- **問題 3: dinner / lodging 欠損 (3 イベント = 9/12/14 時固定)** → system.md 第 4 項を「全 slot 必ず埋めること」に強化 + builder.py の `_BASE_KEYWORD_SUFFIXES` に「旅館 ホテル」追加 + `_MAX_KEYWORDS` 5→7 拡張
+- API 439 PASS / Web 164 PASS / tsc / build / secret 0 hit
+- **次のアクション (user)**: v6.1 を 2 commits + push、楽天 applicationId を正しい数字 ID に更新、本番再 verify
+
+**Phase 2 polish v5 (2026-04-28、本番 deploy 完了): 3 日 plan が通るようになった**: 🟢 commits `e911d86 / 898f6e8 / 25a9805 / fa1f7d0 / cef1d92 / 92ae85a`、`6af88f5` で develop merge + push 済。重複ポリシーを best-effort 化、lodging 連泊許容、transit skip + ChIJ guard 削除。Codex review 4 サイクル Blocker 0。
+
+---
+
+## 🏁 進捗サマリ（2026-04-28 旧、v5 で 3 日 plan は通過、4 日 plan は構造的に依然 422 — v6 で解消）
 
 **Phase 2 polish v5 (2026-04-28): 実装 + Codex review 4 サイクル Blocker 0 + push + deploy 完了**: 🟢 user 提案「lodging だけ重複完全許容、meal/activity は best-effort 重複回避 + エラー回避優先」を反映した設計変更を `fix/soft-duplicate-with-lodging-allowed` ブランチで commits 3 件、develop merge + push 済 (commit `6af88f5`)。
 - **検証結果 (本番 deploy 後 user 報告)**:

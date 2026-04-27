@@ -27,6 +27,34 @@
 
 ## ログ
 
+## 2026-04-28: Phase 2 polish v6 + v6.1 実装、4 日 plan 生成成功実証、3 件 hotfix で UX 完成度上げ
+- **v6 (commit `c7c2983 / 586ae86 / 95c3fcd`、`707a4e3` で develop merge + push 済)**:
+  - assembler **item_type pre-check** (LLM が meal slot に park 等を選んだら事前 swap、validator catch 待たず高速 path)。`_find_eligible_alternate_for_slot` の tier1/2/3 全部で `_is_item_type_compatible` filter 適用 (Codex review 1 Major 1)
+  - **transit duration_min=0 → 最小 1 分補正** (徒歩 0 分至近 edge で start==end → INVALID_TIME_RANGE 防止)
+  - **prompt v2 system.md 第 6 項強化**: activity / meal / lodging slot の category allowlist 明示、「絶対に割り当てるな」を明記
+  - **Evidence (営業時間 / 評価 / 出典 / verified_at) populate**: `_serialize_plan_item` で pack.places から動的に埋める。旧空 hardcode を解消、フロント EvidenceModal で「✓ Places verified」「営業時間 09:00-22:00」「評価 4.5」表示可能に
+  - 楽天 lodging API error response body を log に残す診断 logging 追加
+  - Codex review 2 サイクル (Major 2 + Minor 2 → Blocker 0)、API 439 PASS / Web 164 PASS / tsc / build / secret 0 hit
+- **本番 deploy 後の v6 動作実証**:
+  - **4 日 plan が初めて成功** (`/api/plans/generate → 200`)。v3 (transit) → v4 (pack) → v5 (重複緩和) → v6 (item_type + duration) と段階的に塞いだ結果
+  - kind_summary に `item_type_category_mismatch` が完全消失、`invalid_time_range` も解消 (assembler pre-check + duration 補正の効果実証)
+- **v6 deploy 後の user 報告で発覚した 3 件 (v6.1 で hotfix、未 commit)**:
+  - **問題 1: Map 不表示**: フロント MapView が `i.location.lat` で undefined → 全 item 除外で「座標付きスポットなし」表示。原因: getPlanItems が DB flat columns (`place_id` / `lat` / `lng`) を `location` ネスト構造に変換していない。**TS 型と DB schema の構造不一致が長らく潜在していた、4 日 plan 成功で初めて map view が表示されて発覚**
+  - **問題 2: Evidence「不明」誤表示**: cost_confidence=unknown (price_level 未設定の観光地など) でも sources=["Google Places"] が populate されているのに badge が「不明」表示。`getEvidenceBadgeInfo` が cost_confidence のみ見て sources を無視していた。**UX バッジは「コスト推定確度」と「place 検証状態」の 2 軸で本来表現すべきところ、1 軸の cost_confidence だけ見ていた設計バグ**
+  - **問題 3: dinner / lodging slot 欠損** (3 イベント = 9/12/14 時固定): LLM が dinner / lodging を空のまま提出。**system.md 第 4 項「全 slot に割当てる必要は無い（欠損可）」が緩すぎる + Google Places search に lodging keyword なし + 楽天 API 400 で lodging 候補ゼロ** の 3 重苦
+- **v6.1 hotfix (working tree、未 commit)**:
+  - `apps/web/src/lib/api.ts` の getPlanItems に `_transformPlanItemRow` 追加 (DB flat → location ネスト変換)
+  - `packages/shared-types/src/index.ts` の getEvidenceBadgeInfo を 4 段階判定に: verified > estimated > **unknown + sources → verified 表示** > unknown
+  - `apps/api/src/llm/prompts/v2.0.0/system.md` 第 4 項を「全 slot を必ず埋めること」に強化、「dinner / lodging を空にすると旅行プランとして欠陥品」を明記、lodging 連泊推奨を再掲
+  - `apps/api/src/evidence/builder.py` の `_BASE_KEYWORD_SUFFIXES` に「旅館 ホテル」追加 (5 軸目)、`_MAX_KEYWORDS=5→7` に拡張 (5 base + theme + tag 許容)
+- **学び 1 (重要)**: **DB schema と TS 型の構造不一致は long-tail で発覚する**。flat columns vs nested location は Phase 1 設計時に決まっていたが、frontend 表示が「正常な plan で初めて lat/lng アクセス試行」する段階まで触らない。**バックエンド → DB → フロント の境界で type transformation が必要なケースは PR review で意識的に確認するルール**化候補
+- **学び 2**: **EvidenceBadge の semantic 設計ミス**: cost_confidence (コスト推定確度) と sources (place 検証状態) が混同されていた。今後 Evidence 関連の表示は 2 軸を分けて考える (place 検証確度 + コスト推定確度)
+- **学び 3**: **system.md の prompt は「許容句」を慎重に書く**。「全 slot に割当てる必要は無い (欠損可)」は LLM に「dinner / lodging を埋めなくていい」と誤解されやすい。本当に欠損が許される条件 (eligible_for_slots 空) のみ例外として書き、デフォルトは「全部埋める」を強く要求する
+- **次のステップ (user 作業)**:
+  - v6.1 の 2 commits を branch 切って push、本番 deploy 後に再 verify
+  - 楽天 applicationId 正しい数字 ID への変更 (webservice.rakuten.co.jp で取得)
+  - 修正後の本番 Run で「Map にマーカー / Evidence Modal で営業時間・出典 / dinner+lodging slot 埋まる」を確認
+
 ## 2026-04-28: Phase 2 polish v5 実装完了 (重複ポリシー best-effort 化 + lodging 連泊許容)、3 日 plan は通るが 4 日 plan は依然 422 — Pack 候補不足が新 bottleneck
 - **状況**: v4 (pack 拡張 + fuzzy match) の本番 Run 13e で 422 再発、user 「同じものが許されるのは流石に宿くらいでは？重複は best-effort、エラー回避優先」方針で v5 設計
 - **v5 設計**: Codex review 設計段階 2 サイクル (Critical 1 + Major 5 + Minor 1 → Blocker 0 / Major 3 / Minor 2 → 全反映) → 実装 → review 1+2 サイクル (Major 1 + Minor 3 → Blocker 0 認定)
