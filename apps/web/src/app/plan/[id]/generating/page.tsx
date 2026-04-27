@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Spinner, WarningCircle, CheckCircle } from "@phosphor-icons/react/dist/ssr";
 
 import { postPlanGenerate, updatePlanStatus } from "@/lib/api";
 import { fetchTransitMatrix } from "@/lib/transit";
@@ -10,6 +9,7 @@ import {
   getActiveSession,
   useGenerationSessionStore,
 } from "@/stores/generationSessionStore";
+import { FlyingPlane } from "@/components/plan-generating/FlyingPlane";
 
 type Step =
   | "loading-session"
@@ -20,10 +20,10 @@ type Step =
   | "error";
 
 const STEP_LABELS: Record<Step, string> = {
-  "loading-session": "セッション確認中",
-  "fetching-transit": "経路情報を取得中",
-  "generating-plan": "プランを生成中",
-  "ready-mock": "生成サーバーの応答待ち",
+  "loading-session": "搭乗手続き",
+  "fetching-transit": "ルート計算",
+  "generating-plan": "プラン編集",
+  "ready-mock": "サーバー応答待ち",
   done: "完了",
   error: "エラー",
 };
@@ -34,6 +34,20 @@ const STEP_ORDER: Step[] = [
   "generating-plan",
   "done",
 ];
+
+/**
+ * mock 時のみ、演出を見せるための擬似的な進行時間。
+ * 本番（実 LLM 接続）では各 await が実時間を消費するので不要。
+ * 合計 ≒ 14.5 秒（fetching 4s + generating 9s + done 1.5s）。
+ */
+const MOCK_DELAY_MS = {
+  fetching: 4000,
+  generating: 9000,
+  done: 1500,
+} as const;
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * 1.6 プラン生成中 (05)。
@@ -90,6 +104,8 @@ export default function GeneratingPage() {
           // 環境変数未設定の例外もここで拾う。空で続行する。
           transitMatrix = [];
         }
+        // mock 時は実 await が即解決するので、演出を見せるための擬似ウェイトを挟む
+        if (useMocks) await sleep(MOCK_DELAY_MS.fetching);
 
         setStep("generating-plan");
         const { plan_id: serverPlanId } = await postPlanGenerate({
@@ -97,12 +113,14 @@ export default function GeneratingPage() {
           evidence_pack_id: session.evidence_pack_id,
           transit_matrix: transitMatrix,
         });
+        if (useMocks) await sleep(MOCK_DELAY_MS.generating);
 
         if (serverPlanId) {
           // 1.3d 完成後: サーバーが plan_id を返す（Zustand と同じ UUID が返る前提）
           // 成功したので session を必ずクリア（戻る操作・再マウントでの重複 generate 防止）
           clearSession();
           setStep("done");
+          if (useMocks) await sleep(MOCK_DELAY_MS.done);
           router.replace(`/plan/${serverPlanId}`);
           return;
         }
@@ -112,6 +130,7 @@ export default function GeneratingPage() {
           // モックモード: Zustand の plan_id で遷移（デザイン確認）
           clearSession();
           setStep("done");
+          await sleep(MOCK_DELAY_MS.done);
           router.replace(`/plan/${session.plan_id}`);
           return;
         }
@@ -140,29 +159,41 @@ export default function GeneratingPage() {
     router.replace("/plan/new");
   };
 
-  const activeIdx = step === "error" ? -1 : STEP_ORDER.indexOf(step === "ready-mock" ? "generating-plan" : step);
+  const visibleStep = step === "ready-mock" ? "generating-plan" : step;
+  const activeIdx = step === "error" ? -1 : STEP_ORDER.indexOf(visibleStep);
+
+  const variant: "flying" | "landed" | "error" =
+    step === "error" ? "error" : step === "done" ? "landed" : "flying";
+
+  // 飛行機の水平進捗 (0〜1)
+  const progress =
+    step === "done"
+      ? 1
+      : step === "error"
+        ? 0
+        : Math.max(0, activeIdx) / (STEP_ORDER.length - 1);
+
+  const headline =
+    step === "error"
+      ? "離陸できませんでした"
+      : step === "ready-mock"
+        ? "サーバーの応答を待っています"
+        : step === "done"
+          ? "目的地に到着しました"
+          : "プランを編んでいます";
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col items-center justify-center gap-8 px-6 py-16 text-center">
-      <div className="flex flex-col items-center gap-4">
-        {step === "error" ? (
-          <WarningCircle size={48} weight="duotone" className="text-[color:var(--color-danger)]" />
-        ) : step === "done" ? (
-          <CheckCircle size={48} weight="duotone" className="text-[color:var(--color-evidence-verified)]" />
-        ) : (
-          <Spinner size={48} weight="bold" className="animate-spin text-[color:var(--color-primary)]" />
-        )}
-        <h1 className="text-2xl font-bold text-[color:var(--color-text-primary)]">
-          {step === "error"
-            ? "プラン生成に失敗しました"
-            : step === "ready-mock"
-            ? "生成サーバーの応答を待っています"
-            : step === "done"
-            ? "完成しました"
-            : "プランを組み立てています..."}
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col items-center justify-center gap-10 px-6 py-16 text-center">
+      <div className="flex w-full flex-col items-center gap-6">
+        <p className="text-[10px] font-medium tracking-[0.28em] text-[color:var(--color-text-secondary)]">
+          IN FLIGHT
+        </p>
+        <FlyingPlane variant={variant} progress={progress} />
+        <h1 className="font-heading text-3xl font-medium leading-[1.4] text-[color:var(--color-text-primary)] sm:text-4xl">
+          {headline}
         </h1>
         {step === "ready-mock" ? (
-          <p className="max-w-md text-sm text-[color:var(--color-text-secondary)]">
+          <p className="max-w-md text-sm leading-relaxed text-[color:var(--color-text-secondary)]">
             プラン生成は準備完了しました。LLM 接続（Phase 1.3d）の完成を待つ画面です。
             <code className="mx-1 rounded bg-[color:var(--color-surface)] px-1 py-0.5 text-xs">
               NEXT_PUBLIC_USE_MOCKS=1
@@ -170,36 +201,70 @@ export default function GeneratingPage() {
             を設定すると、モックプランで続きを確認できます。
           </p>
         ) : error ? (
-          <p className="max-w-md text-sm text-[color:var(--color-danger)]">{error}</p>
+          <p className="flex max-w-md items-start gap-2 border-l-2 border-[color:var(--color-accent)] pl-3 text-left text-sm leading-relaxed text-[color:var(--color-text-primary)]">
+            {error}
+          </p>
         ) : null}
       </div>
 
-      <ol className="flex w-full max-w-md flex-col gap-2">
-        {STEP_ORDER.slice(0, 3).map((s, i) => {
+      <ol
+        className="grid w-full max-w-md gap-0"
+        style={{
+          gridTemplateColumns: `repeat(${STEP_ORDER.length}, minmax(0, 1fr))`,
+        }}
+        role="list"
+      >
+        {STEP_ORDER.map((s, i) => {
           const isActive = activeIdx === i;
-          const isDone = activeIdx > i;
+          const isDone = activeIdx > i || step === "done";
+          const isFirst = i === 0;
+          const isLast = i === STEP_ORDER.length - 1;
           return (
             <li
               key={s}
-              className="flex items-center gap-3 rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-4 py-2 text-left text-sm"
+              className="relative flex flex-col items-center gap-2 pt-1"
             >
+              {/* 経路線（左半分） */}
+              {!isFirst ? (
+                <span
+                  aria-hidden
+                  className={`absolute left-0 top-2.5 h-px w-1/2 ${
+                    isDone || isActive
+                      ? "bg-[color:var(--color-primary)]"
+                      : "bg-[color:var(--color-border)]"
+                  }`}
+                />
+              ) : null}
+              {/* 経路線（右半分） */}
+              {!isLast ? (
+                <span
+                  aria-hidden
+                  className={`absolute right-0 top-2.5 h-px w-1/2 ${
+                    isDone
+                      ? "bg-[color:var(--color-primary)]"
+                      : "bg-[color:var(--color-border)]"
+                  }`}
+                />
+              ) : null}
+              {/* マイルストーンドット（active は scale + ring で強調） */}
               <span
-                className={
+                aria-hidden
+                className={`relative z-10 inline-block rounded-full border-2 transition-all duration-500 ${
                   isDone
-                    ? "text-[color:var(--color-evidence-verified)]"
+                    ? "h-3 w-3 border-[color:var(--color-primary)] bg-[color:var(--color-primary)]"
                     : isActive
-                    ? "text-[color:var(--color-primary)]"
-                    : "text-[color:var(--color-text-tertiary)]"
-                }
-              >
-                {isDone ? "✓" : i + 1}
-              </span>
+                      ? "h-4 w-4 border-[color:var(--color-primary)] bg-[color:var(--color-accent)] shadow-[0_0_0_4px_rgba(240,153,123,0.25)]"
+                      : "h-3 w-3 border-[color:var(--color-border)] bg-[color:var(--color-surface)]"
+                }`}
+              />
               <span
-                className={
+                className={`text-[10px] font-medium leading-tight ${
                   isActive
-                    ? "font-medium text-[color:var(--color-text-primary)]"
-                    : "text-[color:var(--color-text-secondary)]"
-                }
+                    ? "text-[color:var(--color-primary)]"
+                    : isDone
+                      ? "text-[color:var(--color-text-primary)]"
+                      : "text-[color:var(--color-text-tertiary)]"
+                }`}
               >
                 {STEP_LABELS[s]}
               </span>
@@ -212,7 +277,7 @@ export default function GeneratingPage() {
         <button
           type="button"
           onClick={handleRetry}
-          className="rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-4 py-2 text-sm font-medium hover:opacity-80"
+          className="rounded-full border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-6 py-2.5 text-sm font-medium text-[color:var(--color-text-primary)] transition-colors hover:border-[color:var(--color-primary)] hover:text-[color:var(--color-primary)]"
         >
           もう一度入力からやり直す
         </button>

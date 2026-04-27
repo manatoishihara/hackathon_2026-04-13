@@ -72,7 +72,9 @@ describe("GeneratingPage (1.6)", () => {
     render(<GeneratingPage />);
     // 初期 step は "loading-session"（見出しは「プランを組み立てています...」）
     expect(
-      screen.getByRole("heading", { name: /プランを組み立てています|プラン生成に失敗/ }),
+      screen.getByRole("heading", {
+        name: /プランを編んで|プランを組み立てています|プラン生成に失敗|離陸できませんでした|目的地に到着/,
+      }),
     ).toBeInTheDocument();
   });
 });
