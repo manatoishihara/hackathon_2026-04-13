@@ -5,7 +5,9 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-26 更新）
+## 🏁 進捗サマリ（2026-04-27 更新）
+
+**Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック**: 🟡 **2026-04-27 セッションで実装完了 + ローカル verify 完了 → commit + user push 待ち**（`fix/transit-fallback-walking-driving` ブランチ）。`apps/web/src/lib/transit.ts` の travelMode 固定を「距離 ≤ 2km は TRANSIT → WALKING → DRIVING、> 2km は TRANSIT → DRIVING → WALKING」の fallback chain 化。Codex review 2 回（review 1 で「徒歩 2 時間 plan が assembler 経由で 422 を生む」を Major で発覚 → 距離分岐に軌道修正、review 2 で test 設計 bug 2 件発覚 → 反映）。web test 147/147 PASS / tsc clean / build PASS / API regression 381/381 PASS。**ローカル verify**: stats 40/40 全成功、mode_counts walk 20 / car 20、duration 5-46 min avg 18 min。**ただし `/api/plans/generate → 422` は transit fallback と独立した別問題と判明**（transit_matrix=40 件あっても 422、LLM validator 側の問題）。詳細は `tasks/plans/2026-04-27-transit-fallback.md` + lessons.md「2026-04-27」2 エントリ。次セッションは LLM validator 422 の切り分けが最優先。
 
 **DB-4/DB-5 テスト**: ✅ 2026-04-26 完了。`apps/api/tests/test_share_routes.py` を新規作成（11 件）。share_routes.py / plan_cache.py / extensions.py の実装は既完成済みで、テストのみ追加。全 unit テスト 332 件 PASS（既存 2 件の env 依存失敗は本変更と無関係）。
 
@@ -107,21 +109,56 @@
 
 **次にやるべきタスク:**
 
-> ## 🔴 **最優先 (hackathon 提出ブロッカー)**: プラン生成が本番 / ローカル両方で動かない
+> ## 🔴 **次の最優先 (transit fallback verify で判明)**: `/api/plans/generate → 422` は transit fallback と独立した別問題
 >
-> Phase 2.5 / 2.2 / 1.10 Evidence Pack 多様性 / migration 04+05 / Vercel key / フロント PATCH fix を全部適用しても、**最終的に LLM 生成が 422 で失敗**してプラン生成画面に到達しない。
+> 2026-04-27 セッション末のローカル `pnpm dev` verify で **transit_matrix が 40/40 で取れていても 422 が出ること** が判明。前セッション handoff の仮説「transit fallback fix で 422 も解消する」は **誤り**。
 >
-> **真因（2026-04-26 ローカル Run 8 で判明）**: フロント `apps/web/src/lib/transit.ts:333` が `travelMode: "TRANSIT"` 固定で、Maps Directions が「観光地ペア」（彫刻の森美術館 ⇄ 箱根食堂 等）に対して **ZERO_RESULTS を 40 ペア全部で返す**。Maps Directions の TRANSIT は「駅・停留所間の公共交通機関」を返す SDK で、観光地のような徒歩アクセス前提の地点間では機能しない。Phase 1.10 fix で places を多様化した結果、この限界が顕在化（皮肉にも旧版は places が駅前飲食店ばかりだったので TRANSIT が成功していた）。
+> **観測値（箱根 / 1 泊 2 日 / auto / 30,000円）**:
+> - `[transit-debug] stats`: `{attempted: 40, succeeded: 40, errors: 0, timedOut: 0}` ← transit は完璧
+> - `mode_counts`: `{walk: 20, car: 20}` / `duration: 5〜46 min, avg 18 min` ← 距離分岐も健全
+> - `/api/plans/generate → 422 UNPROCESSABLE ENTITY` ← LLM validator が 3 回 retry 後 reject
 >
-> **次セッション最初のタスク（branch `fix/transit-fallback-walking-driving`）**:
-> 1. `apps/web/src/lib/transit.ts:333` の `travelMode: "TRANSIT"` 固定を **TRANSIT → WALKING → DRIVING フォールバック chain** に変更
-> 2. 各 mode で per-call 2s timeout、全体 deadline 10s 維持、`mapVehicleToMode` を WALKING / DRIVING ケースに拡張
-> 3. test (`apps/web/src/lib/transit.test.ts`) に「TRANSIT が ZERO_RESULTS なら WALKING を試す」test 追加
-> 4. ローカル `pnpm dev` で verify → 本番 deploy → 最終 E2E
-> 5. これが解消すれば Phase 2.2 budget context の効果も観察できる（現在は LLM 422 で見えない）
+> **次セッションでの調査タスク**（Manato）:
+> 1. Flask の log（`pnpm dev` のターミナル出力）を確認して、validator がどの issue で reject しているか特定（`unknown_place_id` / `outside_opening_hours` / `budget_exceeded` / `unknown_transit_edge` etc）
+> 2. 必要なら `apps/api/scripts/verify_hallucination_rate.py` をローカル env で動かして再現性ある rate 計測
+> 3. Phase 1.3e の hallucination 0% / success 100% は `verify_hallucination_rate.py` で計測されたもの。本番でなぜ regression が出ているのか切り分け（candidate 数 / prompt token 数 / pack 構成 / opening_hours の周末扱い 等）
 >
-> 規模: 実装 ~50 LOC、test ~30 LOC、1〜2 時間。詳細は次セッションで plan + Codex review → 実装。
-> 再会用プロンプト: `tasks/handoff-next-session.md` 参照。
+> 詳細は `tasks/lessons.md` 「2026-04-27: ローカル verify で『transit fallback fix は完璧、ただし 422 は別問題』と判明（仮説の修正）」エントリ参照。
+
+> ## 🟡 **2026-04-27 セッションで実装完了 + ローカル verify 完了 → user commit + push 待ち**: Maps Directions travelMode 距離分岐フォールバック
+>
+> **ブランチ**: `fix/transit-fallback-walking-driving`（develop から派生、未 commit、commit 提案を user に提示済）
+>
+> **背景**: 2026-04-26 Run 8 で発見された「TRANSIT が観光地ペアで全 ZERO_RESULTS」を fix。`apps/web/src/lib/transit.ts` の `travelMode: "TRANSIT"` 固定を、ペア距離 ≤ 2km は `TRANSIT → WALKING → DRIVING`、> 2km は `TRANSIT → DRIVING → WALKING` の順で fallback chain 化した。
+>
+> **設計判断（Codex review 1 回目で軌道修正）**:
+> - 単純な「TRANSIT → WALKING → DRIVING」順序固定は **遠距離 10km ペアで「徒歩 2 時間」が plan に組み込まれ assembler の opening_hours 違反量産で 422 再誘発リスク** → 距離分岐で 2 段目を切替
+> - 閾値 `WALKING_DISTANCE_KM = 2` の根拠 = 徒歩 30 分相当（4 km/h × 0.5h、plan として自然）
+> - per-mode timeout 2s 維持（`/3` 案を Codex OK 判定で却下、ZERO_RESULTS は ~100ms で返るので実時間 ~600ms/pair）
+>
+> **Codex review 2 回目で発覚した test 設計 bug 2 件も反映**:
+> - 「WALKING / DRIVING で transitOptions 未付与」test が近距離ペアで書かれて DRIVING が呼ばれていなかった → 近距離 / 遠距離の 2 件に分割
+> - WALKING_DISTANCE_KM の値そのものを固定する test なし（3 に変えても通る）→ 上側境界 (2.0015km) で DRIVING / WALKING 0 件 を assert
+>
+> **検証結果**: web test **147/147 PASS** (既存 130 + 新規 17) / tsc clean / build PASS / API regression 381/381 PASS / Codex review 2 回目 Blocker 0
+>
+> **ローカル verify 結果 (2026-04-27 セッション末)**: `pnpm dev` + Playwright で `/plan/new` 提出 → `[transit-debug] stats: {attempted: 40, succeeded: 40, errors: 0, timedOut: 0}` / `mode_counts: {walk: 20, car: 20}` / `duration: 5〜46 min, avg 18 min`。**Maps SDK は TRANSIT で全 ZERO_RESULTS（44 回）を返した後、fallback chain で WALKING/DRIVING で全成功**。距離分岐も綺麗に二分。本 fix の責務は完璧に達成
+>
+> **secret プリフライト**: 0 hit
+>
+> **commit 提案** (2 commit 構成、user 手動):
+> 1. `docs(phase-1.10): Maps Directions travelMode フォールバック設計書` ← `tasks/plans/2026-04-27-transit-fallback.md`
+> 2. `fix(phase-1.10): Maps Directions の travelMode を距離分岐フォールバックに` ← `apps/web/src/lib/transit.ts` + `apps/web/src/lib/transit.test.ts`
+>
+> **次のアクション (user)**:
+> 1. 上記 commit 実施 → develop マージ → push
+> 2. Vercel auto deploy 完了後、本番 **Run 9** で `/plan/new` から箱根 / wishes 短文 / tag 空 で submit、`/plan/[id]` まで到達するか確認。transit_matrix が ≥ 1 件取れていれば Phase 2.2 budget context の効果も観察可能になる
+> 3. ローカル `pnpm dev` E2E は test mock 済みで論理は固まっているので skip 可（時間あれば実施）
+>
+> **詳細記録**:
+> - 設計書 + Codex 2 回 review 反映: `tasks/plans/2026-04-27-transit-fallback.md`
+> - 判断履歴 + 学び: `tasks/lessons.md` 「2026-04-27: Maps Directions の travelMode を距離分岐フォールバック chain 化で解消」
+> - これで `.claude/rules/external-api-rules.md` 昇格候補（外部経路 SDK のフォールバック chain は単一モード固定せず下流影響まで含めて設計）が 2 回目記録、次セッション or commit 後にルール昇格を判断
 
 
 - [x] **Manato**: Phase 1.3e すべて完遂（hallucination 0% / success 100%、run 27 ベースライン）

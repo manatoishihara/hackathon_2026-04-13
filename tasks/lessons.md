@@ -27,6 +27,47 @@
 
 ## ログ
 
+## 2026-04-27: ローカル verify で「transit fallback fix は完璧、ただし 422 は別問題」と判明（仮説の修正）
+- 状況: 同日完了の transit fallback fix を `pnpm dev` + Playwright で `/plan/new` 提出 verify。`transit-debug` 仕掛けの console.log で stats / mode breakdown / duration 統計を取得
+- 観測値（箱根 / 1 泊 2 日 / auto モード / 30,000円 budget）:
+  - stats: `{attempted: 40, succeeded: 40, timedOut: 0, errors: 0, deadlineReached: false}` ← **40/40 全成功**
+  - Maps SDK は "Directions request returned no results" を **44 回**出力（TRANSIT で全 ZERO_RESULTS） → fallback chain で WALKING / DRIVING 採用
+  - mode_counts: **`{walk: 20, car: 20}`** ← 距離分岐が綺麗に二分（≤ 2km の WALKING、> 2km の DRIVING）
+  - duration_stats: **min=5 / max=46 / avg=18 min** ← 「徒歩 2 時間」のような極端値なし、plan として健全
+- 仮説の修正:
+  - **前セッション handoff の仮説**: 「transit fallback fix が解消すれば LLM 422 も自動的に解消する」（todo.md 最優先タスク 5 番目）
+  - **verify で判明した実態**: transit_matrix が **40 件あっても** `/api/plans/generate → 422`。**A=>B ではなく、A は B の必要条件の 1 つに過ぎなかった**
+  - つまり 422 は別の原因（LLM validator の opening_hours 違反 / budget_exceeded / unknown_place_id 等）で発生中。次の fix 対象として独立タスク化が必要
+- 学び:
+  - **ローカル verify の価値**: 本番 deploy 前に Playwright + console.log で stats を取れば、「fix が想定の効果を出すか」と「他の隠れた問題があるか」が同時に切り分けられる。今回もし本番 push して Run 9 で 422 を見たら「fix が効いていないのか / 別問題なのか」が分からなかった
+  - **仮説 (A => B) の二重チェック**: 「A を fix すれば B も解消する」という仮説は、A の fix を実装した後に「実際に B が解消したか」を計測するまで信じてはいけない。今回は handoff prompt 自体が「これが解消すれば Phase 2.2 budget context の効果も観察できる」と仮説していたが、verify で覆った
+  - **debug log の placement**: `console.log("[transit-debug] stats:", JSON.stringify(stats))` のように JSON.stringify で出すと Playwright の console MCP で値が完全に取れる（オブジェクトのまま渡すと `[Object]` で潰れる）。**playwright を使う前提の debug log は最初から JSON.stringify する**
+  - **fix の scope を verify で確定**: 「transit fallback の責務は transit_matrix を空にしないこと」が verify で実証された。今後の commit message でも「transit fallback で 422 解消」とは書かず「transit_matrix が観光地ペアでも空にならない」に範囲限定するのが正確
+- ルール:
+  - Phase 1.X 級の fix を本番 deploy する前に、**ローカル verify で「fix の効果計測」と「別の隠れた問題があるか」両方を確認する**。stats / counts のような数値計測ログを仕込んで Playwright で取得するのが省力
+  - 仮説 (A => B) を持っているときは、A を fix した後に **「B も実際に解消したか」を必ず計測**する。期待だけで本番に push しない
+- → 上の transit fallback entry とペアの関係。fallback chain 設計の学びと、verify による仮説修正の学びは両方とも `.claude/rules/external-api-rules.md` 昇格候補（前 entry と統合してルール化）
+
+## 2026-04-27: Maps Directions の travelMode を「距離分岐フォールバック chain」化で解消（Phase 1.10 fix 完了 / Codex 2 回 review）
+- 状況: 2026-04-26 Run 8 で発見した「TRANSIT が観光地ペアで全 ZERO_RESULTS」（lessons.md 直下 entry）を `fix/transit-fallback-walking-driving` で完了。設計書 → Codex review 1 → 反映 → subagent で TDD 実装 → Codex review 2 → 反映 → web test 147/147 PASS / tsc clean / build PASS / API regression 381 PASS
+- 軌道修正された判断 3 点（**Codex 1 回目で防げた構造 bug**）:
+  - **(1) 順序固定 `TRANSIT → WALKING → DRIVING` は危険**（initial 設計）。遠距離 10km ペアで TRANSIT 失敗 → WALKING で経路成立 → 「徒歩 2 時間」が plan に組み込まれ、assembler が duration_min で時刻後ろ倒し → opening_hours 違反量産で 422 を再誘発するリスク。**Codex Major 1 で発覚**
+  - **(2) 距離分岐で 2 段目を切替**: ≤ 2km は `TRANSIT → WALKING → DRIVING`（徒歩 30 分以内、plan として自然）、> 2km は `TRANSIT → DRIVING → WALKING`（車優先、徒歩は最終 fallback）。閾値 2km の根拠は **徒歩 30 分相当**（平均歩速 4 km/h × 0.5h、plan に組み込んでも違和感ない上限）
+  - **(3) per-mode timeout 2s 維持**（`/3` で全体 6s に揃える代替案を Codex OK 判定で却下）: ZERO_RESULTS は ~100ms で reject されるため per-mode 2s でも実時間合計は ~600ms / pair。`/3` で 666ms にすると実 API 応答が遅いケースで偽 timeout 増、悪手
+- 軌道修正された判断 (Codex 2 回目で発覚した test 設計 bug):
+  - **(4) 「WALKING / DRIVING で transitOptions 未付与」test が近距離ペアで書かれており DRIVING が呼ばれていない**（実質 DRIVING 検証 0）→ 近距離 / 遠距離の 2 件に分割
+  - **(5) WALKING_DISTANCE_KM の値そのものを固定する test なし**（閾値が 3km に変わっても通る）→ 上側境界 (2.0015km) で DRIVING 採用 / WALKING 0 件 を assert
+- 学び:
+  - **fallback chain 設計時、「全 mode 試行で問題が解決する」だけでなく「各 mode が成功した時の plan 品質」まで視野に入れる**。今回は「TRANSIT 失敗 → WALKING 成功」の plan が下流 assembler で 422 を生む副作用に Codex が気づいた。実装者は「fallback chain が動く」で満足しがちだが、**下流の制約（assembler / validator）への波及**まで設計に含めるべき
+  - **Codex に複数質問を 1 回投げる**（Q1〜Q9 を提示）と、各観点の判定（Major / Minor / OK）が明示的に返ってくるので「どこを軌道修正するか」が明確になる。Q1 + Q7（順序判定 + 徒歩 2 時間問題）が連動した Major で、両方ケアしないと部分 fix になる
+  - **Codex review 2 回目で「test の意図 vs 実検証範囲」のズレが 2 件発覚**。「単一の test で複数モードを暗黙に検証」は脆い、**「対象モードが実際に呼ばれているか」を mock の観測（`calls.filter(c => c === "DRIVING")` 等）で明示的に assert** する設計が必要
+  - **subagent への TDD 実装委任は機能した**: 設計書 + Codex 1 回目反映後の plan を渡して「TDD 厳守 + 全 test PASS まで」を依頼。subagent は haversine 実測ズレ（lat 35.018 で 2.0015km、`<= 2km` で false）を実装中に気づき test 修正、3 つの「設計書からズレた判断」を report で明示。**設計書 + 役割分担の明確さがあれば subagent でも品質が落ちない**
+- ルール:
+  - 外部 SDK のフォールバック chain を設計するときは、**各 mode が成功した時の出力品質**（duration_min の現実性、cost の妥当性）も判断軸に入れる。「動くか」だけでなく「下流に何が起きるか」
+  - test の意図と実検証範囲が一致しているかは **対象モードが実際に呼ばれているか** を mock の観測で明示的に assert する。「単一の test で複数モードを暗黙に検証」は脆い
+  - 距離 / 閾値ベースの分岐ロジックでは、**閾値の値そのものを固定する境界 test pair**（境界直下 + 境界直上）を必ず入れる。閾値が変わったら確実に test が落ちる形に
+- → **2 回目（前 entry とペア）なので `.claude/rules/external-api-rules.md` に昇格対象**。「外部経路 SDK のフォールバック chain は単一モード固定せず、各 mode の下流影響まで含めて設計」を昇格候補としてマーク（次セッション or commit 後に検討）
+
 ## 2026-04-26: Maps Directions TRANSIT モードは「観光地間」で ZERO_RESULTS を返す（公共交通の有効圏外）
 - 状況: Phase 1.10 Evidence Pack 多様性 fix（Run 8 ローカル verify）で places を観光地 7 + 飲食 5 = 12 件に多様化、距離 0.64〜9.57 km に分散したのに、`fetchTransitMatrix` の stats が `{attempted: 40, succeeded: 0, errors: 40}` で全ペア ZERO_RESULTS。Maps SDK 自体は動作（REQUEST_DENIED 0 件）、`google.maps.DirectionsService.route({travelMode: "TRANSIT"})` が「彫刻の森美術館 → 箱根食堂」のような観光地ペアで経路を返さない
 - 真因:
