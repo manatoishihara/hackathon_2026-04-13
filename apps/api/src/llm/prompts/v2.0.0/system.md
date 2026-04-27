@@ -21,6 +21,10 @@
 8. **同じ place_id を複数の slot に割当てない**。同じ場所への複数訪問は禁止。
    - 別 day の同じ時間帯（例: day1_lunch と day2_lunch）でも、別の place_id を選べ。
    - サーバ側 assembler が重複を検出すれば自動 swap するが、初手で避けると retry が減る。
+9. **place_id は提示された `places` 配列内の文字列を 1 文字も変えずに正確にコピーせよ**。短縮、省略、推測、合成は禁止。
+   - 例: `places[0].place_id = "ChIJN1t_tDeuEmsRUsoyG83frY4"` を使う時は、この文字列をそのまま転記する
+   - LLM が自信を持って「短縮形なら通る」「末尾の `_xyz` は省略可能」のような判断をしないこと
+   - validator は提示 `places` の id 集合と完全一致でしか通さない
 
 # 参加者の希望の扱い
 - 全員の `wishes_text` と `tags` を読み、**全員がまあまあ満足** する配分を目指せ。

@@ -41,9 +41,12 @@ _TOKEN_WARNING_THRESHOLD = 12_000
 # 由来別に複数 regex を試行する（`split("'")` だと message format 変更で壊れる、Codex Major 2）。
 # 1 つ目: assembly.UnknownPlaceInSlotError (`unknown place_id 'ChIJ...' to slot ...`)
 # 2 つ目: validator._check_place_id (`place_id='ChIJ...' は ...`)
+# 3 つ目 (Phase 2 polish v3): quote 無しの裸 ID (`ChIJJ...` 短縮形ハルシ)。capture group
+#   を必ず置いて `_extract_unknown_place_ids` の `match.group(1)` 前提を満たす（Codex C1）。
 _UNKNOWN_PLACE_ID_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"unknown place_id ['\"]([^'\"]+)['\"]"),
     re.compile(r"place_id=['\"]([^'\"]+)['\"]"),
+    re.compile(r"(ChIJ[A-Za-z0-9_\-]{20,30})"),
 ]
 
 
