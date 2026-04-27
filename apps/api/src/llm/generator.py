@@ -39,7 +39,13 @@ from .assembly import (
     UnknownSlotIdError,
     assemble_plan,
 )
-from .prompt import build_system_prompt, build_user_prompt, count_prompt_tokens, load_prompt_version
+from .prompt import (
+    _extract_unknown_place_ids,
+    build_system_prompt,
+    build_user_prompt,
+    count_prompt_tokens,
+    load_prompt_version,
+)
 from .schema import LlmGeneratedPlan, LlmGeneratedPlanV2
 from .validator import IssueKind, ValidationIssue, validate_llm_output
 
@@ -58,6 +64,44 @@ DEFAULT_MAX_FALLBACK_ATTEMPTS = 1  # attempt 4
 # 呼び出し前に「残 deadline がこれ未満なら意味のある応答が返らない」と判断する下限。
 # 短すぎると fallback 経路を無駄に 1 attempt 使うだけなので、early abort する。
 _MIN_USEFUL_TIMEOUT_SEC = 3.0
+
+# Phase 1.10 後段 fix: previous_issues 累積化の上限件数（prompt token 肥大化防止、
+# Codex Major 2）。各 issue ~50 tokens × 10 = 500 tokens 増 → 12k threshold 内。
+_MAX_RETAIN_PREVIOUS_ISSUES = 10
+
+
+def _issue_dedup_key(issue: ValidationIssue) -> tuple:
+    """retry の previous_issues 累積で使う dedup key（Codex review 2 Major 1 反映）。
+
+    - `UNKNOWN_PLACE_ID`: place_id 単位で dedup（同じ ID が複数 slot で出ても 1 つに）。
+      assembly / validator どちらの message format でも `_extract_unknown_place_ids`
+      で抽出。抽出できなかった場合は (kind, message) フォールバック。
+    - それ以外の IssueKind: (kind, message) で dedup（同じエラー文を重複させない）。
+    """
+    if issue.kind == IssueKind.UNKNOWN_PLACE_ID:
+        ids = _extract_unknown_place_ids([issue])
+        if ids:
+            return (issue.kind, ids[0])
+    return (issue.kind, issue.message)
+
+
+def _dedup_previous_issues(
+    all_issues: list[ValidationIssue],
+) -> list[ValidationIssue]:
+    """累積 issue を dedup key で集約して直近 `_MAX_RETAIN_PREVIOUS_ISSUES` 件にスライス。
+
+    Codex review 3 Major: dict の `__setitem__` は既存 key の挿入順を維持してしまう
+    （Python 3.7+ の dict は insertion-ordered だが、同 key への代入では position が
+    更新されない）。そのまま末尾 N 件を取ると「先に入った issue が再発しても末尾に来ない」
+    現象が起きる。`pop(key, None)` で既存を削除してから `unique[key] = issue` で
+    再挿入することで「最後に再発した issue が末尾に来る」順序を保証する。
+    """
+    unique: dict[tuple, ValidationIssue] = {}
+    for issue in all_issues:
+        key = _issue_dedup_key(issue)
+        unique.pop(key, None)  # 既存を削除して order をリセット
+        unique[key] = issue  # 末尾に再挿入
+    return list(unique.values())[-_MAX_RETAIN_PREVIOUS_ISSUES:]
 
 
 def _assembly_error_to_issue_kind(err: AssemblyError) -> IssueKind:
@@ -183,6 +227,10 @@ def generate_plan(
     is_v2 = prompt_version.startswith("v2.")
     response_format_cls = LlmGeneratedPlanV2 if is_v2 else LlmGeneratedPlan
     system_prompt = build_system_prompt(version=prompt_version)
+    # Phase 1.10 後段 fix: previous_issues は過去 attempts を累積して dedup する。
+    # 直前 1 attempt の issue だけだと attempt 1 の unknown_place_id が attempt 2 で
+    # 別 issue が出た後 attempt 3 で再ハルシネーションされる（本番 Run 10 で確認、Codex Major 2）。
+    all_previous_issues: list[ValidationIssue] = []
     previous_issues: list[ValidationIssue] = []
     last_transport_error: Exception | None = None
     reached_validation_at_least_once = False
@@ -265,7 +313,8 @@ def generate_plan(
                         message=f"assembly error: {ae}",
                         item_index=None,
                     )
-                    previous_issues = [issue]
+                    all_previous_issues.append(issue)
+                    previous_issues = _dedup_previous_issues(all_previous_issues)
                     reached_validation_at_least_once = True
                     logger.info(
                         "LLM attempt %d (model=%s) assembly error (kind=%s), retrying: %s",
@@ -293,7 +342,8 @@ def generate_plan(
                 model,
                 len(issues),
             )
-            previous_issues = issues
+            all_previous_issues.extend(issues)
+            previous_issues = _dedup_previous_issues(all_previous_issues)
 
     # 全 attempts 失敗。分類:
     # - validation に 1 度も到達できなかった → LlmTransportError（通信層が壊れてる）

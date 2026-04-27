@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
@@ -25,7 +26,7 @@ import tiktoken
 
 from ..evidence.pack import EvidencePack, PlacePoint, TransitEdge
 from ..themes import get_label as _theme_label
-from .validator import BUDGET_TOLERANCE_RATIO, ValidationIssue
+from .validator import BUDGET_TOLERANCE_RATIO, IssueKind, ValidationIssue
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,15 @@ _TOKEN_WARNING_THRESHOLD = 12_000
 
 # Phase 2.1: theme key → 日本語ラベルは src/themes.py の THEME_REGISTRY を参照
 # （Codex Minor 5）。`_theme_label(theme)` で str | None を取得。
+
+# Phase 1.10 後段 fix: IssueKind.UNKNOWN_PLACE_ID の message 形式を robust に拾うため、
+# 由来別に複数 regex を試行する（`split("'")` だと message format 変更で壊れる、Codex Major 2）。
+# 1 つ目: assembly.UnknownPlaceInSlotError (`unknown place_id 'ChIJ...' to slot ...`)
+# 2 つ目: validator._check_place_id (`place_id='ChIJ...' は ...`)
+_UNKNOWN_PLACE_ID_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"unknown place_id ['\"]([^'\"]+)['\"]"),
+    re.compile(r"place_id=['\"]([^'\"]+)['\"]"),
+]
 
 
 def load_prompt_version() -> str:
@@ -127,6 +137,11 @@ def build_user_prompt(
     }
     if version.startswith("v2"):
         format_kwargs["budget_context_md"] = budget_context_md
+        # Phase 1.10 後段 fix: retry 時に unknown place_id 禁止リストを注入。
+        # previous_issues が空なら空文字列で template 形状を崩さない。
+        format_kwargs["retry_guidance_md"] = _build_retry_guidance_md(
+            previous_issues or []
+        )
     return template.format(**format_kwargs)
 
 
@@ -270,4 +285,42 @@ def _build_budget_context_md(budget_constraints) -> str:
         "\n注: cost_jpy はサーバが price_level から決定論で埋めるが、"
         "**slot の枠配分（lodging を 1 回にする / 高 price_level の meal を避ける 等）"
         "でこの上限を守れる構成にせよ**。"
+    )
+
+
+def _extract_unknown_place_ids(issues: list[ValidationIssue]) -> list[str]:
+    """`IssueKind.UNKNOWN_PLACE_ID` issue から place_id 文字列を抽出して sorted unique list で返す。
+
+    `_UNKNOWN_PLACE_ID_PATTERNS` の各 regex を試す（assembly / validator 由来 message を
+    どちらも拾うため）。UNKNOWN_PLACE_ID 以外の IssueKind は無視する（regex 誤動作防止）。
+    `_build_retry_guidance_md` と generator の dedup key 算出から再利用する helper。
+    """
+    extracted: set[str] = set()
+    for issue in issues:
+        if issue.kind != IssueKind.UNKNOWN_PLACE_ID:
+            continue
+        for pattern in _UNKNOWN_PLACE_ID_PATTERNS:
+            for match in pattern.finditer(issue.message):
+                extracted.add(match.group(1))
+    return sorted(extracted)
+
+
+def _build_retry_guidance_md(previous_issues: list[ValidationIssue]) -> str:
+    """retry 時に「過去 attempts で出した unknown_place_id を再使用するな」を明示。
+
+    本番 Run 10 で gpt-4.1 が同じ unknown place_id (`ChIJJS7E...`) を attempt 1 + 3 で
+    繰り返しハルシネーションしたため、retry prompt に**禁止 ID リスト**を明示注入する
+    （Codex review 1 Major 1: prompt 強化 + Major 2: previous_issues 累積化と組み合わせる）。
+
+    `previous_issues` が空なら空文字列を返し、初回 attempt で template 形状を崩さない。
+    """
+    unknown_ids = _extract_unknown_place_ids(previous_issues)
+    if not unknown_ids:
+        return ""
+    bullets = "\n".join(
+        f"- `{pid}` （pack に存在しない、これを選んだら拒否される）" for pid in unknown_ids
+    )
+    return (
+        "# 前回失敗で出した place_id（**絶対に再使用するな**）\n"
+        f"{bullets}\n"
     )

@@ -26,4 +26,6 @@
 # 前回の生成で失敗した検証項目（あれば修正せよ。空配列なら初回試行）
 {previous_issues_json}
 
+{retry_guidance_md}
+
 上記情報のみを使って slot 割当 JSON を生成せよ。
