@@ -27,6 +27,129 @@
 
 ## ログ
 
+## 2026-04-27: Phase 2 polish v3 計画書を Codex review 4 サイクルで Blocker 0 認定、次セッション実装で 422 根本解消狙う
+- **Codex review サイクル**: review 1 (Critical 1 + High 4 + Medium 2) → review 2 (Major 2 + Minor 1) → review 3 (Major 1 + Minor 3) → **review 4 (Blocker 0 認定 + Major 1 同時 fix 推奨 + Minor 2 で確定)**
+- 各 review で発覚した重要な落とし穴 (本実装に進んでいたら本番障害):
+  - **review 1 C1**: T2-1 regex の capture group 欠如で `IndexError` → 500 化
+  - **review 1 H1**: T1 deadline 15s で完走無理 (worst-case 96s)、「部分取得」が現実
+  - **review 1 H2**: フロントガード `succeeded===0` だけでは A6 再発路残る
+  - **review 1 H3**: T2-2 「27 文字固定」が現行コードと不整合
+  - **review 1 H4**: T3 「楽天 lodging で補完」前提が実装で成立せず
+  - **review 2 Major 1**: T7 独自 category list が validator allowlist より狭く回帰リスク
+  - **review 2 Major 2**: T1-2 coverage `<30%` 単独だと「attempted=5, succeeded=2 (40%)」のような少数バッチ通過
+  - **review 3 Major**: T1-2 deadline 依存判定が deadline 未到達低 coverage を取り逃す
+  - **review 4 Major**: T7 が空 category を `false` 扱いで validator (空 skip = 許容) と非整合
+- **学び (本日 4 回目の同種パターン、CLAUDE rule 昇格候補)**:
+  - **計画段階で Codex review を複数サイクル取る価値**: 本日は 4 サイクルで Blocker 0、各 review で前回 review が見落とした (or 自分の修正で新たに導入した) 別の Major を発見。1 サイクルだと半数しか catch できなかった可能性大。
+  - **「修正の修正でまた問題が増える」パターン**: 例: T1-2 を「coverage 30%」→「ratio + absolute floor」→「deadline 撤廃」と改修するたび新規 Major 発生。完全に固まるには 3 サイクル必要だった
+  - **AI 単独の盲点**:
+    - regex の capture group / parser API 慣れ → AI 単独だと盲点になりやすい
+    - 既存 helper の存在を assembler 設計時に見落とす → validator の helper 再利用に気づく
+    - 空 collection 等の edge case 抜け → 本日 review 4 で発覚
+  - **Explore agent + Codex review の二段構え**: 単独で plan 書くと観測済原因のみに集中して仮説原因 / preventive fix が漏れる。ハッカソン提出のような時間制約下では「先に網羅調査 → 計画書 → review 複数サイクル」が事故防止コスト最小
+
+- **次セッション最初のタスク (実装着手前提、計画書: `tasks/plans/2026-04-27-pack-transit-stability-fix.md`)**:
+  1. plan 読み込み + T7 の `if not place_categories: return True` 同時 fix を確認
+  2. T1 (Commit A): フロント `transit.ts` 定数 + `transit-guard.ts` (deadline 非依存 ratio + absolute floor)
+  3. T2 (Commit B): regex capture group + system.md 第 9 項 「正確コピー」
+  4. T4 + T7 (Commit C): assembler / generator log + tier3 item_type filter (validator helper 再利用、空 category 許容含)
+  5. T5 (Commit D): docs/setup-guide.md 楽天 ID 形式注意
+  6. ローカル verify → Codex review 5 (実装後) → 反映 → user push → 本番 Run 13d/13e
+
+## 2026-04-27: Phase 2 polish v3 計画書作成 + Codex review 1 反映完了、次セッション実装で 422 根本解消狙う
+- **状況**: Run 13c 422 の根本原因確定後、提出までモグラ叩きにならないよう **plan を作成 → Codex review → 反映** で次セッションへ引き渡し
+- **計画書**: `tasks/plans/2026-04-27-pack-transit-stability-fix.md` (Codex review 1 反映済)
+- **アプローチ**: Explore agent で plan 生成パイプライン全体 (Pack 構築 / Transit / Validator / Assembler / LLM / Routes 各層) を網羅調査、観測済 + 仮説原因を優先度別に整理した上で T1〜T7 の修正案を策定
+- **Codex review 1 で発覚した重大な計画ミス (Critical 1 + High 4 + Medium 2)**:
+  - **Critical**: T2-1 regex 案が capture group 欠如で `IndexError` → 500 化リスク (本実装に進んでいたら本番障害)
+  - **High**: T1 の deadline 15s では完走無理 (worst-case 96s)、「部分取得」が現実
+  - **High**: T1 だけでは低 coverage 状態でも API に流れる、フロントガード強化 (T1-2) 必須
+  - **High**: T2-2 「27 文字固定」案は危険 (現行コードと不整合、有効 ID を否定)
+  - **High**: T3 「楽天 lodging で補完」前提は実装で成立せず (lodging_options は LLM prompt 未接続)
+  - **Medium**: T6 retry guidance は既実装、効果上積み限定 → 削除
+  - **Medium**: assembler tier3 が category 無視で `item_type_category_mismatch` 誘発余地 → T7 新設
+- **学び (本日 3 回目の同種パターン、ルール昇格候補)**:
+  - **計画段階で Codex review を必ず取る** = 実装に入る前に Critical/High を catch できる。本日 Phase 2 polish v1/v2 の Codex review 履歴から、平均 1 plan あたり Critical 0-1 + High 2-4 が出る。Codex review なしで実装に進むと本番で発見 → 緊急 fix → モグラ叩きに陥る
+  - **Explore agent で全体調査 → Codex review** の二段構えが網羅性に効く。単独で plan 書くと観測済原因のみに集中して仮説原因 (中位 issue / preventive fix) が漏れる
+  - **キャプチャグループ等の「regex 慣れ」は AI 単独だと盲点になりやすい**。本 Critical はそもそも regex の使い方ミスで、Codex の経験量が補完してくれた
+- **次セッション最優先タスク**:
+  1. 本 plan を読み込み、Codex review 1 反映済の T1〜T7 を実装
+  2. T1 (Commit A) → T2 (Commit B) → T4+T7 (Commit C) → T5 (Commit D) の順で 4 commits 構成
+  3. 各 commit で API + Web test PASS 維持
+  4. Codex review 2 で実装後の Blocker 0 確認
+  5. user push → 本番 Run 13d (草津 4 日 / お任せ) で 200 確認 → Run 13e (アンカー有り) → 草津以外 (箱根 / 京都 / 東京) で安定性 verify
+
+## 2026-04-27: Render Live tail で Run 13c 422 の根本原因確定 — A6 (transit_matrix coverage 不足 + 細粒度 category での `_find_alternate_place` 候補枯渇) + 副次 A1 (ハルシ)、楽天 applicationId が UUID で誤投入
+- **状況**: Run 13c (お任せ + 楽天 env 投入) も 422 → user が Render Live tail から 4 attempts のログ全文を共有
+- **判明した attempt 別 issue**:
+  - attempt 1 (gpt-4.1): `kind=unknown_transit_edge` "No transit edge from X to Y and no alternate place for category 'japanese_restaurant' found"
+  - attempt 2 (gpt-4.1): `kind=unknown_place_id` "LLM assigned unknown place_id 'ChIJJCcG...' to slot 'day2_afternoon'" (頭が `ChIJJ` で 5 文字、本物は `ChIJ` で 4 文字なのでハルシネーション)
+  - attempt 3 (gpt-4.1): `kind=unknown_transit_edge` 同パターン (japanese_restaurant 候補枯渇)
+  - attempt 4 (gpt-4.1-mini): `kind=unknown_transit_edge` "category 'zoo' found" (草津に動物園、ハルシ気味の category)
+- **重複防止の正常動作確認**: log に `[WARNING] src.llm.assembly: Duplicate place_id 'X' in slot 'day1_dinner'; swapped to 'Y'` が 2 件 → Phase 2 polish A 重複防止 fix が **production で動いている動かぬ証拠**
+- **新発見 A6 = 主原因**: 「Pack 12-15 places + selectPairs `MAX_PAIRS=20` + 距離 `MAX_EDGE_DISTANCE_KM=10km` フィルタ」で transit_matrix が **疎**。重複防止の `exclude_place_ids` で候補消費していくと、後半 slot で `_find_alternate_place` の (a) 距離 reachable + (b) category 共通 + (c) opening_hours OK + (d) used 除外 を全部満たす候補が **0 件** になる
+- **副次問題 A1 (attempt 2 のみ)**: gpt-4.1 が `ChIJJCcG...` のように頭 5 文字 `ChIJJ` でハルシ (本物は `ChIJ` 4 文字)。Phase 1.10 後段の prompt retry guidance で消えるはずが本番で再発
+- **副次問題 楽天 API 400**: log で `applicationId=0415bc2d-b441-41ce-9447-d3413ce5c3f7` (UUID) → 楽天の仕様は **19-20 桁の数字** (例: `1024711987305213057`)。user が webservice.rakuten.co.jp で発行されない別の値を投入してしまった。lodging は fail-soft で skip されるので 422 直接原因ではないが、lodging が pack に入れば slot 数が減る (3 lodging slot → assembler 制約緩和) ので副次的に解消の助けになる可能性
+- **修正案 (3 段階)**:
+  - **即効 fix A**: `apps/web/src/lib/transit.ts:31-35` の `DEFAULT_MAX_PAIRS = 20 → 40`、`DEFAULT_DISTANCE_KM = 10 → 15`。transit_matrix が倍密になり `_find_alternate_place` 候補増
+  - **即効 fix B (user 操作)**: webservice.rakuten.co.jp で本物の applicationId (19 桁数字) 確認 → Render env を正しい値に置換 → redeploy
+  - **余裕 fix C**: `apps/api/src/evidence/builder.py:MAX_PLACES` を 12 → 20 に + `_find_alternate_place` の last resort fallback (category 共通なくても受け入れる経路) を実装
+- **次セッション最優先 (本セッションで時間あれば即着手)**:
+  1. Fix A 実装 (~5 分)
+  2. 楽天 ID 確認方法を user に伝える + Fix B 完了待ち
+  3. push → redeploy → Run 13d で `200` verify
+- **学び**:
+  - **Render Live tail なしには本番 422 の原因特定は不可能**だった。`logging.basicConfig(INFO)` 入れたのが本セッションでも光った
+  - 「本番 plan 生成失敗は単一原因ではなく**複合**」を再認識。Run 13b/13c で A2/A4 同時否定 → log で A1+A6 同定、という段階的切り分けで時間節約
+  - **A6 (transit_matrix coverage 不足) は新規ルール候補**: assembler の `_find_alternate_place` が「category 共通 + transit reachable + opening OK + 重複防止 exclude」の 4 重制約 + 細粒度 category (`japanese_restaurant` / `zoo` 等) で枯渇しやすい。Pack/transit_matrix 設計時に「想定 slot 数 × 重複防止後の余裕」を考慮しないと本番で 422 を量産する。ハッカソン後に `.claude/rules/llm-rules.md` 昇格候補
+
+## 2026-04-27: Run 13c (お任せ + 楽天 env 投入後) も 422 失敗 — A2 / A4 否定、A1 (ハルシネーション) / A3 (opening_hours) / A5 (Pack 規模) のいずれかに絞り込み
+- **状況**: Run 13b (アンカー有り) が 422 → user が Render Dashboard に `RAKUTEN_APPLICATION_ID` / `RAKUTEN_AFFILIATE_ID` 投入 + redeploy 完了 → Run 13c (アンカー無し + 楽天 env 有り) で同条件 (草津 / 11/21〜11/24 / 80,000 円) を再試行 → **再び 422 "プラン生成の検証に失敗しました（422）。スポット情報の整合性チェックで問題が発生しました。"**
+- **副次の発見**: フロントの 422 エラーメッセージが **日本語化されている** (前回 13b は "plan generation failed after retries" のまま、13c は日本語)。誰かが UX 改善の commit を入れたらしいが、本セッションのスコープ外。要確認
+- **切り分け結果**:
+  - アンカー有り (Run 13b) → 422
+  - アンカー無し + 楽天有り (Run 13c) → 422
+  - **共通点**: 草津 / 11/21〜11/24 / 80,000 円 / 4 日 / 公共交通モード削除済
+  - → **A2 (anchor + 重複防止衝突) 否定** (anchor 無しでも 422)
+  - → **A4 (楽天 lodging 未設定) 否定** (env 投入後でも 422)
+- **残る仮説 (Render Live tail で attempt 別 `kind=...` 取得が必須)**:
+  - **A1**: LLM ハルシネーション再発 (`kind=unknown_place_id`) → Phase 1.10 後段の retry guidance 強化が必要
+  - **A3**: opening_hours 制約 (`kind=outside_opening_hours`) → 草津施設が 11/21〜11/24 の特定曜日に定休
+  - **A5 (新)**: Pack 規模問題 (`kind=ineligible_place_for_slot`) → 草津 Pack 12〜15 件で 4 日 18 slot + 重複防止 で候補枯渇
+  - 地理的問題 (`kind=no_feasible_transit`) → 距離分岐 fallback でも transit 取れない pair が多い
+- **学び**:
+  - 本番 422 の根本原因は **フロント挙動だけでは特定不可能**。Render Live tail での attempt 別 log が必須
+  - 切り分け方針として「2 つの直交する条件で各々 verify する」が有効 (anchor on/off × Rakuten env on/off の組合せ実証で A2 / A4 同時否定)
+  - 残仮説 A1 / A3 / A5 は LLM 出力 + Pack 構成依存なので、本番 log 確認 → 該当原因に応じた fix が次ステップ
+- **次セッションの動き**:
+  1. user が Render Live tail から `[INFO] src.llm.generator: LLM attempt N (model=...) assembly error (kind=..., message=...)` を取得して共有
+  2. kind 別の対応:
+     - `unknown_place_id`: prompt の retry guidance 強化 (Phase 1.10 後段の delta)
+     - `outside_opening_hours`: opening_hours parser の日跨ぎ対応 + 11/21〜11/24 で草津施設の定休曜日確認
+     - `ineligible_place_for_slot`: Pack 候補数を `MAX_PLACES` 緩和 (12 → 20+) or 4 日プランは slot 数を減らす
+     - `no_feasible_transit`: transit_matrix の `MAX_EDGE_DISTANCE_KM` 緩和
+
+## 2026-04-27: 本番 Run 13b でも 422 再発 — toggle 撤回 + WALKING 30 分撤廃だけでは課題未解消、原因切り分けが次セッション最優先
+- **状況**: Phase 2 polish v2 (transport_mode toggle 撤回 + WALKING 30 分 hard drop 撤廃) を本番 deploy 後、同条件 (草津 4 日 / 漫画堂 + 草津温泉湯畑 アンカー / 80,000 円 / 参加者 2 名) で本番 Playwright Run 13b verify → **`/api/plans/generate → 422 "plan generation failed after retries"`** 再発
+- **観測**: フォーム / Autocomplete / アンカー chip 全部 ✅ → `/plan/<UUID>/generating` 遷移 ✅ → fetchTransitMatrix 完了 ✅ → `/api/plans/generate` で 4 attempts 全失敗 → 「離陸できませんでした」画面
+- **判明したこと**: 「公共交通機関のみ × 草津地方」が単独原因ではない。toggle 削除 + WALKING 30 分撤廃で **transit_matrix のスカスカ問題**は解消したが、**別の要因が 422 を引き起こしている**
+- **想定残課題 (Render Live tail で attempt 別 log 取得が必須、user 操作)**:
+  - **A1. LLM ハルシネーション再発**: gpt-4.1 が pack 外の place_id を出力 → `unknown_place_id` 連発 (本番 Run 10 で実証済み)
+  - **A2. anchor + 重複防止の衝突**: 漫画堂 + 湯畑 を 4 日 18 slot に必ず入れつつ重複防止制約を満たす組み合わせが pack 内で見つからない → `IneligiblePlaceForSlotError` 連発
+  - **A3. opening_hours 制約**: 11/21〜11/24 の特定曜日に草津の主要施設が定休 → assembler self-healing 失敗
+  - **A4. 楽天 lodging 未設定**: 3 泊分の lodging slot を Google Places で埋める必要、種類不足
+- **次セッション最優先タスク (優先度順)**:
+  1. **同条件で「お任せ」モード (アンカー解除) で再試行** (Playwright、5 分) → 200 なら A2 確定 / 422 なら他の A1/A3/A4
+  2. **Render Live tail** で `[INFO] LLM attempt N (model=...) assembly error (kind=...)` を取得して根本原因確定
+  3. 確定後の対応:
+     - A1 なら prompt の retry guidance 強化 + previous_issues 累積化（Phase 1.10 後段の延長）
+     - A2 なら anchor 件数 1 件 or assembler の anchor swap 戦略見直し
+     - A3 なら opening_hours parse の日跨ぎ対応 (Codex Minor 残課題)
+     - A4 なら user に楽天 env 投入依頼 (Phase 2 polish v1 B 課題)
+- **学び**: **本番 422 は単一原因ではなく複合的**。1 つの fix で完全解消するとは限らない。本番で観測される失敗は **段階的に切り分けて log 確認** する習慣が必要。Render Live tail を見ずにフロント挙動だけで仮説を立てると見落とす
+- **副次の UX 問題**: フロント画面の「plan generation failed after retries」が英語のまま (RFC 7807 detail を直接表示)。user 視点では何が起きたかわからない。エラー文言の日本語化 + 「もう一度試す」のリトライ動線改善は別タスク候補
+- 関連 commits: develop ブランチで `0f80711 / 1564632 / 7be79a7` (Phase 2 polish v2) 全 deploy 済
+
 ## 2026-04-27: Run 13 失敗を受けて A 案 (transport_mode toggle 撤回) を 3 並列 sub-agent + Codex review 2 サイクルで実装完了
 - **状況**: 下の Run 13 失敗エントリを受けて user 判断: タクシー利用可の前提で「公共交通機関のみ」モードに本質的な意味がない、user 指定で plan 失敗は UX 最悪 → **A 案 (toggle 自体を削除、内部は常に距離分岐 fallback chain に統一)**
 - **設計 (Codex review 1 反映済 Major 1)**: 即時削除は旧 client 400 reject を量産するため **段階的 deprecation** で対応:
