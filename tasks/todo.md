@@ -7,7 +7,11 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
-**Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック**: 🟡 **2026-04-27 セッションで実装完了 + ローカル verify 完了 → commit + user push 待ち**（`fix/transit-fallback-walking-driving` ブランチ）。`apps/web/src/lib/transit.ts` の travelMode 固定を「距離 ≤ 2km は TRANSIT → WALKING → DRIVING、> 2km は TRANSIT → DRIVING → WALKING」の fallback chain 化。Codex review 2 回（review 1 で「徒歩 2 時間 plan が assembler 経由で 422 を生む」を Major で発覚 → 距離分岐に軌道修正、review 2 で test 設計 bug 2 件発覚 → 反映）。web test 147/147 PASS / tsc clean / build PASS / API regression 381/381 PASS。**ローカル verify**: stats 40/40 全成功、mode_counts walk 20 / car 20、duration 5-46 min avg 18 min。**ただし `/api/plans/generate → 422` は transit fallback と独立した別問題と判明**（transit_matrix=40 件あっても 422、LLM validator 側の問題）。詳細は `tasks/plans/2026-04-27-transit-fallback.md` + lessons.md「2026-04-27」2 エントリ。次セッションは LLM validator 422 の切り分けが最優先。
+**Phase 1.10 後段 chore: Flask logging.basicConfig(INFO) 追加**: 🟡 **2026-04-27 セッション末で実装完了、commit 提案 → user push 待ち**（`chore/api-logging-config` ブランチ）。本番 Run 9 後の Render Live tail で `logger.info` 出力が一切なく、validator/generator の retry 詳細（`LLM attempt %d produced %d validation issues, retrying` 等）が見えなかったため、`apps/api/src/app.py` 冒頭に `logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), ...)` を追加。`LOG_LEVEL` env で上書き可（本番 INFO / test WARNING 想定）。API unit test 381/381 PASS（既知 env 依存 2 件は本変更無関係）。push → Render 再 deploy → 次セッション Run 10 で 422 の IssueKind 別 retry log を Live tail から取得して真因切り分けできる状態に到達。詳細は lessons.md「2026-04-27: Flask デフォルト logger は WARNING 以上のみ → 本番デバッグ視認性ゼロ問題」エントリ。
+
+**Phase 1.10 本番 Run 9 (2026-04-27 セッション末)**: 🟢 **transit fallback fix が本番でも実証**。Vercel + Render 両方で `develop` の最新 commit が auto deploy 済、`/plan/new → /plan/<id>/generating` まで遷移、Maps SDK 40 回 ZERO_RESULTS の後 fallback で `/api/plans/generate` まで POST 到達（`transit_matrix=[]` でなくなった）。**ただし `/api/plans/generate → 422` はローカル verify と同様に発生**（LLM validator 側の独立問題、本セッションスコープ外）。
+
+**Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック**: 🟢 **2026-04-27 セッションで実装完了 + ローカル verify 完了 + 本番 push 完了 + 本番 Run 9 で fix 実証**（`fix/transit-fallback-walking-driving` ブランチ → develop merge → push 済、commit ce3dabd 含む）。`apps/web/src/lib/transit.ts` の travelMode 固定を「距離 ≤ 2km は TRANSIT → WALKING → DRIVING、> 2km は TRANSIT → DRIVING → WALKING」の fallback chain 化。Codex review 2 回（review 1 で「徒歩 2 時間 plan が assembler 経由で 422 を生む」を Major で発覚 → 距離分岐に軌道修正、review 2 で test 設計 bug 2 件発覚 → 反映）。web test 147/147 PASS / tsc clean / build PASS / API regression 381/381 PASS。**ローカル verify**: stats 40/40 全成功、mode_counts walk 20 / car 20、duration 5-46 min avg 18 min。**仮説修正**: 「transit fallback で 422 も解消する」は誤り、422 は LLM validator 側の独立問題（次の Run 10 で詳細 log 取得予定）。詳細は `tasks/plans/2026-04-27-transit-fallback.md` + lessons.md「2026-04-27」3 エントリ。
 
 **DB-4/DB-5 テスト**: ✅ 2026-04-26 完了。`apps/api/tests/test_share_routes.py` を新規作成（11 件）。share_routes.py / plan_cache.py / extensions.py の実装は既完成済みで、テストのみ追加。全 unit テスト 332 件 PASS（既存 2 件の env 依存失敗は本変更と無関係）。
 
@@ -122,7 +126,27 @@
 
 **次にやるべきタスク:**
 
-> ## 🔴 **次の最優先 (transit fallback verify で判明)**: `/api/plans/generate → 422` は transit fallback と独立した別問題
+> ## 🟡 **2026-04-27 セッション末で実装完了 → user commit + push 待ち**: Flask logging.basicConfig(INFO) 追加 (`chore/api-logging-config`)
+>
+> 本番 Run 9 で 422 が再現したが、Render Live tail に `logger.info` 出力が一切なく validator/generator の retry 詳細が見えない問題を fix。
+>
+> **変更**: `apps/api/src/app.py` 冒頭に `logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper(), format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")` を追加。`LOG_LEVEL` env で上書き可。
+>
+> **検証**: API unit test 381/381 PASS（既知 env 依存 2 件 は本変更無関係）。secret プリフライト 0 hit。
+>
+> **commit 提案**:
+> ```bash
+> git add apps/api/src/app.py
+> git commit -m "chore(api): Flask に logging.basicConfig(INFO) を追加"
+> ```
+>
+> **次のアクション (user)**:
+> 1. 上記 commit → develop merge → push
+> 2. Render auto deploy 完了待ち（~2 min）
+> 3. **本番 Run 10**: もう一度 `/plan/new` から submit、422 を再現
+> 4. **Render Live tail**: `LLM attempt 1 (model=gpt-4o) produced N validation issues, retrying` のような行が **複数表示される** はず → IssueKind 内訳から 422 真因特定 → 次の fix 方針決定（unknown_place_id / outside_opening_hours / budget_exceeded / unknown_transit_edge / ANCHOR_MISSING / ITEM_TYPE_CATEGORY_MISMATCH のどれか）
+
+> ## 🔴 **次の最優先 (transit fallback verify で判明、Run 10 で IssueKind 取得後に決着)**: `/api/plans/generate → 422` は transit fallback と独立した別問題
 >
 > 2026-04-27 セッション末のローカル `pnpm dev` verify で **transit_matrix が 40/40 で取れていても 422 が出ること** が判明。前セッション handoff の仮説「transit fallback fix で 422 も解消する」は **誤り**。
 >
