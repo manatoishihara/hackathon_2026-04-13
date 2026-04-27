@@ -172,10 +172,22 @@ export function MapView({ items }: Props) {
               longitude={item.location.lng}
               anchor="bottom"
             >
-              <div
-                className="relative flex h-9 w-9 items-center justify-center rounded-full border-2 border-white shadow-md"
+              <button
+                type="button"
+                className="relative flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border-2 border-white shadow-md transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-primary)] focus-visible:ring-offset-2"
                 style={{ backgroundColor: visual.bg }}
-                aria-label={`${index + 1}. ${visual.ariaLabel}: ${placeName}`}
+                aria-label={`${index + 1}. ${visual.ariaLabel}: ${placeName} へ移動`}
+                onClick={() => {
+                  // PlanItem.tsx の <article data-plan-item-id={item.id}> を起点に
+                  // タイムライン側の対応行へスクロール。block:'center' で目立たせる。
+                  const target = document.querySelector(
+                    `[data-plan-item-id="${item.id}"]`,
+                  );
+                  target?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center",
+                  });
+                }}
               >
                 <Icon size={18} weight="fill" className="text-white" />
                 <span
@@ -184,7 +196,7 @@ export function MapView({ items }: Props) {
                 >
                   {index + 1}
                 </span>
-              </div>
+              </button>
             </Marker>
           );
         })}
