@@ -89,33 +89,65 @@ const DEFAULT_VALUES: PlanFormValues = {
  */
 type SubmitStep = "session" | "plan" | "evidence" | null;
 
-function classifyError(err: unknown): string {
+function classifyError(err: unknown): { message: string; detail?: string } {
+  // ネットワーク層エラー（DNS 解決失敗・接続拒否・タイムアウト）
+  if (err instanceof TypeError && (err.message.includes("fetch") || err.message.includes("network") || err.message.includes("Failed to fetch"))) {
+    return { message: "サーバーに接続できませんでした", detail: "インターネット接続またはサーバーの状態を確認してください。" };
+  }
+  if (err instanceof DOMException && err.name === "AbortError") {
+    return { message: "接続がタイムアウトしました", detail: "サーバーの応答が遅い可能性があります。しばらくしてから再試行してください。" };
+  }
+
   if (err instanceof ApiError) {
-    if (err.status === 0 || err.message.includes("fetch")) {
-      return "サーバーに接続できませんでした。ネットワーク接続を確認してください。";
+    // 422: LLM バリデーション失敗 or Evidence Pack 検証失敗
+    if (err.status === 422) {
+      return {
+        message: "プラン生成の検証に失敗しました（422）",
+        detail: "スポット情報の整合性チェックで問題が発生しました。しばらくしてから再試行してください。",
+      };
     }
-    if (err.status >= 500) {
-      return `サーバーエラーが発生しました（${err.status}）。しばらくしてから再試行してください。`;
+    // 429: レート制限
+    if (err.status === 429) {
+      return { message: "リクエストが集中しています（429）", detail: "少し時間をおいてから再試行してください。" };
     }
-    if (err.status === 401 || err.status === 403) {
-      return "認証エラーが発生しました。ページを再読み込みしてください。";
+    // 401: セッション認証切れ
+    if (err.status === 401) {
+      return { message: "セッション認証エラー（401）", detail: "ページを再読み込みしてください。" };
     }
-    return `エラーが発生しました: ${err.message}`;
+    // 403: API キー制限またはアクセス権限なし
+    if (err.status === 403) {
+      return { message: "アクセス権限エラー（403）", detail: "APIキーの制限または権限設定の問題の可能性があります。" };
+    }
+    // 404: Evidence Pack の有効期限切れなど
+    if (err.status === 404) {
+      return { message: "リソースが見つかりません（404）", detail: "セッションの有効期限が切れた可能性があります。最初からやり直してください。" };
+    }
+    // 502/503/504: ゲートウェイ・Render コールドスタート
+    if (err.status === 502 || err.status === 503 || err.status === 504) {
+      return {
+        message: `APIサーバーが応答していません（${err.status}）`,
+        detail: "Render のコールドスタート中の可能性があります。30秒ほど待ってから再試行してください。",
+      };
+    }
+    // 500: サーバー内部エラー
+    if (err.status === 500) {
+      return { message: "サーバー内部エラー（500）", detail: err.message || "予期しないエラーが発生しました。" };
+    }
+    // その他のHTTPエラー
+    return { message: `エラーが発生しました（${err.status}）`, detail: err.message };
   }
-  if (err instanceof TypeError && err.message.includes("fetch")) {
-    return "サーバーに接続できませんでした。ネットワーク接続を確認してください。";
-  }
+
   if (err instanceof Error) {
-    return err.message;
+    return { message: err.message };
   }
-  return "プラン生成の開始に失敗しました。";
+  return { message: "プラン生成の開始に失敗しました。" };
 }
 
 export default function NewPlanPage() {
   const router = useRouter();
   const setSession = useGenerationSessionStore((s) => s.setSession);
   const [activeParticipantIndex, setActiveParticipantIndex] = useState(0);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<{ message: string; detail?: string } | null>(null);
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
   const [submitStep, setSubmitStep] = useState<SubmitStep>(null);
 
@@ -298,16 +330,22 @@ export default function NewPlanPage() {
     evidence: "スポット情報を取得中...",
   };
 
+  const isApiChecking = apiAvailable === null;
   const isApiDown = apiAvailable === false;
-  const canSubmit = !isSubmitting && !isApiDown;
+  const canSubmit = !isSubmitting && !isApiDown && !isApiChecking;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-12">
-      {isApiDown ? (
+      {isApiChecking ? (
+        <div className="flex items-center gap-3 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] px-4 py-3 text-sm text-[color:var(--color-text-tertiary)]">
+          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          <span>サーバーの状態を確認中...</span>
+        </div>
+      ) : isApiDown ? (
         <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <WifiSlash size={18} weight="bold" className="mt-0.5 shrink-0" />
           <span>
-            サーバーに接続できません。ネットワーク接続を確認するか、しばらくしてから再試行してください。
+            APIサーバーが起動していません（コールドスタートの可能性）。30秒ほど待ってからページを再読み込みしてください。
           </span>
         </div>
       ) : null}
@@ -496,9 +534,16 @@ export default function NewPlanPage() {
         </section>
 
         {submitError ? (
-          <div className="flex items-start gap-3 rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/5 p-4 text-sm leading-relaxed text-[color:var(--color-danger)]">
-            <WarningCircle size={18} weight="bold" className="mt-0.5 shrink-0" />
-            <span>{submitError}</span>
+          <div className="rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/5 p-4 text-sm leading-relaxed">
+            <div className="flex items-start gap-3 font-medium text-[color:var(--color-danger)]">
+              <WarningCircle size={18} weight="bold" className="mt-0.5 shrink-0" />
+              <span>{submitError.message}</span>
+            </div>
+            {submitError.detail ? (
+              <p className="mt-1.5 pl-7 text-[color:var(--color-text-secondary)]">
+                {submitError.detail}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -517,7 +562,7 @@ export default function NewPlanPage() {
             ) : isApiDown ? (
               <>
                 <WifiSlash size={18} weight="bold" />
-                サーバー未接続
+                APIサーバーに接続できません
               </>
             ) : (
               <>
