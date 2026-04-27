@@ -35,6 +35,10 @@ const DEFAULT_GLOBAL_DEADLINE_MS = 10_000;
 const DEFAULT_DISTANCE_KM = 10;
 const MAX_ROUTE_SUMMARY_CHARS = 120; // Pydantic 側の Field(max_length=120) と揃える
 
+// この距離以下なら fallback の 2 段目を WALKING に、超えるなら DRIVING にする。
+// 2km は徒歩 ~30 分相当で plan に組み込んでも違和感ない上限。
+const WALKING_DISTANCE_KM = 2;
+
 // ==============================
 // Types
 // ==============================
@@ -245,6 +249,7 @@ export function parseDirectionsResult(
   fromPlaceId: string,
   toPlaceId: string,
   requestedDeparture: Date,
+  requestedMode: "TRANSIT" | "WALKING" | "DRIVING",
 ): ClientTransitEdge | null {
   const route = result.routes?.[0];
   const leg = route?.legs?.[0];
@@ -268,26 +273,40 @@ export function parseDirectionsResult(
     fareJpy = Math.min(500_000, Math.round(fare.value));
   }
 
-  let mode: ClientTransitEdge["mode"] = "walk";
-  let routeSummary = "徒歩";
+  // requestedMode で default の mode / route_summary を決める。
+  // DRIVING は車、WALKING / TRANSIT は徒歩を default に。
+  // TRANSIT 要求時のみ leg.steps を走査して transit step の line 名等で上書きする。
+  let mode: ClientTransitEdge["mode"];
+  let routeSummary: string;
+  if (requestedMode === "DRIVING") {
+    mode = "car";
+    routeSummary = "車";
+  } else {
+    mode = "walk";
+    routeSummary = "徒歩";
+  }
   let departureDate: Date | null = null;
 
-  for (const step of leg?.steps ?? []) {
-    if (step.travel_mode === "TRANSIT" && step.transit) {
-      const vehicleType = step.transit.line?.vehicle?.type ?? "";
-      mode = mapVehicleToMode(vehicleType);
-      routeSummary =
-        step.transit.line?.name ??
-        step.transit.line?.short_name ??
-        "公共交通機関";
-      const depValue = step.transit.departure_time?.value;
-      if (depValue instanceof Date) {
-        departureDate = depValue;
+  if (requestedMode === "TRANSIT") {
+    for (const step of leg?.steps ?? []) {
+      if (step.travel_mode === "TRANSIT" && step.transit) {
+        const vehicleType = step.transit.line?.vehicle?.type ?? "";
+        mode = mapVehicleToMode(vehicleType);
+        routeSummary =
+          step.transit.line?.name ??
+          step.transit.line?.short_name ??
+          "公共交通機関";
+        const depValue = step.transit.departure_time?.value;
+        if (depValue instanceof Date) {
+          departureDate = depValue;
+        }
+        break;
       }
-      break;
     }
   }
 
+  // routeSummary が空文字に落ちるのは TRANSIT で line.name が空文字の特殊ケースのみ。
+  // (DRIVING='車' / WALKING='徒歩' / TRANSIT(transit step なし)='徒歩' は構造的に空にならない)
   const summary = routeSummary.slice(0, MAX_ROUTE_SUMMARY_CHARS) || "公共交通機関";
   const candidate = formatHHmmJST(departureDate ?? requestedDeparture);
 
@@ -317,6 +336,7 @@ async function callDirectionsWithTimeout(
   to: EvidencePlacesPlaceSummary,
   departureTime: Date,
   timeoutMs: number,
+  travelMode: "TRANSIT" | "WALKING" | "DRIVING",
 ): Promise<CallResult> {
   // timeoutMs <= 0 は即時タイムアウト扱い（deadline を過ぎたバッチ内の残り呼び出しに使う）
   if (timeoutMs <= 0) {
@@ -326,19 +346,26 @@ async function callDirectionsWithTimeout(
     setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
   });
 
+  // transitOptions は TRANSIT 要求時のみ付ける。WALKING / DRIVING に付けると
+  // 一部 SDK バージョンで warning が出るのと、不要パラメータは送らないのが原則。
+  const request: google.maps.DirectionsRequest = {
+    origin: { placeId: from.place_id },
+    destination: { placeId: to.place_id },
+    travelMode: travelMode as google.maps.TravelMode,
+  };
+  if (travelMode === "TRANSIT") {
+    request.transitOptions = { departureTime };
+  }
+
   const routePromise: Promise<CallResult> = service
-    .route({
-      origin: { placeId: from.place_id },
-      destination: { placeId: to.place_id },
-      travelMode: "TRANSIT" as google.maps.TravelMode,
-      transitOptions: { departureTime },
-    })
+    .route(request)
     .then((result): CallResult => {
       const edge = parseDirectionsResult(
         result,
         from.place_id,
         to.place_id,
         departureTime,
+        travelMode,
       );
       if (!edge) {
         return { kind: "error", error: new Error("unparseable DirectionsResult") };
@@ -348,6 +375,59 @@ async function callDirectionsWithTimeout(
     .catch((error: unknown): CallResult => ({ kind: "error", error }));
 
   return Promise.race([routePromise, timeoutPromise]);
+}
+
+/**
+ * TRANSIT → 距離分岐 (WALKING / DRIVING) → 残りモード の順で fallback chain を試す。
+ *
+ * 距離 ≤ WALKING_DISTANCE_KM のペア: TRANSIT → WALKING → DRIVING
+ *   (近距離は徒歩 30 分以内で plan として自然)
+ * 距離 > WALKING_DISTANCE_KM のペア: TRANSIT → DRIVING → WALKING
+ *   (徒歩 30 分超を plan に乗せたくないため、車を優先)
+ *
+ * 各モード呼び出し前に global deadline を確認し、超過していれば即 timeout で抜ける。
+ * 1 つでも `ok` で返れば即 return。全モード失敗なら最後に試した結果を return。
+ */
+async function callDirectionsWithFallback(
+  service: google.maps.DirectionsService,
+  from: EvidencePlacesPlaceSummary,
+  to: EvidencePlacesPlaceSummary,
+  departureTime: Date,
+  perModeTimeoutMs: number,
+  deadlineEpochMs: number,
+): Promise<CallResult> {
+  const distanceKm = haversineKm(from, to);
+  const modes: ("TRANSIT" | "WALKING" | "DRIVING")[] =
+    distanceKm <= WALKING_DISTANCE_KM
+      ? ["TRANSIT", "WALKING", "DRIVING"]
+      : ["TRANSIT", "DRIVING", "WALKING"];
+
+  let lastResult: CallResult = {
+    kind: "error",
+    error: new Error("no modes attempted"),
+  };
+
+  for (const mode of modes) {
+    const remaining = deadlineEpochMs - Date.now();
+    if (remaining <= 0) {
+      // global deadline 超過 → 以降は呼ばずに timeout で抜ける
+      return { kind: "timeout" };
+    }
+    const effectiveTimeout = Math.min(perModeTimeoutMs, remaining);
+    const result = await callDirectionsWithTimeout(
+      service,
+      from,
+      to,
+      departureTime,
+      effectiveTimeout,
+      mode,
+    );
+    if (result.kind === "ok") return result;
+    lastResult = result;
+    // timeout もしくは error → 次のモードを試す
+  }
+  // 3 mode 全部試して失敗 → 最後の結果（typically timeout か error）を返す
+  return lastResult;
 }
 
 // ==============================
@@ -403,15 +483,19 @@ export async function fetchTransitMatrix(
     const batch = directed.slice(i, i + parallelism);
     stats.attempted += batch.length;
 
-    // 各呼び出しのタイムアウトは「通常の per-call タイムアウト」と「残り締切」の小さい方。
-    // これで最悪ケースでもグローバル締切を超えない（Promise.race で必ず打ち切る）。
-    // ただし Google へ飛んだ実リクエストは中断できないため、クォータ節約の観点では
-    // parallelism を browser HTTP 並列（typically 6 per host）より小さく保つことで緩和する。
-    const effectiveTimeout = Math.min(perCallTimeoutMs, remaining);
-
+    // 各 mode 呼び出しの effectiveTimeout は callDirectionsWithFallback 内で
+    // 「per-mode timeout」と「残り deadline」の小さい方を都度算出する。
+    // ここでは pair ごとに fallback chain（TRANSIT → 距離分岐 (WALKING / DRIVING)）を投入する。
     const results = await Promise.all(
       batch.map(([from, to]) =>
-        callDirectionsWithTimeout(service, from, to, departureTime, effectiveTimeout),
+        callDirectionsWithFallback(
+          service,
+          from,
+          to,
+          departureTime,
+          perCallTimeoutMs,
+          deadlineEpochMs,
+        ),
       ),
     );
 
