@@ -39,7 +39,26 @@ from .lodging import RakutenLodgingError, fetch_lodging_options
 from .places import PlacesError, fetch_place_details, search_by_text
 
 JST = ZoneInfo("Asia/Tokyo")
-MAX_PLACES = 15  # Evidence Pack に載せる最大スポット数
+# Phase 2 polish v4 (2026-04-28、本番 Run 13d 失敗を受けて):
+# 4 日プランは 19 slot 必要 (5 slot/day × 4 - 1 lodging on last day) で重複完全禁止には
+# pack に slot 数 + buffer 必要。固定 MAX_PLACES=15 だと 4 日で必ず候補枯渇 →
+# `_find_alternate_place exhausted` で 422。total_days に応じて動的に決定する。
+def max_places_for(total_days: int) -> int:
+    """total_days に応じた pack 上限。slot 数 + 3 を最低、固定下限 15。
+
+    - 1 日 (4 slot): 15 (current default)
+    - 2 日 (9 slot): 15 (current default)
+    - 3 日 (14 slot): 17 (= 14 + 3 buffer)
+    - 4 日 (19 slot): 22 (= 19 + 3 buffer)
+    - 5 日 (24 slot): 27
+    """
+    slot_count = max(0, 5 * total_days - 1)
+    return max(15, slot_count + 3)
+
+
+# Backward compat: 旧定数として参照されている箇所のため keep。
+# **新規コードは max_places_for(total_days) を使うこと**。
+MAX_PLACES = 15  # 旧 default、test fixture / 1〜2 日プランで参照
 MIN_PLACES = 12  # bucket 不足時にここまで補填する閾値（Run 8 fix、tasks/plans/2026-04-26-evidence-pack-diversity.md）
 PARALLEL_WORKERS = 5
 DEFAULT_START_HOUR = 9
@@ -135,8 +154,9 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
 
     temporal = _compute_temporal_constraints(request)
     budget = _compute_budget_constraints(request)
+    cap = max_places_for(temporal.total_days)
     places = _merge_anchors_and_search(
-        anchor_places, search_results, MAX_PLACES, total_days=temporal.total_days
+        anchor_places, search_results, cap, total_days=temporal.total_days
     )
     lodging_options = _fetch_lodging_safe(ctx, request, temporal, budget)
 
@@ -374,17 +394,36 @@ def _classify_bucket(place: PlacePoint) -> str:
 
 
 def _bucket_quota(total_days: int) -> dict[str, int]:
-    """total_days に応じた bucket 別 quota（合計は MAX_PLACES=15）。
+    """total_days に応じた bucket 別 quota。**合計は max_places_for(total_days) と一致** する
+    ように `other` で残差を吸収する (Codex review 1 Major 2: contract 一致保証)。
 
-    日帰り (total_days <= 1): lodging=0、その分 attraction +1 / meal +1
-    1 泊 (total_days == 2): lodging=1、attraction +1
-    2 泊以上 (total_days >= 3): lodging=2（baseline）
+    Phase 2 polish v4 (2026-04-28): 3 日以上のプランで quota が slot 数を満たさず
+    重複完全禁止で詰む問題を解消。以下の slot 数別 sizing:
+
+    - 日帰り (total_days <= 1, 4 slot): lodging=0、attraction +1 / meal +1 → 15 places
+    - 1 泊 (total_days == 2, 9 slot): lodging=1、attraction +1 → 15 places
+    - 2 泊 (total_days == 3, 14 slot): lodging=2、3 日 plan の attraction/meal に
+      余裕を持たせる → 17 places
+    - 3 泊 (total_days == 4, 19 slot): lodging=3 (3 泊分)、activity 8 + meal 8 +
+      buffer 2 → 22 places
+    - 4 泊 以上 (total_days >= 5, 24+ slot): activity = meal = 2*total_days、
+      lodging = total_days - 1、`other` で max_places_for との差分を吸収
     """
     if total_days <= 1:
-        return {"attraction": 7, "meal": 6, "lodging": 0, "other": 2}
+        return {"attraction": 7, "meal": 6, "lodging": 0, "other": 2}  # 15
     if total_days == 2:
-        return {"attraction": 7, "meal": 5, "lodging": 1, "other": 2}
-    return {"attraction": 6, "meal": 5, "lodging": 2, "other": 2}
+        return {"attraction": 7, "meal": 5, "lodging": 1, "other": 2}  # 15
+    if total_days == 3:
+        return {"attraction": 7, "meal": 6, "lodging": 2, "other": 2}  # 17
+    if total_days == 4:
+        return {"attraction": 9, "meal": 8, "lodging": 3, "other": 2}  # 22
+    # 5+ 日 (slot 24+): activity = meal = 2 * total_days, lodging = total_days - 1
+    activity_q = 2 * total_days
+    meal_q = 2 * total_days
+    lodging_q = total_days - 1
+    # other で max_places_for との差分を吸収して合計一致を保証する。
+    other_q = max(2, max_places_for(total_days) - activity_q - meal_q - lodging_q)
+    return {"attraction": activity_q, "meal": meal_q, "lodging": lodging_q, "other": other_q}
 
 
 def _haversine_km(a: PlacePoint, b: PlacePoint) -> float:
@@ -471,18 +510,25 @@ def _merge_anchors_and_search(
                 return out[:cap]
             out.append(p)
 
-    # 第 2 段: MIN_PLACES 未満なら leftover から補填（meal > other > attraction、
+    # 第 2 段: 補填閾値未満なら leftover から補填（meal > other > attraction、
     # 1 泊以上なら lodging も追加）。日帰りで lodging を補填しないのは「1 件入っても
     # plan に組み込めない」ため。
+    # Phase 2 polish v4 (Codex review 1 Major 1 反映):
+    # - 旧設計: fill_threshold = max(MIN_PLACES, cap - 3) で止めていたが、bucket 分布が
+    #   偏ると 4 日 plan で実 pack が 19 で停止 → buffer 消失 →
+    #   `_find_alternate_place exhausted` 再発リスク
+    # - 新設計: 3 日以上は cap まで埋める（leftover が枯れた時点で自然停止）。
+    #   1〜2 日 plan は MIN_PLACES (=12) で従来通り（4〜9 slot に対し十分なバッファ）。
     fill_order = (
         _BUCKET_FILL_ORDER_OVERNIGHT if total_days >= 2 else _BUCKET_FILL_ORDER_DAY_TRIP
     )
-    if len(out) < MIN_PLACES:
+    fill_threshold = cap if total_days >= 3 else MIN_PLACES
+    if len(out) < fill_threshold:
         for fill_bucket in fill_order:
-            if len(out) >= MIN_PLACES or len(out) >= cap:
+            if len(out) >= fill_threshold or len(out) >= cap:
                 break
             for p in leftover_by_bucket[fill_bucket]:
-                if len(out) >= MIN_PLACES or len(out) >= cap:
+                if len(out) >= fill_threshold or len(out) >= cap:
                     break
                 if not _distance_ok_for_bucket(
                     p, accepted_by_bucket[fill_bucket], fill_bucket

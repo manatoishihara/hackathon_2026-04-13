@@ -101,7 +101,8 @@ SDK DirectionsService で取得して API に戻す（`tasks/lessons.md` 参照�
 1. QueryContext から候補キーワードを生成（Phase 1.2 は決定論、Phase 1.3+ で LLM 化検討）
    例: "箱根 温泉" "箱根 和食" "箱根 観光"
 2. 各キーワードで Places API text search（並列、各 top 10）
-3. 重複を place_id で dedupe、上位 15 件に cap
+3. 重複を place_id で dedupe、`max_places_for(total_days)` で cap (Phase 2 polish v4 で
+   total_days 依存化: 1〜2 日 = 15、3 日 = 17、4 日 = 22、5 日 = 27)。`apps/api/src/evidence/builder.py` の同関数が正典
 4. （Phase 1.2 スキップ）各 place について Place Details を取得、参加者希望とのマッチを
    relevance_tags 付与 — Phase 1.3 で実装
 5. 予算と時間の制約を展開
@@ -243,7 +244,9 @@ LLM 出力を受け取ったら、以下を全て通すまで reject：
 
 - Places を全フィールド渡すと 1 place あたり 500 token 超。必要フィールドだけ抽出
 - transit_matrix は全ペアではなく近接ペアのみ（距離 15km 以内、Phase 2 polish v3 で 10km から拡張）
-- Evidence Pack 全体で 10,000 token 以内を目安（超えたら上位スコアで絞る）
+- Evidence Pack 全体の token 目安は total_days 依存。1〜2 日 plan は ~10k tokens、4 日
+  plan は ~20k tokens (places 22 件、Phase 2 polish v4 で拡張)。`prompt.py` の
+  `_TOKEN_WARNING_THRESHOLD = 12_000` は警告閾値で、超えても fail-soft で続行する
 
 ## バージョニング
 

@@ -298,9 +298,74 @@ def test_bucket_quota_one_night():
 
 
 def test_bucket_quota_two_nights():
+    """3 日 plan は v4 で 14 slot に対応するため合計 17 (旧 15 から拡張)。"""
     quota = _bucket_quota(3)
     assert quota["lodging"] == 2
-    assert sum(quota.values()) == 15
+    assert sum(quota.values()) == 17
+
+
+def test_bucket_quota_three_nights_phase2_v4():
+    """Phase 2 polish v4: 4 日 plan は 19 slot に対し合計 22 places (lodging=3)。"""
+    quota = _bucket_quota(4)
+    assert quota["lodging"] == 3
+    assert quota["attraction"] == 9
+    assert quota["meal"] == 8
+    assert sum(quota.values()) == 22
+
+
+def test_bucket_quota_five_days_phase2_v4():
+    """Phase 2 polish v4: 5 日 plan は 24 slot、合計 27 places (lodging=4、other=3 で残差吸収)。
+
+    Codex review 1 Major 2 反映: max_places_for(total_days) と sum(quota.values()) の
+    contract 一致を保証する。
+    """
+    from src.evidence.builder import max_places_for
+    quota = _bucket_quota(5)
+    assert quota["lodging"] == 4
+    assert quota["attraction"] == 10
+    assert quota["meal"] == 10
+    # 残差 = max_places_for(5) - 24 = 3 が other に入る
+    assert quota["other"] == 3
+    assert sum(quota.values()) == max_places_for(5)
+
+
+def test_bucket_quota_contract_matches_max_places_for_all_days():
+    """Codex review 1 Major 2: total_days 1〜7 で sum(quota) == max_places_for(td)。"""
+    from src.evidence.builder import max_places_for
+    for td in range(1, 8):
+        quota = _bucket_quota(td)
+        assert sum(quota.values()) == max_places_for(td), (
+            f"contract mismatch at total_days={td}: "
+            f"sum={sum(quota.values())} max_places_for={max_places_for(td)}"
+        )
+
+
+# --- max_places_for（Phase 2 polish v4: total_days 依存の cap）---
+
+
+def test_max_places_for_short_trips_keeps_15():
+    """1〜2 日 plan は cap=15 維持 (4〜9 slot に対し十分なバッファ)。"""
+    from src.evidence.builder import max_places_for
+    assert max_places_for(1) == 15
+    assert max_places_for(2) == 15
+
+
+def test_max_places_for_three_days_returns_17():
+    """3 日 plan: 14 slot + 3 buffer = 17。"""
+    from src.evidence.builder import max_places_for
+    assert max_places_for(3) == 17
+
+
+def test_max_places_for_four_days_returns_22():
+    """4 日 plan: 19 slot + 3 buffer = 22 (本番 Run 13d 失敗の根本対応)。"""
+    from src.evidence.builder import max_places_for
+    assert max_places_for(4) == 22
+
+
+def test_max_places_for_five_days_returns_27():
+    """5 日 plan: 24 slot + 3 buffer = 27。"""
+    from src.evidence.builder import max_places_for
+    assert max_places_for(5) == 27
 
 
 # --- _distance_ok_for_bucket（bucket 別境界、Codex Major 5）---
@@ -389,7 +454,7 @@ def _spread(prefix: str, n: int, lat0: float, bucket_cat: list[str]) -> list[Pla
 
 
 def test_merge_full_buckets_at_two_nights():
-    """2 泊（lodging=2）で全 bucket 充足、合計 15 件採用。"""
+    """2 泊 (total_days=3) で全 bucket 充足。Phase 2 polish v4 で quota 拡張により合計 17 件。"""
     attractions = _spread("a", 10, 35.0, ["tourist_attraction"])
     meals = _spread("m", 10, 36.0, ["restaurant"])
     lodgings = _spread("l", 5, 37.0, ["lodging"])
@@ -397,15 +462,41 @@ def test_merge_full_buckets_at_two_nights():
     out = _merge_anchors_and_search(
         anchors=[],
         search_results=[attractions, meals, lodgings, others],
-        cap=15,
+        cap=17,  # max_places_for(3) = 17
         total_days=3,
     )
-    assert len(out) == 15
+    assert len(out) == 17
     buckets = [_classify_bucket(p) for p in out]
-    assert buckets.count("attraction") == 6
-    assert buckets.count("meal") == 5
+    assert buckets.count("attraction") == 7
+    assert buckets.count("meal") == 6
     assert buckets.count("lodging") == 2
     assert buckets.count("other") == 2
+
+
+def test_merge_4day_lodging_short_buffers_filled_to_cap():
+    """Codex review 1 Major 1: 4 日 plan で lodging 候補が quota 未満でも、
+    leftover の attraction/meal で fill_threshold=cap まで埋めて buffer 確保する。
+
+    旧設計 (fill_threshold=cap-3) では bucket 偏りで pack が 19 で停止 →
+    `_find_alternate_place exhausted` 再発。本 fix で 22 まで埋まる。
+    """
+    from src.evidence.builder import max_places_for
+    # 4 日 plan で lodging quota=3 だが 1 件しか候補なし、attraction/meal は余裕あり
+    attractions = _spread("a", 15, 35.0, ["tourist_attraction"])
+    meals = _spread("m", 15, 36.0, ["restaurant"])
+    lodgings = _spread("l", 1, 37.0, ["lodging"])
+    others = _spread("o", 5, 38.0, ["shopping_mall"])
+    cap = max_places_for(4)  # 22
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[attractions, meals, lodgings, others],
+        cap=cap,
+        total_days=4,
+    )
+    # cap=22 まで補填されることを確認 (旧設計だと 19 で停止)
+    assert len(out) == cap, (
+        f"fill_threshold=cap で bucket 偏りでも cap まで埋まる必要あり (got {len(out)})"
+    )
 
 
 def test_merge_day_trip_zero_lodging_quota():
