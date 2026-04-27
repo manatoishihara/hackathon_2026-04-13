@@ -127,7 +127,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "セッション終了前チェック: 本セッションの成果と発見を tasks/todo.md の「進捗サマリ」および該当 Phase 節に反映しましたか？ 失敗・学びがあれば tasks/lessons.md に記録しましたか？ 未反映のまま閉じると他メンバー（DB 担当 / デザイン担当）や将来セッションが困るので、反映してから Stop してください。不要（既に最新）なら理由を 1 行で返せば OK。"
+            "prompt": "セッション終了前チェック (soft reminder): 本セッションの成果と発見を tasks/todo.md の「進捗サマリ」および該当 Phase 節に **working tree レベルで** 反映しましたか？ 失敗・学びがあれば tasks/lessons.md に **working tree レベルで** 記録しましたか？ 反映済 or 不要なら 1 行で OK と返してください。\n\n**重要 (デッドロック回避)**: 「反映」の判定基準は **working tree 上の編集が存在すること** であり、git commit/push の完了は要求しません。CLAUDE.md Do NOT 第 1 項により Claude は user の明示的指示なしに git add/commit/merge/push を実行しません。permanent 化 (add/commit/push) は user 手動が前提のため、working tree 修正済なら本 hook の条件は充足とみなしてください。\n\n本 hook は blocking 用途ではなく soft reminder 用途です。`git status --short` で `M tasks/lessons.md` 等が見えても、それは Claude が working tree 反映を完了して user の commit 判断を待っている正常状態であり、未充足ではありません。"
           }
         ]
       }
