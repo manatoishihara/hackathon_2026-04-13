@@ -18,6 +18,9 @@
    - meal には飲食店を
    - lodging には宿泊施設を
 7. 連続する slot の place は、`transit_matrix` で到達可能なペアを優先する。到達不能ペアはサーバが挟み直すか拒否する。
+8. **同じ place_id を複数の slot に割当てない**。同じ場所への複数訪問は禁止。
+   - 別 day の同じ時間帯（例: day1_lunch と day2_lunch）でも、別の place_id を選べ。
+   - サーバ側 assembler が重複を検出すれば自動 swap するが、初手で避けると retry が減る。
 
 # 参加者の希望の扱い
 - 全員の `wishes_text` と `tags` を読み、**全員がまあまあ満足** する配分を目指せ。
