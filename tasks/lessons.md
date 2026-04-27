@@ -27,6 +27,51 @@
 
 ## ログ
 
+## 2026-04-27: Phase 2 polish 計画書を Codex review 1 で確定（実装は次セッション）
+- 状況: 本セッション末で 3 課題（重複 / 楽天 / 移動手段）の実装計画書を `tasks/plans/2026-04-27-plan-quality-improvements.md` に作成、Codex review 1 で **Blocker 2 / Major 3 / Minor 2 / OK 2** を全反映
+- 軌道修正された設計判断:
+  - **Blocker 1 (transport_mode が生成処理に届かない)**: `generationSessionStore` に `transport_mode` を含める伝播経路を必須化、`/plan/new` submit → session 格納 → `/plan/[id]/generating` で `postPlanGenerate` に渡す流れ
+  - **Blocker 2 (Plan.transport_mode が DB / RPC スコープ)**: **`Plan` への保存はスコープ外に切る**、`GeneratePlanRequest` / `QueryContext` のみで prompt 注入。DB / RPC 列追加は 4 時間枠超過のため別タスク
+  - **Major 1 (exclude_place_ids 両関数 + 最終 invariant)**: `_find_eligible_alternate_for_slot` と `_find_alternate_place` の **両方**に `exclude_place_ids` 引数を追加、最終 invariant check で「絶対に重複が出ない」を保証
+  - **Major 2 (prompt 合成方式)**: `_build_mode_context_md` を「anchor / theme で早期 return」から「3 mode を独立に文字列化して `\n\n` で合成」に refactor、transport 指示が他 mode と組み合わせて落ちない
+  - **Major 3 (徒歩 30 分上限)**: `parseDirectionsResult` 内で `requestedMode === "WALKING"` かつ `duration_min > 30` のとき null 返却で edge を drop、「徒歩 2 時間」が plan に組み込まれない
+- 学び:
+  - **Plan の data shape を変える fix は DB / RPC スコープに連動**: 一見軽い API field 追加でも `Plan` に保存するなら migration + RPC 更新が必要。Codex review で「scope creep」を早期に発見できた
+  - **prompt の helper が「早期 return」 pattern だと組み合わせで落ちる**: anchor / theme / transport を独立に追加したいケースでは合成方式が正しい設計、Codex Major で構造的に発見
+  - **Plan agent 系 review で「実装計画段階」の Blocker を 2 件発見できた**: 実装に進む前に session 伝播 / DB スコープを軌道修正できたのが大きい。実装後だと差し戻しコスト大
+- ルール候補:
+  - **API field 追加時は「Plan に保存するか / 生成リクエストにのみ載せるか」を最初に決める**。前者は migration + RPC スコープ、後者は session 伝播のみ
+  - **prompt helper は 1 mode = 1 早期 return 設計を避け、各 mode を独立 string + 合成で組み立てる**
+  - **新 enum を transit.ts のような複雑 module に通すときは options object で扱う**（既存 API 後方互換 + default で吸収）
+- 計画書: `tasks/plans/2026-04-27-plan-quality-improvements.md`、次セッションでこの plan を読み込んで実装着手
+
+## 2026-04-27: 本番 Run 12 で完全動作確認後、demo 観察で 3 つの追加課題が判明（Phase 2 polish 候補）
+- 状況: Run 12 で `/plan/new → /api/plans/generate → 200 → /plan/[id]` プラン閲覧画面まで完全動作確認後、user が demo 内容を観察して以下 3 つの精度問題を指摘
+- **追加課題 A**: **DAY 1 / DAY 2 で同じ場所・食事処が重複採用**（demo 致命的）
+  - 例: 「箱根食堂」が day1_lunch と day2_lunch 両方に採用される
+  - 真因仮説: Phase 1.3e assembler が **slot 跨ぎの place_id 重複を check していない**。各 slot で独立に「最適 place」を選ぶ logic、重複制約なし
+  - fix 方針: (1) `apps/api/src/llm/prompts/v2.0.0/system.md` に「同じ place_id を複数 slot に割当てない」ルール追加、(2) `apps/api/src/llm/assembly.py` で post-check として slot 跨ぎの place_id 重複検出 → 自動 swap (既存 self-healing 拡張)、(3) test で重複 swap を assert。実装規模 ~80 LOC、1〜2 時間
+- **追加課題 B**: **宿情報が pack に入らない**
+  - 真因: `apps/api/src/evidence/lodging.py` は Phase 2.3 で実装済だが、本番 Render に `RAKUTEN_APPLICATION_ID` env が未設定
+  - Run 9 / Run 10 / Run 11 / Run 12 全てで Render log に `[WARNING] src.evidence.builder: rakuten lodging fetch skipped: RAKUTEN_APPLICATION_ID が未設定です` が出ていた
+  - fix: user が https://webservice.rakuten.co.jp/ で App ID 取得 → Render Dashboard env に追加 → auto redeploy で動く（**コード変更ゼロ**）
+- **追加課題 C**: **移動手段の指定がない**（全員車運転できるとは限らない demo シナリオ）
+  - 真因: `/plan/new` form に transport_mode 入力なし、prompt にも反映されない
+  - fix 方針: form に「全員車運転可? / 公共交通のみ?」radio 追加 → `query_context.transport_mode` として prompt 注入 → assembler の transit fallback 順序を変える
+  - 実装規模: form +20 / shared-types +5 / prompt +10 / assembler +20 / test +30 = ~85 LOC、1〜1.5 時間
+- **追加課題 D (UX 大改修)**: 食事を朝昼夜のクリック式選択に
+  - anchor mode の拡張として「food_anchor_place_ids」を別 slot 種類に渡す形
+  - 提出後 Phase 2.x で plan 起案
+- 学び:
+  - **「200 + 画面遷移 + render 無 error」を達成しても、生成内容の質は別問題**。Run 12 完全動作の中で観察される demo 内容に新規課題が見える。verify は「動く / 動かない」の binary ではなく「demo として通用するか」の体験ベース判定が必要
+  - **slot 跨ぎ重複は Phase 1.3e assembler 設計の盲点**。verify_hallucination_rate.py は単一 slot ごとの validity しか見ていなかったため、実 plan の「DAY 重複」現象を検出できなかった
+  - **env 設定漏れは「実装済機能の死角」**: lodging.py は Phase 2.3 で実装 + test PASS していたが、本番 env 未設定のため一度も動いていなかった。本番 deploy preflight に「全 fail-soft fetch が実際に成功しているか」を含めるべき
+- 推奨優先順位（提出までの時間で）:
+  - **案 1 (30 分)**: B のみ - 楽天 env 設定で宿表示（demo 1 泊でなら slot 重複もそこまで目立たない）
+  - **案 2 (2 時間、推奨)**: A + B - 重複防止 fix + 楽天 env、最も demo 効果的
+  - **案 3 (4 時間)**: A + B + C - 移動手段指定も追加、完成度最大
+  - D は提出後 Phase 2.x
+
 ## 2026-04-27: 本番 Run 11 で **422 全塞ぎ fix の効果実証** + プラン閲覧画面の独立 React error 発覚（EvidenceModal / MapView の location 未定義セーフガード漏れ）
 - 状況: `fix/plan-generation-blockers` の本番 deploy 後、Playwright で本番 Run 11 を実行（plan_id `10524736-4767-40b2-bcd8-93957b2fcd68`、05:29 JST）
 - **422 全塞ぎ fix の効果実証**:
