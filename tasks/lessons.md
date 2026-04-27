@@ -582,3 +582,26 @@
   - **DDL を docs に貼る時は、**少なくとも一度は本番 or ローカル Supabase で SQL Editor 実行して syntax を確認する
   - 運用方針が変わった（view → Flask 経由）場合、該当 DDL もその場で簡素化（使わないなら削除も可）
 - → 2 回目が来たら `.claude/rules/data-model-sync.md` に「DDL は実行確認必須」節を追加
+
+## 2026-04-27: @base-ui/react Popover は controlled mode + onSelect で close する設計が最もシンプル（DateRangePicker 実装で習得）
+- 状況: `<input type="date">` をカレンダーポップオーバーに置き換える `DateRangePicker` を実装した。最初に `PopoverTrigger render={<span />}` の中にカスタム `<button>` を入れるパターンを書いたが、クリックハンドラの二重登録リスクと DOM 構造の不明瞭さがあった。次に `PopoverPrimitive.Close render={<Calendar />}` を試したが Close は「閉じるだけ」の用途で onSelect コールバックが呼ばれるタイミングと嚙み合わなかった。
+- 真因: `@base-ui/react` の Popover API には「Trigger が toggle、Close が閉じる専用」という明確な責務分離があり、「カレンダー選択時に閉じる」という複合動作は Popup 側の onSelect で `setOpen(false)` を呼ぶ controlled mode が自然な設計
+- 解決パターン（採用）:
+  ```tsx
+  <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+    <PopoverPrimitive.Trigger>...</PopoverPrimitive.Trigger>
+    <PopoverPrimitive.Portal>
+      <PopoverPrimitive.Positioner>
+        <PopoverPrimitive.Popup>
+          <Calendar onSelect={(date) => { handleSelect(date); setOpen(false); }} />
+        </PopoverPrimitive.Popup>
+      </PopoverPrimitive.Positioner>
+    </PopoverPrimitive.Portal>
+  </PopoverPrimitive.Root>
+  ```
+- 学び:
+  - `@base-ui/react` Popover の Trigger はデフォルトで `<button>` を render し、aria-expanded などを自動付与するので `render` prop でカスタム要素に変える必要はほぼない。Trigger 自体をスタイリングするだけで十分
+  - **カレンダーを選んだら閉じる** という複合動作は PopoverPrimitive.Close より `controlled open state + onSelect で close` の方が意図が明確
+  - 開始日 → 終了日の自動連鎖は `setTimeout(() => setEndOpen(true), 120)` で十分（ポップオーバーアニメーション完了を待つ）
+- ルール:
+  - `@base-ui/react` の Compound Component（Popover / Select / Menu 等）で「何かをしたら閉じる」動作を実装するときは **controlled mode が第一選択**。uncontrolled の Close component を流用するより onOpenChange(false) の方が保守しやすい

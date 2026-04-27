@@ -7,6 +7,14 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
+**日付入力 UI 改善 (DateRangePicker)**: ✅ 2026-04-27 完了（commit 提案待ち）。`<input type="date">` のネイティブピッカー（OS/ブラウザ依存で使いにくい）をカレンダーポップオーバーに刷新。
+- `react-day-picker@9.14.0` を `apps/web` に追加（date-fns 不要、native Date のみ）
+- `apps/web/src/components/ui/calendar.tsx` 新規作成（blue hour デザイントークン適用、日本語曜日ラベル）
+- `apps/web/src/components/ui/popover.tsx` 新規作成（`@base-ui/react/popover` ベース、制御モード対応）
+- `apps/web/src/components/DateRangePicker.tsx` 新規作成（開始日 → 終了日ポップオーバー自動連鎖、終了日は開始日より前を disabled、後ろにずらすと終了日自動リセット）
+- `apps/web/src/app/plan/new/page.tsx` の `start_date` / `end_date` フィールドを `DateRangePicker` に差し替え
+- tsc clean / build PASS（`/plan/new` バンドル 417kB、増加なし）
+
 **Phase 1.10 fix: Maps Directions travelMode 距離分岐フォールバック**: 🟡 **2026-04-27 セッションで実装完了 + ローカル verify 完了 → commit + user push 待ち**（`fix/transit-fallback-walking-driving` ブランチ）。`apps/web/src/lib/transit.ts` の travelMode 固定を「距離 ≤ 2km は TRANSIT → WALKING → DRIVING、> 2km は TRANSIT → DRIVING → WALKING」の fallback chain 化。Codex review 2 回（review 1 で「徒歩 2 時間 plan が assembler 経由で 422 を生む」を Major で発覚 → 距離分岐に軌道修正、review 2 で test 設計 bug 2 件発覚 → 反映）。web test 147/147 PASS / tsc clean / build PASS / API regression 381/381 PASS。**ローカル verify**: stats 40/40 全成功、mode_counts walk 20 / car 20、duration 5-46 min avg 18 min。**ただし `/api/plans/generate → 422` は transit fallback と独立した別問題と判明**（transit_matrix=40 件あっても 422、LLM validator 側の問題）。詳細は `tasks/plans/2026-04-27-transit-fallback.md` + lessons.md「2026-04-27」2 エントリ。次セッションは LLM validator 422 の切り分けが最優先。
 
 **DB-4/DB-5 テスト**: ✅ 2026-04-26 完了。`apps/api/tests/test_share_routes.py` を新規作成（11 件）。share_routes.py / plan_cache.py / extensions.py の実装は既完成済みで、テストのみ追加。全 unit テスト 332 件 PASS（既存 2 件の env 依存失敗は本変更と無関係）。

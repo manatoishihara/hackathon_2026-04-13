@@ -26,6 +26,7 @@ import {
 import { ensureAnonymousSession, getCurrentUserId } from "@/lib/supabase";
 import { AnchorPicker } from "@/components/AnchorPicker";
 import { BudgetBreakdownSlider } from "@/components/BudgetBreakdownSlider";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { ModeSelector } from "@/components/ModeSelector";
 import { ParticipantTabs } from "@/components/ParticipantTabs";
 import { ThemePicker } from "@/components/ThemePicker";
@@ -355,18 +356,14 @@ export default function NewPlanPage() {
               {...register("departure_point")}
             />
           </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="start_date">開始日</Label>
-            <Input id="start_date" type="date" {...register("start_date")} />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="end_date">終了日</Label>
-            <Input id="end_date" type="date" {...register("end_date")} />
-            {formState.errors.end_date ? (
-              <p className="flex items-start gap-2 border-l-2 border-[color:var(--color-accent)] pl-2 text-xs leading-relaxed text-[color:var(--color-text-primary)]">
-                {formState.errors.end_date.message}
-              </p>
-            ) : null}
+          <div className="sm:col-span-2">
+            <DateRangePicker
+              startDate={watched.start_date ?? ""}
+              endDate={watched.end_date ?? ""}
+              onStartChange={(v) => setValue("start_date", v, { shouldValidate: true, shouldDirty: true })}
+              onEndChange={(v) => setValue("end_date", v, { shouldValidate: true, shouldDirty: true })}
+              error={formState.errors.end_date?.message ?? formState.errors.start_date?.message}
+            />
           </div>
           <div className="flex flex-col gap-3 sm:col-span-2">
             <div className="flex items-baseline justify-between">
