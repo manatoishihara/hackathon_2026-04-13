@@ -40,12 +40,13 @@ const STEP_ORDER: Step[] = [
 /**
  * mock 時のみ、演出を見せるための擬似的な進行時間。
  * 本番（実 LLM 接続）では各 await が実時間を消費するので不要。
- * 合計 ≒ 14.5 秒（fetching 4s + generating 9s + done 1.5s）。
+ * ミニゲームを遊べる時間を確保するため、合計 ≒ 60 秒
+ * （fetching 16s + generating 42s + done 2s）に設定。
  */
 const MOCK_DELAY_MS = {
-  fetching: 4000,
-  generating: 9000,
-  done: 1500,
+  fetching: 16000,
+  generating: 42000,
+  done: 2000,
 } as const;
 
 const sleep = (ms: number) =>
@@ -201,7 +202,12 @@ export default function GeneratingPage() {
         <p className="text-[10px] font-medium tracking-[0.28em] text-[color:var(--color-text-secondary)]">
           IN FLIGHT
         </p>
-        <FlyingPlane variant={variant} progress={progress} />
+        <FlyingPlane variant={variant} progress={progress} interactive />
+        {variant === "flying" ? (
+          <p className="text-[10px] font-medium tracking-[0.18em] text-[color:var(--color-text-tertiary)]">
+            TAP / SPACE で浮上
+          </p>
+        ) : null}
         <h1 className="font-heading text-3xl font-medium leading-[1.4] text-[color:var(--color-text-primary)] sm:text-4xl">
           {headline}
         </h1>
