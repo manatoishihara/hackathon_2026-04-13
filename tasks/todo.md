@@ -7,6 +7,10 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
+**Phase 1.10 後段 fix: EvidenceModal / MapView の location undefined セーフガード (`fix/evidence-modal-undefined-location`)**: 🟡 **2026-04-27 セッション末で実装完了 → user commit + push 待ち**。本番 Run 11 で `/api/plans/generate → 200` 達成 + `/plan/[id]` 遷移成功を確認したあと、**プラン閲覧画面で React render error** (`Cannot read properties of undefined (reading 'place_id')`) が発覚。Phase 2.5 evidence modal の design 仕事で safety check が漏れた regression。`apps/web/src/components/EvidenceModal.tsx:42` の `item.location.place_id` access を optional chaining (`item.location?.place_id ?? null`) に修正、`apps/web/src/components/MapView.tsx:29` も `i.location != null && ...` で undefined 除外。`EvidenceModal.test.tsx` に「location 削除でも crash しない」1 件追加。test 148/148 PASS（既知 6 件 pre-existing は本変更無関係）。push → Vercel auto deploy → プラン閲覧画面で正常 render すれば demo 完全完成。詳細は lessons.md「2026-04-27: 本番 Run 11 で **422 全塞ぎ fix の効果実証** + プラン閲覧画面の独立 React error 発覚」エントリ。
+
+**Phase 1.10 本番 Run 11 (2026-04-27 セッション末)**: 🟢 **422 全塞ぎ fix の効果が本番で完全実証**。Vercel + Render auto deploy 完了後、Playwright で `/plan/new` 提出 → URL が `/plan/10524736-4767-40b2-bcd8-93957b2fcd68`（`/generating` なし）に遷移 = `/api/plans/generate` が 200 を返した動かぬ証拠。canonical 8 点 + retry guidance + previous_issues 累積化が効いた。**Run 10 (422)** → **Run 11 (200)** の決定的な転換。ただし閲覧画面で React error 発覚（次の fix で対応中）。
+
 > 📌 **2026-04-27 セッション末の git 状況（本 merge commit で解消）**:
 > - ローカル develop の私の 4 commits + origin/develop の design 仕事 5 commits を本 merge commit で統合
 > - 自動マージ成功: `apps/web/src/app/plan/[id]/generating/page.tsx`（origin の FlyingPlane 演出 + 私の早期 throw が両方残った）/ `tasks/lessons.md` 等

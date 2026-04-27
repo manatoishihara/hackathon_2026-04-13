@@ -38,9 +38,12 @@ export function EvidenceModal({ item, open, onOpenChange }: Props) {
     ? evidence.opening_hours
     : UNKNOWN_VALUE_LABEL;
 
+  // transit item や location 不在の item で `item.location` が undefined になる
+  // ケース（Phase 2.5 design でも null セーフガード漏れ）。Optional chaining で
+  // render error を避けつつ、buildGoogleMapsUrl 側で fallbackTitle 経由にフォールバック。
   const mapsUrl = buildGoogleMapsUrl({
-    placeId: item.location.place_id,
-    placeName: item.location.place_name,
+    placeId: item.location?.place_id ?? null,
+    placeName: item.location?.place_name ?? null,
     fallbackTitle: item.title,
   });
 
