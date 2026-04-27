@@ -131,7 +131,7 @@ export default function PlanPage() {
         onChange={setActiveDateKey}
       />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.35fr_1fr]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* タイムラインはデータ取得中は Skeleton で表示（⑥ Lazy Load / Skeleton UI）*/}
         {itemsQuery.isPending ? (
           <SkeletonTimeline />
@@ -139,7 +139,7 @@ export default function PlanPage() {
           <PlanTimeline items={activeItems} />
         )}
         <aside className="flex flex-col gap-3">
-          <div className="h-[200px]">
+          <div className="h-[50vh] min-h-[320px]">
             {/* MapView は dynamic import + Error Boundary で隔離（⑥ Lazy Load / ⑭ フォールバック）*/}
             <MapErrorBoundary>
               <MapView items={activeItems} />
