@@ -27,6 +27,14 @@
 
 ## ログ
 
+## 2026-04-27: API ヘルスチェックの初期状態を null にするとバナーが「即エラー表示」になる
+- 問題: `useState<boolean | null>(null)` の null をそのまま「確認中」扱いにせず `isApiDown = apiAvailable === false` だけ見ていたため、`useEffect` が走るまでの一瞬（実際には resolve 後まで）は `null` = バナーなし。しかし外部からは「普通に開いただけでサーバーに接続できません」に見える状況があった（バックエンド未起動時は `checkApiHealth` が `false` を返すためバナーが即出る）
+- 原因: 「確認中」状態の表示分岐がなく、null / false を同一視していた。ユーザーには「接続エラー」と「まだ確認していない」の区別がつかない
+- ルール:
+  - **`useState<boolean | null>(null)` で 3 状態（null=確認中 / true=OK / false=NG）を使う場合は、null の UI を必ず定義する**。null を「エラーなし」と同一視するな
+  - **ヘルスチェックの失敗メッセージには「コールドスタートの可能性と再読み込み案内」を必ず添える**。Render Free は cold start が頻発するため「しばらく待ってから再読み込み」が正しい誘導
+  - **smoke test は非同期 useEffect の完了前に DOM を検査する**。ボタンテキストを「確認中」に変えると `getByText(/プランを生成/)` が落ちる → ボタンテキストは安定したコピーを維持し、状態はバナー側で伝える設計にする
+
 ## 2026-04-27: フロントエラー分類を HTTP ステータス別に細分化（`classifyError` リファクタ）
 - 問題: `classifyError()` が 401/403 を同じメッセージ、500 台を一括で処理していた。ネットワーク `TypeError` と `ApiError(status=0)` の混在で「接続できませんでした」に全部が吸収され、本当の原因（422 LLM 検証 / 403 APIキー / 504 Render コールドスタート）がユーザーに見えなかった
 - 原因: `ApiError` は `authedFetch` が HTTP レスポンスを受け取った後にのみ throw する。真のネットワーク障害は `TypeError`、タイムアウトは `DOMException(AbortError)` として届く。旧実装は `ApiError.status === 0` を確認していたが、このケースは実際には発生しない（`authedFetch` 設計上、404 以上が status に入る）

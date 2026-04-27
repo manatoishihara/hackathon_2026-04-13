@@ -7,6 +7,12 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新、エラー詳細化）
 
+**フロント UX: API ヘルスチェックバナーの UX 改善**: ✅ **2026-04-27 完了（commit 提案待ち）**。ページ読み込み直後に「サーバーに接続できません」と表示されていた問題を修正。
+- `apiAvailable === null`（確認中）のとき: スピナー + 「サーバーの状態を確認中...」バナー表示、submit ボタンは disabled のまま「プランを生成」
+- `apiAvailable === false`（失敗）のとき: 「APIサーバーが起動していません（コールドスタートの可能性）。30秒ほど待ってからページを再読み込みしてください。」+ ボタンに「APIサーバーに接続できません」
+- smoke test の `getByText(/プランを生成/)` がボタンテキスト変更で壊れる問題を検出・修正（ボタンは確認中も「プランを生成」を維持）
+- web test **158/158 PASS** / tsc clean
+
 **フロント UX: エラー原因の詳細化**: ✅ **2026-04-27 完了（commit 提案待ち）**。`classifyError()` を HTTP ステータス別に分岐し、メッセージ + 詳細説明の 2 段表示に刷新。
 - `apps/web/src/app/plan/new/page.tsx`: `classifyError()` を `{ message, detail? }` 返却に変更。422（LLM 検証失敗）/ 429（レート制限）/ 401（セッション認証切れ）/ 403（APIキー制限）/ 404（Evidence Pack 有効期限切れ）/ 502-504（Render コールドスタート）/ 500（サーバー内部エラー）を個別に分類。`TypeError`（ネットワーク失敗）と `AbortError`（タイムアウト）も個別分岐。エラー UI を「太字メッセージ + secondary カラーの詳細説明」2 行表示に変更
 - `apps/web/src/app/plan/[id]/generating/page.tsx`: `ApiError` import 追加、catch ブロックで同等のステータス別分岐

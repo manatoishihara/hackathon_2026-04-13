@@ -562,7 +562,7 @@ export default function NewPlanPage() {
             ) : isApiDown ? (
               <>
                 <WifiSlash size={18} weight="bold" />
-                サーバー未接続
+                APIサーバーに接続できません
               </>
             ) : (
               <>
