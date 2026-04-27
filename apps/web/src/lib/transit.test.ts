@@ -183,6 +183,7 @@ describe("parseDirectionsResult", () => {
       "A",
       "B",
       new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
     );
     expect(edge).not.toBeNull();
     expect(edge!.duration_min).toBe(90);
@@ -199,6 +200,7 @@ describe("parseDirectionsResult", () => {
       "A",
       "B",
       new Date("2026-06-01T08:30:00+09:00"),
+      "TRANSIT",
     );
     expect(edge).not.toBeNull();
     expect(edge!.mode).toBe("walk");
@@ -213,6 +215,7 @@ describe("parseDirectionsResult", () => {
         "A",
         "B",
         new Date(),
+        "TRANSIT",
       ),
     ).toBeNull();
     expect(
@@ -221,6 +224,7 @@ describe("parseDirectionsResult", () => {
         "A",
         "B",
         new Date(),
+        "TRANSIT",
       ),
     ).toBeNull();
     expect(
@@ -229,6 +233,7 @@ describe("parseDirectionsResult", () => {
         "A",
         "B",
         new Date(),
+        "TRANSIT",
       ),
     ).toBeNull();
   });
@@ -244,6 +249,7 @@ describe("parseDirectionsResult", () => {
       "A",
       "B",
       new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
     );
     expect(edge!.fare_jpy).toBeNull();
     expect(edge!.mode).toBe("bus");
@@ -260,8 +266,111 @@ describe("parseDirectionsResult", () => {
       "A",
       "B",
       new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
     );
     expect(edge!.route_summary.length).toBe(120);
+  });
+});
+
+// ==============================
+// parseDirectionsResult — requestedMode 分岐
+// ==============================
+
+describe("parseDirectionsResult — requestedMode", () => {
+  it("requestedMode='DRIVING' なら default mode='car' / route_summary='車'", () => {
+    const result = {
+      routes: [
+        {
+          legs: [
+            {
+              duration: { value: 1800, text: "" },
+              steps: [{ travel_mode: "DRIVING" }],
+            },
+          ],
+        },
+      ],
+    } as unknown as google.maps.DirectionsResult;
+    const edge = parseDirectionsResult(
+      result,
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "DRIVING",
+    );
+    expect(edge!.mode).toBe("car");
+    expect(edge!.route_summary).toBe("車");
+    expect(edge!.duration_min).toBe(30);
+  });
+
+  it("requestedMode='WALKING' なら default mode='walk' / route_summary='徒歩'", () => {
+    const result = {
+      routes: [
+        {
+          legs: [
+            {
+              duration: { value: 600, text: "" },
+              steps: [{ travel_mode: "WALKING" }],
+            },
+          ],
+        },
+      ],
+    } as unknown as google.maps.DirectionsResult;
+    const edge = parseDirectionsResult(
+      result,
+      "A",
+      "B",
+      new Date("2026-06-01T08:30:00+09:00"),
+      "WALKING",
+    );
+    expect(edge!.mode).toBe("walk");
+    expect(edge!.route_summary).toBe("徒歩");
+  });
+
+  it("requestedMode='TRANSIT' で transit step あり → 既存挙動（line name 抽出）", () => {
+    const edge = parseDirectionsResult(
+      fakeResult({
+        durationSec: 5400,
+        transitLineName: "小田急線 特急はこね",
+        vehicleType: "HEAVY_RAIL",
+      }),
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "TRANSIT",
+    );
+    expect(edge!.mode).toBe("train");
+    expect(edge!.route_summary).toBe("小田急線 特急はこね");
+  });
+
+  it("requestedMode='DRIVING' でも transit step が紛れていたら無視する", () => {
+    // DRIVING 要求の結果に万一 TRANSIT step が混じっても上書きしない
+    const result = {
+      routes: [
+        {
+          legs: [
+            {
+              duration: { value: 1200, text: "" },
+              steps: [
+                {
+                  travel_mode: "TRANSIT",
+                  transit: { line: { name: "ノイズ", vehicle: { type: "BUS" } } },
+                },
+                { travel_mode: "DRIVING" },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as google.maps.DirectionsResult;
+    const edge = parseDirectionsResult(
+      result,
+      "A",
+      "B",
+      new Date("2026-06-01T09:00:00+09:00"),
+      "DRIVING",
+    );
+    expect(edge!.mode).toBe("car");
+    expect(edge!.route_summary).toBe("車");
   });
 });
 
@@ -274,7 +383,7 @@ type RouteFn = (req: google.maps.DirectionsRequest) => Promise<google.maps.Direc
 function installMockGoogle(routeFn: RouteFn) {
   (globalThis as unknown as { google: unknown }).google = {
     maps: {
-      TravelMode: { TRANSIT: "TRANSIT" },
+      TravelMode: { TRANSIT: "TRANSIT", WALKING: "WALKING", DRIVING: "DRIVING" },
       DirectionsService: class {
         route = routeFn;
       },
@@ -466,6 +575,7 @@ describe("formatHHmm (JST 固定)", () => {
       "A",
       "B",
       utcMidnight,
+      "TRANSIT",
     );
     expect(edge!.candidate_departures).toEqual(["09:00"]);
   });
@@ -483,6 +593,7 @@ describe("formatHHmm (JST 固定)", () => {
       "A",
       "B",
       new Date("2026-06-01T10:00:00Z"),
+      "TRANSIT",
     );
     expect(edge!.candidate_departures).toEqual(["08:00"]);
   });
@@ -510,8 +621,277 @@ describe("leg.fare fallback", () => {
         },
       ],
     } as unknown as google.maps.DirectionsResult;
-    const edge = parseDirectionsResult(result, "A", "B", new Date());
+    const edge = parseDirectionsResult(result, "A", "B", new Date(), "TRANSIT");
     expect(edge!.fare_jpy).toBe(480);
     expect(edge!.mode).toBe("bus");
+  });
+});
+
+// ==============================
+// fetchTransitMatrix — fallback chain (TRANSIT → WALKING / DRIVING)
+// ==============================
+
+describe("fetchTransitMatrix — fallback chain", () => {
+  beforeEach(() => {
+    _resetLoaderForTests();
+    process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY = "pk-fake";
+  });
+
+  afterEach(() => {
+    uninstallMockGoogle();
+    delete process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY;
+  });
+
+  it("TRANSIT 即成功 → WALKING / DRIVING は呼ばない、edges mode='train'", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      // TRANSIT で必ず成功
+      return fakeResult({
+        durationSec: 1200,
+        transitLineName: "小田急線",
+        vehicleType: "HEAVY_RAIL",
+      });
+    });
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    expect(result.stats.succeeded).toBe(2);
+    expect(calls).toEqual(["TRANSIT", "TRANSIT"]);
+    expect(result.edges.every((e) => e.mode === "train")).toBe(true);
+  });
+
+  it("距離 ≤ 2km で TRANSIT 失敗 → WALKING にフォールバック、edges mode='walk'", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      if (mode === "TRANSIT") throw new Error("DIRECTIONS_ROUTE: ZERO_RESULTS");
+      // WALKING で成功
+      return fakeResult({ durationSec: 600 });
+    });
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)], // ~0.1km
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    expect(result.stats.attempted).toBe(2);
+    expect(result.stats.succeeded).toBe(2);
+    expect(calls.filter((c) => c === "TRANSIT")).toHaveLength(2);
+    expect(calls.filter((c) => c === "WALKING")).toHaveLength(2);
+    expect(result.edges.every((e) => e.mode === "walk")).toBe(true);
+  });
+
+  it("距離 ≤ 2km で TRANSIT, WALKING 失敗 → DRIVING、edges mode='car'", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      if (mode === "TRANSIT" || mode === "WALKING") {
+        throw new Error("ZERO_RESULTS");
+      }
+      // DRIVING
+      return fakeResult({ durationSec: 1800 });
+    });
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    expect(result.stats.succeeded).toBe(2);
+    expect(calls.filter((c) => c === "DRIVING")).toHaveLength(2);
+    expect(result.edges.every((e) => e.mode === "car")).toBe(true);
+    expect(result.edges.every((e) => e.route_summary === "車")).toBe(true);
+  });
+
+  it("距離 > 2km で TRANSIT 失敗 → DRIVING にフォールバック、WALKING 呼ばれない", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      if (mode === "TRANSIT") throw new Error("ZERO_RESULTS");
+      return fakeResult({ durationSec: 1800 });
+    });
+    // ~5km (lat 差 0.045 ≈ 5km)
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.045, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    expect(result.stats.succeeded).toBe(2);
+    expect(calls.filter((c) => c === "TRANSIT")).toHaveLength(2);
+    expect(calls.filter((c) => c === "DRIVING")).toHaveLength(2);
+    expect(calls.filter((c) => c === "WALKING")).toHaveLength(0);
+    expect(result.edges.every((e) => e.mode === "car")).toBe(true);
+  });
+
+  it("3 mode 全部 reject → stats.errors++、edges 空", async () => {
+    installMockGoogle(async () => {
+      throw new Error("ZERO_RESULTS");
+    });
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    expect(result.stats.attempted).toBe(2);
+    expect(result.stats.succeeded).toBe(0);
+    expect(result.stats.errors).toBe(2);
+    expect(result.edges).toEqual([]);
+  });
+
+  it("3 mode 全部 timeout → stats.timedOut のみ +2、errors は 0", async () => {
+    // 全 mode で永遠に resolve しない → per-mode timeout で打ち切り、
+    // callDirectionsWithFallback は最後の result（kind: "timeout"）を返す
+    installMockGoogle(
+      () =>
+        new Promise<google.maps.DirectionsResult>((resolve) => {
+          setTimeout(() => resolve(fakeResult({ durationSec: 60 })), 5_000);
+        }),
+    );
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+      { perCallTimeoutMs: 30, globalDeadlineMs: 1_000 },
+    );
+    expect(result.stats.attempted).toBe(2);
+    expect(result.stats.succeeded).toBe(0);
+    expect(result.stats.timedOut).toBe(2);
+    expect(result.stats.errors).toBe(0);
+  });
+
+  it("TRANSIT が timeout の後でも WALKING を試す（per-mode timeout 適用）", async () => {
+    const calls: string[] = [];
+    installMockGoogle((req) => {
+      const mode = String(req.travelMode);
+      calls.push(mode);
+      if (mode === "TRANSIT") {
+        // 永遠に resolve しない（per-mode timeout で打ち切られる想定）
+        return new Promise<google.maps.DirectionsResult>((resolve) => {
+          setTimeout(() => resolve(fakeResult({ durationSec: 60 })), 5_000);
+        });
+      }
+      return Promise.resolve(fakeResult({ durationSec: 600 }));
+    });
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+      { perCallTimeoutMs: 50, globalDeadlineMs: 5_000 },
+    );
+    expect(result.stats.succeeded).toBe(2);
+    expect(calls.filter((c) => c === "TRANSIT")).toHaveLength(2);
+    expect(calls.filter((c) => c === "WALKING")).toHaveLength(2);
+  });
+
+  it("globalDeadline 到達中に fallback 試行を停止する", async () => {
+    installMockGoogle(
+      () =>
+        new Promise<google.maps.DirectionsResult>((resolve) => {
+          setTimeout(() => resolve(fakeResult({ durationSec: 60 })), 80);
+        }),
+    );
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+      { perCallTimeoutMs: 200, globalDeadlineMs: 50 },
+    );
+    expect(result.stats.deadlineReached || result.stats.timedOut > 0).toBe(true);
+  });
+
+  it("距離分岐の境界値 (~ 2.0km, ≤) は WALKING を 2 段目に採用", async () => {
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      calls.push(String(req.travelMode));
+      if (String(req.travelMode) === "TRANSIT") throw new Error("ZERO_RESULTS");
+      return fakeResult({ durationSec: 1500 });
+    });
+    // lat 差 0.01798 は haversine で約 1.999 km（境界値 2km の直下）
+    await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.01798, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    // 境界値 (≤ 2km) → WALKING を採用
+    expect(calls.filter((c) => c === "WALKING").length).toBeGreaterThan(0);
+  });
+
+  it("WALKING 呼び出し時は transitOptions を渡さない（近距離 ≤ 2km）", async () => {
+    const requests: google.maps.DirectionsRequest[] = [];
+    installMockGoogle(async (req) => {
+      requests.push(req);
+      const mode = String(req.travelMode);
+      if (mode === "TRANSIT") throw new Error("ZERO_RESULTS");
+      return fakeResult({ durationSec: 600 });
+    });
+    // 近距離 (~0.11km) なので fallback 順序は TRANSIT → WALKING
+    await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    const transitReqs = requests.filter((r) => String(r.travelMode) === "TRANSIT");
+    const walkingReqs = requests.filter((r) => String(r.travelMode) === "WALKING");
+    expect(transitReqs.length).toBeGreaterThan(0);
+    expect(walkingReqs.length).toBeGreaterThan(0);
+    expect(transitReqs.every((r) => r.transitOptions !== undefined)).toBe(true);
+    expect(walkingReqs.every((r) => r.transitOptions === undefined)).toBe(true);
+  });
+
+  it("DRIVING 呼び出し時は transitOptions を渡さない（遠距離 > 2km）", async () => {
+    const requests: google.maps.DirectionsRequest[] = [];
+    installMockGoogle(async (req) => {
+      requests.push(req);
+      const mode = String(req.travelMode);
+      if (mode === "TRANSIT") throw new Error("ZERO_RESULTS");
+      return fakeResult({ durationSec: 1800 });
+    });
+    // 遠距離 (~5km > 2km) なので fallback 順序は TRANSIT → DRIVING、WALKING は呼ばれない
+    await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.045, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    const transitReqs = requests.filter((r) => String(r.travelMode) === "TRANSIT");
+    const drivingReqs = requests.filter((r) => String(r.travelMode) === "DRIVING");
+    const walkingReqs = requests.filter((r) => String(r.travelMode) === "WALKING");
+    expect(transitReqs.length).toBeGreaterThan(0);
+    expect(drivingReqs.length).toBeGreaterThan(0);
+    expect(walkingReqs).toHaveLength(0); // 遠距離なので WALKING は試さない
+    expect(transitReqs.every((r) => r.transitOptions !== undefined)).toBe(true);
+    expect(drivingReqs.every((r) => r.transitOptions === undefined)).toBe(true);
+  });
+
+  it("距離分岐の上側境界 (~ 2.0015km, > 2km) は DRIVING を 2 段目に採用、WALKING は呼ばれない", async () => {
+    // Codex review 2 Minor 1 反映: 閾値が 2 ではなく例えば 3 に変わったら DRIVING ではなく
+    // WALKING が呼ばれてこの test が落ちる。「閾値値そのもの」を境界 test pair で固定する。
+    const calls: string[] = [];
+    installMockGoogle(async (req) => {
+      calls.push(String(req.travelMode));
+      if (String(req.travelMode) === "TRANSIT") throw new Error("ZERO_RESULTS");
+      return fakeResult({ durationSec: 1500 });
+    });
+    // lat 差 0.018 は haversine で約 2.0015 km（境界値 2km の直上）
+    await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.018, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+    );
+    expect(calls.filter((c) => c === "DRIVING").length).toBeGreaterThan(0);
+    expect(calls.filter((c) => c === "WALKING")).toHaveLength(0);
+  });
+
+  it("最初から deadline 超過なら service.route を 1 度も呼ばないか最大 1 batch 以内", async () => {
+    let callCount = 0;
+    // 50ms 遅延の mock。globalDeadlineMs を超える遅延にして fallback chain 内の
+    // per-mode timeout で確実に timedOut になることを誘発する。
+    installMockGoogle(
+      () =>
+        new Promise<google.maps.DirectionsResult>((resolve) => {
+          callCount++;
+          setTimeout(() => resolve(fakeResult({ durationSec: 600 })), 50);
+        }),
+    );
+    const result = await fetchTransitMatrix(
+      [place("a", 35.0, 139.0), place("b", 35.001, 139.0)],
+      new Date("2026-06-01T09:00:00+09:00"),
+      { perCallTimeoutMs: 5, globalDeadlineMs: 5 }, // 即座に deadline 超過
+    );
+    // 1 batch (2 pair) 以内に収まる
+    expect(callCount).toBeLessThanOrEqual(2);
+    expect(result.stats.deadlineReached || result.stats.timedOut > 0).toBe(true);
   });
 });
