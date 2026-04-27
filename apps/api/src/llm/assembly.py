@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from ..evidence.pack import EvidencePack, OpeningHoursSlot, PlacePoint, TransitEdge
 from .schema import LlmGeneratedPlan, LlmGeneratedPlanV2, LlmPlanItem, LlmTransitRef
+from .validator import _categories_indicate_lodging, _categories_indicate_meal
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -621,6 +622,28 @@ def _lookup_transit_edge(
     return None
 
 
+def _is_item_type_compatible(item_type: str, place_categories: list[str]) -> bool:
+    """slot.item_type に対し place の category が validator の整合性チェックを通るか。
+
+    `validator._check_item_type_category_consistency` と同じ判定で、tier3 fallback での
+    `item_type_category_mismatch` 誘発を防ぐ (Phase 2 polish v3 T7、Codex review 1 M2)。
+    validator helper (`_categories_indicate_meal` / `_categories_indicate_lodging`) を再利用
+    することで、将来 allowlist が更新された時に assembler tier3 も自動追従する
+    (Codex review 2 Major: 独自 list が validator より狭く正常候補を回帰で落とすリスク回避)。
+
+    Codex review 4 Major: validator 本体は空 category を **skip (許容)** するため、
+    本 helper も空なら True を返して挙動を一致させる。さもなくば tier3 候補が不要に減って
+    `NoFeasibleTransitError` を増やすリスク。
+    """
+    if not place_categories:
+        return True
+    if item_type == "meal":
+        return _categories_indicate_meal(place_categories)
+    if item_type == "lodging":
+        return _categories_indicate_lodging(place_categories)
+    return True  # activity slot は category 制約なし (validator も activity はチェックしない)
+
+
 def _find_eligible_alternate_for_slot(
     *,
     pack: EvidencePack,
@@ -635,7 +658,7 @@ def _find_eligible_alternate_for_slot(
     優先順位:
       1. 同 `category[0]` を持ち、かつ slot に eligible + (prev から transit 到達可能) な place のうち rating 最高
       2. category 共通集合 + 上記同条件のうち rating 最高
-      3. 任意の上記同条件 place のうち rating 最高
+      3. 任意の上記同条件 place のうち rating 最高 (Phase 2 polish v3 T7: item_type 整合 filter 追加)
       4. 見つからなければ None
     target_place 自身は常に除外。
 
@@ -672,15 +695,24 @@ def _find_eligible_alternate_for_slot(
             continue
         candidates.append(p)
     if not candidates:
+        # Phase 2 polish v3 T4-1: 候補枯渇時の可視性 log。本番 Run 13c では
+        # 「reachable + eligible + 未使用」候補 0 件で `unknown_transit_edge` 多発、
+        # ここで count breakdown を残して原因切り分けを高速化する。
+        logger.warning(
+            "_find_eligible_alternate_for_slot exhausted: target=%s slot_id=%s item_type=%s "
+            "prev_place_id=%s reachable_ids=%d excluded=%d total_places=%d",
+            target_place.place_id,
+            slot_meta.get("slot_id"),
+            slot_meta.get("item_type"),
+            prev_place_id,
+            len(reachable_ids) if reachable_ids is not None else -1,
+            len(excluded),
+            len(pack.places),
+        )
         return None
 
     target_primary = target_place.category[0] if target_place.category else None
     target_categories = set(target_place.category)
-
-    def _sort_key(p: PlacePoint) -> tuple[int, float]:
-        # rating tie 安定化のため id 辞書順含めるが、Tuple 比較で rating 降順を優先
-        rating = p.rating if p.rating is not None else 0.0
-        return (-rating, 0)  # 降順
 
     # tier 1: 同 category[0]
     tier1 = [
@@ -693,8 +725,23 @@ def _find_eligible_alternate_for_slot(
     tier2 = [p for p in candidates if set(p.category) & target_categories]
     if tier2:
         return min(tier2, key=lambda p: (-(p.rating or 0.0), p.place_id))
-    # tier 3: 任意 eligible
-    return min(candidates, key=lambda p: (-(p.rating or 0.0), p.place_id))
+    # tier 3 (Phase 2 polish v3 T7): item_type と category の整合 filter を validator と
+    # 同じ判定で適用する。空 category は許容（validator と挙動一致）。
+    item_type = slot_meta.get("item_type", "activity")
+    tier3 = [p for p in candidates if _is_item_type_compatible(item_type, p.category)]
+    if tier3:
+        return min(tier3, key=lambda p: (-(p.rating or 0.0), p.place_id))
+    # tier3 全落ち（item_type 不整合のみで eligibility は OK）。Codex review 5 Minor 1 反映:
+    # candidates 自体は 0 件ではないので最初の exhausted log path には入らない、ここで補完。
+    logger.warning(
+        "_find_eligible_alternate_for_slot tier3 filtered out all candidates: target=%s "
+        "slot_id=%s item_type=%s candidates=%d",
+        target_place.place_id,
+        slot_meta.get("slot_id"),
+        item_type,
+        len(candidates),
+    )
+    return None
 
 
 def _find_alternate_place(
@@ -756,6 +803,18 @@ def _find_alternate_place(
             continue
         candidates.append(p)
     if not candidates:
+        # Phase 2 polish v3 T4-1: 候補枯渇 warning log。「reachable + 同 category +
+        # 営業時間 OK + 未使用」全部満たす候補 0 件 = transit 不成立 swap も詰む状態。
+        logger.warning(
+            "_find_alternate_place exhausted: target=%s target_category=%s "
+            "from_place_id=%s reachable=%d excluded=%d total_places=%d",
+            target_place.place_id,
+            target_place.category,
+            from_place_id,
+            len(reachable_ids),
+            len(excluded),
+            len(pack.places),
+        )
         return None
     # rating 降順 → place_id 昇順（tie breaker、tests の安定性）
     candidates.sort(key=lambda p: (-(p.rating or 0.0), p.place_id))
