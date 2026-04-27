@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { EvidencePlacesPlaceSummary, TransportMode } from "shared-types";
+import type { EvidencePlacesPlaceSummary } from "shared-types";
 
 /**
  * 1.5 submit → 1.6 生成中 → 1.7 プラン閲覧 の**ルート跨ぎ一時 state**。
@@ -14,8 +14,6 @@ export type GenerationSession = {
   plan_id: string;
   evidence_pack_id: string;
   places: EvidencePlacesPlaceSummary[];
-  /** Phase 2 polish: 1.6 生成中ページの fetchTransitMatrix に渡す移動手段指定。 */
-  transport_mode: TransportMode;
   createdAt: number;
 };
 

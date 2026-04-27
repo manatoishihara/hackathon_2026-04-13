@@ -18,14 +18,6 @@ export type CostConfidence = "verified" | "estimated" | "unknown";
 export type TransitMode = "train" | "bus" | "walk" | "car";
 export type PlanStatus = "draft" | "generating" | "succeeded" | "failed";
 
-// Phase 2 polish (2026-04-27): 移動手段指定（user 選択）。
-// - all_modes: 距離分岐 fallback（TRANSIT → WALKING / DRIVING）で経路探索（既存挙動）
-// - public_transit_only: 車不可シナリオ。DRIVING を fallback chain から除外し、
-//   徒歩 30 分超の long-walk edge を transit 結果から drop する。
-// Plan には保存しない（DB / RPC 列追加スコープ外）。GeneratePlanRequest 経由で
-// 内部 QueryContext に伝播、Pack 経由で LLM プロンプトと transit fetch に届く。
-export type TransportMode = "all_modes" | "public_transit_only";
-
 // Phase 2.1 出発モード切替: テーマ key の単一情報源（runtime + 型両方で参照可能）。
 // バックエンドの `apps/api/src/themes.py` の THEME_REGISTRY と同期して運用する
 // （ThemeKey 値の追加 / 改名は両方を必ず揃える）。
@@ -159,8 +151,6 @@ export type GeneratePlanRequest = {
   budget_breakdown: BudgetBreakdown;
   start_mode: StartMode;
   mode_payload: Record<string, unknown> | null;
-  // Phase 2 polish: 移動手段指定。デフォルト 'all_modes'。
-  transport_mode: TransportMode;
   participants: Omit<Participant, "id" | "plan_id">[];
 };
 

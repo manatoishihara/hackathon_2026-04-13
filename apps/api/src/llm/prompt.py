@@ -208,22 +208,27 @@ def _edge_for_llm_v2(edge: TransitEdge) -> dict:
 
 
 def _build_mode_context_md(query_context) -> str:
-    """start_mode + transport_mode に応じた追加指示を Markdown で返す（合成方式）。
+    """start_mode に応じた追加指示を Markdown で返す（合成方式）。
 
     Phase 2 polish (2026-04-27、Codex Major 2): 旧実装は anchor / theme で早期 return
-    していたため、anchor + transport_mode='public_transit_only' のような併用で transport
-    指示が落ちていた。本実装は anchor / theme / transport を独立に MD を組み立てて
-    `"\\n\\n".join(filter(None, [...]))` で連結する。
+    していたため、anchor + theme のような併用で他方の指示が落ちていた。本実装は
+    anchor / theme を独立に MD を組み立てて `"\\n\\n".join(filter(None, [...]))` で連結する。
+
+    Phase 2 polish (2026-04-27、A 案撤回): 旧 transport_mode section は完全削除。
+    本番 Run 13 で「公共交通機関のみ」モードが NoFeasibleTransitError を誘発、
+    UX 上もタクシー前提で toggle 自体に意味がないため。
 
     - anchor: 必須 place_id を箇条書きし、必ず slot に割当てる旨明示
     - theme: 日本語テーマ label と bias 指示を 1 行で
-    - transport_mode='public_transit_only': 車利用不可を明示（all_modes は出力なし）
     payload が壊れてる場合は安全側で section 単位で省略。
+
+    なお現状 anchor / theme は GeneratePlanRequest 側で discriminated union (start_mode で
+    排他) になっているため両方が同時に出力されることはないが、`_build_mode_context_md` は
+    将来の拡張に備えて連結スタイルを維持する。
     """
     sections: list[str] = []
     sections.append(_build_anchor_section(query_context))
     sections.append(_build_theme_section(query_context))
-    sections.append(_build_transport_mode_section(query_context))
     return "\n\n".join(s for s in sections if s)
 
 
@@ -258,23 +263,6 @@ def _build_theme_section(query_context) -> str:
     return (
         f"テーマ: {label}。slot 構成と place 選定をこのテーマ寄りに bias せよ。"
         "ただし参加者の wishes / tags が衝突する場合は参加者希望を優先する。"
-    )
-
-
-def _build_transport_mode_section(query_context) -> str:
-    """Phase 2 polish (Codex Major 2): start_mode と独立に転入される transport 指示。
-
-    'public_transit_only' のとき LLM に「車を仮定するな、徒歩 / 電車 / バスのみで行ける
-    構成を組め」と明示。'all_modes' は section 不要。
-    """
-    transport = getattr(query_context, "transport_mode", "all_modes")
-    if transport != "public_transit_only":
-        return ""
-    return (
-        "移動手段: **公共交通機関のみ**（参加者は車を運転しない）。"
-        "transit_matrix 上で `mode='train'` / `mode='bus'` / `mode='walk'` の edge "
-        "が成立する place ペアのみを連続 slot に置け。"
-        "車前提の長距離 place は到達不能なので避けよ。"
     )
 
 

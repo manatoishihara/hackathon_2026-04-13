@@ -106,6 +106,12 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
         "tags",
         "order_index",
     },
+    # Phase 2 polish (2026-04-27, A 案撤回): `transport_mode` は **deprecated**。
+    # TS 側は段階的 deprecation のため field を完全削除しているが、Python 側は
+    # 旧 client (開きっぱなしタブ等) からの送信を 400 で reject しないよう
+    # default=None の deprecated field として残置している（次回 cleanup release で削除予定）。
+    # **意図的な片側残置なので EXPECTED_FIELDS にも残す**（drift 検出を維持しつつ、
+    # 削除 PR では transport_mode を 3 箇所同時に消す手順）。
     "GeneratePlanRequest": {
         "title",
         "region",

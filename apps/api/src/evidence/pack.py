@@ -49,15 +49,20 @@ class QueryContextParticipant(_PackBase):
 
 
 class QueryContext(_PackBase):
+    # Phase 2 polish (2026-04-27, A 案撤回 review 2 Major 1 反映): 旧版で
+    # `evidence_pack_sessions` に保存済みの pack に `transport_mode` field が
+    # 含まれており、新版で `_PackBase` の `extra="forbid"` で復元失敗 → 404 になるため、
+    # **本クラスのみ `extra="ignore"`** で旧 field を黙って読み捨てる。
+    # 旧 pack の TTL 15 分を過ぎたら他 field のドリフト検出も含めて元の forbid に戻す
+    # cleanup commit を別途出す予定（次回 release）。
+    model_config = ConfigDict(extra="ignore")
+
     region: str
     start_date: date
     end_date: date
     departure_point: str
     start_mode: StartMode
     mode_payload: dict[str, Any] | None = None
-    # Phase 2 polish (2026-04-27): 移動手段指定を Pack 経由で LLM プロンプトに届ける。
-    # default 'all_modes' で後方互換（既存 Pack fixtures が transport_mode 未指定でも壊れない）。
-    transport_mode: Literal["all_modes", "public_transit_only"] = "all_modes"
     participants: list[QueryContextParticipant]
 
 

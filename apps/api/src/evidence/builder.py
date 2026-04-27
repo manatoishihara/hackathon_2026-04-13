@@ -166,6 +166,8 @@ def _extract_anchor_ids(request: GeneratePlanRequest) -> list[str]:
 
 
 def _build_query_context(request: GeneratePlanRequest) -> QueryContext:
+    # Phase 2 polish (2026-04-27, A 案撤回): request.transport_mode は deprecated。
+    # 旧 client 互換のため受信は許容するが、QueryContext / EvidencePack 内部には伝播させない。
     return QueryContext(
         region=request.region,
         start_date=request.start_date,
@@ -173,7 +175,6 @@ def _build_query_context(request: GeneratePlanRequest) -> QueryContext:
         departure_point=request.departure_point,
         start_mode=request.start_mode,
         mode_payload=request.mode_payload,
-        transport_mode=request.transport_mode,
         participants=[
             QueryContextParticipant(
                 name=p.display_name,
