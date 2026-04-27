@@ -249,6 +249,15 @@ export function getEvidenceBadgeInfo(
   confidence: CostConfidence,
   sources: readonly string[],
 ): EvidenceBadgeInfo {
+  // Phase 2 polish v6 fix (2026-04-28): cost_confidence は **コスト推定の確度** であり、
+  // **place の検証状態** とは別軸。Google Places で検証済みの place でも price_level
+  // 未設定なら cost_confidence=unknown になり旧実装は「不明」badge を出していた。
+  // sources が非空 = 何らかの検証済データあり、と判定して以下優先度で表示:
+  //   1. cost_confidence=verified (確実なコスト) → verified badge with source
+  //   2. cost_confidence=estimated (推定コスト) → estimated badge
+  //   3. cost_confidence=unknown だが sources あり → verified badge (place は検証済み、
+  //      コストだけ不明と分かる UX、demo の 「Google Places verified」表示)
+  //   4. cost_confidence=unknown かつ sources 空 → 不明 badge
   if (confidence === "verified") {
     return {
       variant: "verified",
@@ -261,6 +270,14 @@ export function getEvidenceBadgeInfo(
       variant: "estimated",
       label: "推定",
       colorToken: "--color-evidence-estimated",
+    };
+  }
+  // confidence === "unknown" だが place が検証済 (sources あり) なら verified 寄り表示
+  if (sources.length > 0) {
+    return {
+      variant: "verified",
+      label: sources[0],
+      colorToken: "--color-evidence-verified",
     };
   }
   return {

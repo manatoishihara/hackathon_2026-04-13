@@ -121,6 +121,28 @@ export async function getPlan(planId: string): Promise<Plan> {
   return data as Plan;
 }
 
+/**
+ * Phase 2 polish v6 fix (2026-04-28、本番 4 日 plan 生成成功で発覚):
+ * DB の plan_items テーブルは flat columns (place_id / place_name / lat / lng / address)
+ * だが、TS の `PlanItem` 型は `location: Location` でネストされている。
+ * Supabase からの raw row を `location` ネスト構造に変換する transformer。
+ *
+ * これがないとフロント (MapView 等) が `item.location.lat` で undefined を読み、
+ * マップにマーカーが 1 件も表示されない (本番 v5+v6 deploy 後に user 報告で発覚)。
+ */
+function _transformPlanItemRow(row: Record<string, unknown>): PlanItem {
+  return {
+    ...row,
+    location: {
+      place_id: (row.place_id as string | null) ?? null,
+      place_name: (row.place_name as string | null) ?? null,
+      lat: (row.lat as number | null) ?? null,
+      lng: (row.lng as number | null) ?? null,
+      address: (row.address as string | null) ?? null,
+    },
+  } as PlanItem;
+}
+
 export async function getPlanItems(planId: string): Promise<PlanItem[]> {
   if (USE_MOCKS) {
     return mockPlanItems.map((item) => ({ ...item, plan_id: planId }));
@@ -132,7 +154,7 @@ export async function getPlanItems(planId: string): Promise<PlanItem[]> {
     .eq("plan_id", planId)
     .order("order_index");
   if (error) throw new ApiError(error.message, 500, error);
-  return data as PlanItem[];
+  return (data as Record<string, unknown>[]).map(_transformPlanItemRow);
 }
 
 export async function getParticipants(planId: string): Promise<Participant[]> {
