@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from ..evidence.pack import EvidencePack
@@ -336,11 +337,16 @@ def generate_plan(
                 )
                 return parsed
 
+            # Phase 2 polish v3 T4-2: issue kind 集計を info log に追加。本番 Live tail で
+            # 「どの kind が支配的か」を瞬時に把握、Run 13c のような unknown_transit_edge
+            # vs unknown_place_id の比率切り分けを log 一行で可能にする。
+            kind_summary = Counter(i.kind.value for i in issues).most_common(5)
             logger.info(
-                "LLM attempt %d (model=%s) produced %d validation issues, retrying",
+                "LLM attempt %d (model=%s) produced %d validation issues, retrying. kind_summary=%s",
                 attempts,
                 model,
                 len(issues),
+                kind_summary,
             )
             all_previous_issues.extend(issues)
             previous_issues = _dedup_previous_issues(all_previous_issues)

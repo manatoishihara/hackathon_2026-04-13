@@ -1200,3 +1200,148 @@ def test_assemble_plan_triple_duplicate_resolved_to_unique_invariant():
     assert len(final_place_ids) == 3
     assert len(set(final_place_ids)) == 3  # 全 unique（最終 invariant）
     assert final_place_ids[0] == "P1"  # 1 つ目は LLM pick がそのまま通る
+
+
+# ==============================
+# Phase 2 polish v3 T7: tier3 item_type filter
+# ==============================
+
+
+def test_is_item_type_compatible_meal_accepts_validator_helpers():
+    """validator の `_categories_indicate_meal` と挙動一致を確認 (Codex review 2 Major)。"""
+    from src.llm.assembly import _is_item_type_compatible
+
+    # validator allowlist + `*_restaurant` 接尾辞
+    assert _is_item_type_compatible("meal", ["restaurant"]) is True
+    assert _is_item_type_compatible("meal", ["bakery"]) is True
+    assert _is_item_type_compatible("meal", ["bar"]) is True
+    assert _is_item_type_compatible("meal", ["meal_takeaway"]) is True
+    assert _is_item_type_compatible("meal", ["yakiniku_restaurant"]) is True
+    # museum / zoo は meal slot に不適合 (validator で reject される類)
+    assert _is_item_type_compatible("meal", ["museum"]) is False
+    assert _is_item_type_compatible("meal", ["zoo"]) is False
+
+
+def test_is_item_type_compatible_lodging_accepts_validator_helpers():
+    from src.llm.assembly import _is_item_type_compatible
+
+    assert _is_item_type_compatible("lodging", ["lodging"]) is True
+    assert _is_item_type_compatible("lodging", ["hotel"]) is True
+    assert _is_item_type_compatible("lodging", ["ryokan"]) is True
+    assert _is_item_type_compatible("lodging", ["hostel"]) is True
+    assert _is_item_type_compatible("lodging", ["guest_house"]) is True
+    assert _is_item_type_compatible("lodging", ["restaurant"]) is False
+    assert _is_item_type_compatible("lodging", ["museum"]) is False
+
+
+def test_is_item_type_compatible_activity_unconstrained():
+    """activity slot は category 制約なし (validator も activity はチェックしない)。"""
+    from src.llm.assembly import _is_item_type_compatible
+
+    assert _is_item_type_compatible("activity", ["museum"]) is True
+    assert _is_item_type_compatible("activity", ["zoo"]) is True
+    assert _is_item_type_compatible("activity", ["restaurant"]) is True
+
+
+def test_is_item_type_compatible_empty_category_returns_true():
+    """Codex review 4 Major: validator 本体は空 category を skip するので一致。"""
+    from src.llm.assembly import _is_item_type_compatible
+
+    assert _is_item_type_compatible("meal", []) is True
+    assert _is_item_type_compatible("lodging", []) is True
+    assert _is_item_type_compatible("activity", []) is True
+
+
+def test_find_eligible_alternate_tier3_skips_item_type_mismatch():
+    """meal slot で tier1/tier2 不在時に tier3 が museum を弾く (T7)。"""
+    from src.llm.assembly import _find_eligible_alternate_for_slot
+
+    # target: meal slot 想定 (target_place の category は meal)
+    target = _place("TARGET", category=["restaurant"])
+    # candidates: tier1/tier2 不在を仕掛けるため category 重複なし
+    bakery = _place("BAKERY", category=["bakery"])  # validator では meal allowed
+    museum = _place("MUSEUM", category=["museum"])  # tier3 で弾かれる
+    # transit edge は全 candidates に置いて reachable にする (prev_place_id=None でも OK)
+    pack = _make_pack(places=[target, bakery, museum], edges=[], total_days=1)
+
+    slot_meta = {
+        "slot_id": "day1_lunch",
+        "start_hhmm": "12:00",
+        "end_hhmm": "14:00",
+        "item_type": "meal",
+    }
+    result = _find_eligible_alternate_for_slot(
+        pack=pack,
+        target_place=target,
+        slot_meta=slot_meta,
+        slot_date=date(2026, 6, 1),
+        prev_place_id=None,
+        exclude_place_ids=set(),
+    )
+    # bakery が選ばれる (museum は item_type filter で弾かれる)
+    assert result is not None
+    assert result.place_id == "BAKERY"
+
+
+def test_find_eligible_alternate_tier3_lodging_blocks_restaurant():
+    """lodging slot で tier3 が restaurant を弾き、ryokan を選ぶ。"""
+    from src.llm.assembly import _find_eligible_alternate_for_slot
+
+    target = _place("TARGET", category=["lodging"])  # 異 category にして tier1/2 を不発に
+    ryokan = _place("RYOKAN", category=["ryokan"])
+    restaurant = _place("RESTAURANT", category=["restaurant"])
+    pack = _make_pack(places=[target, ryokan, restaurant], edges=[], total_days=1)
+
+    slot_meta = {
+        "slot_id": "day1_lodging",
+        "start_hhmm": "20:00",
+        "end_hhmm": "23:00",
+        "item_type": "lodging",
+    }
+    result = _find_eligible_alternate_for_slot(
+        pack=pack,
+        target_place=target,
+        slot_meta=slot_meta,
+        slot_date=date(2026, 6, 1),
+        prev_place_id=None,
+        exclude_place_ids=set(),
+    )
+    # ryokan のみ通る (restaurant は item_type filter で弾かれる)
+    # ただし target も "lodging" category なので tier1/tier2 で ryokan が hit する経路もある
+    # → どちらにせよ restaurant は選ばれない
+    assert result is not None
+    assert result.place_id == "RYOKAN"
+
+
+def test_find_eligible_alternate_tier3_emits_warning_when_filtered_out(caplog):
+    """Codex review 5 Minor 1: meal slot に museum しか無い場合は tier3 filter で None +
+    tier3 専用 warning log を出す (`_find_eligible_alternate_for_slot tier3 filtered out`)。
+    """
+    import logging
+
+    from src.llm.assembly import _find_eligible_alternate_for_slot
+
+    target = _place("TARGET", category=["restaurant"])
+    only_museum = _place("MUSEUM", category=["museum"])
+    pack = _make_pack(places=[target, only_museum], edges=[], total_days=1)
+
+    slot_meta = {
+        "slot_id": "day1_lunch",
+        "start_hhmm": "12:00",
+        "end_hhmm": "14:00",
+        "item_type": "meal",
+    }
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = _find_eligible_alternate_for_slot(
+            pack=pack,
+            target_place=target,
+            slot_meta=slot_meta,
+            slot_date=date(2026, 6, 1),
+            prev_place_id=None,
+            exclude_place_ids=set(),
+        )
+    assert result is None
+    # tier3 で museum が弾かれた結果 None を返す経路 = 「tier3 filtered out」log
+    assert any(
+        "tier3 filtered out" in rec.getMessage() for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
