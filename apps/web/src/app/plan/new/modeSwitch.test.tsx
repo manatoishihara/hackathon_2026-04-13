@@ -28,6 +28,7 @@ vi.mock("@/lib/api", () => ({
   postPlanGenerate: vi.fn(),
   createPlanAndParticipants: vi.fn(),
   updatePlanStatus: vi.fn(),
+  checkApiHealth: vi.fn(async () => true),
 }));
 
 describe("/plan/new mode 切替統合", () => {

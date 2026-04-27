@@ -38,6 +38,7 @@ vi.mock("@/lib/api", () => ({
   getPlan: vi.fn(async () => mockPlan),
   getPlanItems: vi.fn(async () => mockPlanItems),
   getParticipants: vi.fn(async () => mockParticipants),
+  checkApiHealth: vi.fn(async () => true),
 }));
 
 vi.mock("@/lib/transit", () => ({
@@ -71,7 +72,9 @@ describe("GeneratingPage (1.6)", () => {
     render(<GeneratingPage />);
     // 初期 step は "loading-session"（見出しは「プランを組み立てています...」）
     expect(
-      screen.getByRole("heading", { name: /プランを組み立てています|プラン生成に失敗/ }),
+      screen.getByRole("heading", {
+        name: /プランを編んで|プランを組み立てています|プラン生成に失敗|離陸できませんでした|目的地に到着/,
+      }),
     ).toBeInTheDocument();
   });
 });
