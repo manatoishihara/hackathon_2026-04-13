@@ -7,17 +7,34 @@
 
 ## 🏁 進捗サマリ（2026-04-27 更新）
 
-**Phase 2 polish: 3 課題（重複防止 / 楽天 lodging / 移動手段指定）の実装完了**: 🟡 **2026-04-27 セッション中盤〜末で実装 + Codex review 3 サイクル完了 → user 手動 commit + push 待ち**（`feat/plan-quality-improvements` ブランチ予定、3 commits 構成）。**Codex review 全 3 回**: review 1 (計画段階、Blocker 2 / Major 3 / Minor 2 / OK 2 全反映) → 実装 → review 2 (実装後、**Critical 0 / Major 1 / Minor 3**) → 反映 → review 3 (**Blocker 0 / OK to commit**)。
+**Phase 2 polish v2 (2026-04-27): A 案 = transport_mode toggle 撤回 + 段階的 deprecation 完了**: 🟢 **実装 + Codex review 2 + Major 1 fix 完了 → user 手動 commit + push 待ち** (`fix/remove-transport-mode-toggle` ブランチ、develop から派生)。Run 13 失敗を受けて user 判断: タクシー利用可前提で「公共交通機関のみ」モードに本質的意味なし、user 指定で plan 失敗は UX 最悪 → toggle 撤回。3 並列 sub-agent で実装、~5 分で完了。
+- **設計** (Codex review 1+2 全反映): `parseDirectionsResult` の WALKING > 30 min hard drop 撤廃 + `callDirectionsWithFallback` から DRIVING 除外 logic 削除、常に距離分岐 fallback chain (≤ 2km: TRANSIT → WALKING → DRIVING / > 2km: TRANSIT → DRIVING → WALKING) で全 mode 利用可能
+- **Agent 1 (Backend) 完了**: Pydantic `transport_mode: TransportMode | None = Field(default=None, deprecated=True)` で受信のみ許容 (旧 client 互換)、QueryContext / pack / prompt から配線削除、test 5 件削除 + backward compat test 3 件追加
+- **Agent 2 (Frontend) 完了**: shared-types / transit.ts/.test.ts / planForm / store / page 2 箇所 / api.test.ts から transport_mode 完全削除 + WALKING 30 min hard drop 撤廃 + `TransportModeSelector.tsx`/`.test.tsx` ファイル削除、test 13 件削除 + documenting test 1 件追加
+- **Agent 3 (docs) 完了**: data-model.md の TransportMode 型節を撤回注記に置換、TS ↔ Pydantic 意図的非対称を明記
+- **Codex review 2 Major 1 fix**: 旧版で `evidence_pack_sessions` に保存済 pack の `query_context.transport_mode` を新版で復元時 `extra="forbid"` で 404 エラー → `QueryContext` のみ `model_config = ConfigDict(extra="ignore")` 追加で旧 pack を黙って読み捨て、regression test 1 件追加
+- **検証結果**: API **403 PASS** (既知 env 依存 2 件 fail = test_supabase、無関係) / Web **159 PASS** (0 fail) / tsc clean / build PASS / secret preflight 0 hit / Codex review 2 **Blocker 0 → OK to commit**
+- **次のアクション (user)**: commit 提案を実施 → develop merge → push → Vercel + Render auto deploy → 本番 Run 13b verify (草津 4 日 + 漫画堂/湯畑 アンカー、移動手段 selector が UI から消えた状態で `/api/plans/generate → 200` 期待)
+- 詳細学び: lessons.md「2026-04-27: Run 13 失敗を受けて A 案 (transport_mode toggle 撤回) を 3 並列 sub-agent + Codex review 2 サイクルで実装完了」エントリ参照
+
+**Phase 2 polish v1 (撤回中): 3 課題（重複防止 / 楽天 lodging / 移動手段指定）実装 + 本番 Run 13 で `public_transit_only` × 地方温泉地の課題発覚**: 🔴 **実装 + push + deploy 全完了、ただし本番 Run 13 (草津 4 日 / アンカー 2 件 / 公共交通機関のみ) で `/api/plans/generate → 422 "plan generation failed after retries"`**。**Codex review 全 3 回**: review 1 (計画段階、Blocker 2 / Major 3 / Minor 2 / OK 2 全反映) → 実装 → review 2 (実装後、**Critical 0 / Major 1 / Minor 3**) → 反映 → review 3 (**Blocker 0 / OK to commit**)。 **C (移動手段) は v2 で撤回中、A 重複防止 / B 楽天 env は維持**。
+- **本番 Run 13 失敗**: フォーム / Autocomplete / TransportModeSelector / アンカー chip / 全フロント機能 ✅、`/api/evidence/places` ✅、`/plan/<UUID>/generating` 遷移 ✅、`fetchTransitMatrix` ✅、ただし `/api/plans/generate` が 4 attempts 全 422
+  - **想定原因 (詳細は lessons.md 「2026-04-27: 本番 Run 13 で `public_transit_only` × 草津 4 日…」エントリ)**:
+    - **草津エリアは JR 駅から離れたバスのみのアクセス**で `public_transit_only` モードでは TRANSIT が ZERO_RESULTS、WALKING も 30 分超 drop で transit_matrix がスカスカ → `NoFeasibleTransitError` 連発
+  - **次のアクション (推奨順)**:
+    1. 同フォーム値で `transport_mode = 車も使う` に切替えた **Run 13b** で切り分け → all_modes で通れば transit カバレッジ問題確定
+    2. Render Live tail で attempt 別 `[INFO] LLM attempt N` ログを取得、`NoFeasibleTransitError` 支配か `unknown_place_id` 再発か切り分け
+    3. 確定後 Phase 3 polish 候補:
+       - (a) 公共交通モード時 WALKING 上限を 30 → 60/90 分に緩める
+       - (b) DRIVING 完全除外せず「タクシー扱い」で残す
+       - (c) 行き先エリアによって UI で「公共交通機関のみは都市部推奨」hint を出す
+       - (d) `TransitMode.BUS` 単独 retry path 追加
 - (A) DAY 跨ぎ place 重複: `apps/api/src/llm/assembly.py` に `used_place_ids` 追跡 + `_find_eligible_alternate_for_slot` / `_find_alternate_place` の両方に `exclude_place_ids` 引数追加 + 最終 `_drop_duplicate_place_items` (Codex review 2 Major 1 で発覚した「単純 drop が dangling transit を作る」を 2 pass で transit 整合保持に修正)。`prompts/v2.0.0/system.md` 第 8 項「同 place_id 重複禁止」独立追加。test 8 件追加 (3 重複 swap + 5 invariant / dangling)
 - (B) 宿情報欠落: コード変更ゼロ。`render.yaml` に `RAKUTEN_APPLICATION_ID` / `RAKUTEN_AFFILIATE_ID` を `sync: false` で追加、`docs/setup-guide.md` に env 取得 + Render Dashboard 投入手順を追記。**user 手動作業**: webservice.rakuten.co.jp で App ID 発行 → Render env 投入 → auto redeploy
 - (C) 移動手段指定: 3 点同期 (`docs/data-model.md` → `packages/shared-types` → `apps/api/src/schemas` + parity test) で `TransportMode = "all_modes" | "public_transit_only"` 追加。`Plan.transport_mode` は **DB / RPC スコープ外で除外** (Codex Blocker 2 で軌道修正)。フロー: `/plan/new` の `TransportModeSelector` → `generationSessionStore.transport_mode` (Codex Blocker 1) → `/plan/[id]/generating` で `fetchTransitMatrix({ transportMode })` → `callDirectionsWithFallback` が `public_transit_only` で DRIVING を chain から除外、`parseDirectionsResult` が WALKING で 30 分超を null drop (Codex Major 3)。prompt `_build_mode_context_md` を anchor / theme / transport の独立合成方式 (`"\n\n".join(filter(None,[...]))`) に refactor (Codex Major 2、anchor + transport 併用で transport 落ち回避)。test +13 件追加 (TransportModeSelector 4 / planForm 4 / transit 5)
 - **検証結果**: API 404 PASS (既知 env 依存 2 件 fail = test_supabase、無関係) / Web 175 PASS / tsc clean / build PASS / secret preflight 0 hit
-- **commit 提案** (user 手動、ブランチ `feat/plan-quality-improvements` を develop から派生):
-  1. `fix(phase-2-polish): slot 跨ぎ place_id 重複防止 + 最終 invariant 防御` — assembly.py / system.md / test_llm_assembly.py
-  2. `feat(phase-2-polish): 移動手段指定 (transport_mode = all_modes / public_transit_only)` — shared-types / Pydantic / prompt / transit / TransportModeSelector / page / store / data-model.md
-  3. `docs(phase-2-polish): 楽天トラベル env を render.yaml + setup-guide に追記` — render.yaml / setup-guide.md
-- **次のアクション (user)**: 上 3 commit 実施 → develop merge → push → Render Dashboard で楽天 env 投入 → auto redeploy → 本番 Run 13 verify (default モード + public_transit_only モードの 2 シナリオ)
-- 詳細学び: lessons.md「2026-04-27: Phase 2 polish の実装完了 — Codex review 2 で発覚した『defense-in-depth の要素削除が隣接参照の整合性を壊す』設計バグ」エントリ参照
+- 全 commits は `cba2274 / 1bfe503 / 98fb8b8 / a113c55 (merge)` で develop merge 済 + push 済
+- 詳細学び: lessons.md「2026-04-27: 本番 Run 13 で `public_transit_only` × 草津 4 日 × アンカー 2 件 で 422 連発」+「2026-04-27: Phase 2 polish の実装完了 — Codex review 2 で発覚した『defense-in-depth の要素削除が隣接参照の整合性を壊す』設計バグ」
 
 **Phase 1.10 後段 fix: EvidenceModal / MapView の location undefined セーフガード (`fix/evidence-modal-undefined-location`)**: ✅ **2026-04-27 セッションで実装 + push + 本番 Run 12 で動作確認完了**（develop merge + push 済、commit 72b2c93 / 96e228b）。本番 Run 11 で `/api/plans/generate → 200` 達成 + `/plan/[id]` 遷移成功を確認したあと、**プラン閲覧画面で React render error** (`Cannot read properties of undefined (reading 'place_id')`) が発覚。Phase 2.5 evidence modal の design 仕事で safety check が漏れた regression。`apps/web/src/components/EvidenceModal.tsx:42` の `item.location.place_id` access を optional chaining (`item.location?.place_id ?? null`) に修正、`apps/web/src/components/MapView.tsx:29` も `i.location != null && ...` で undefined 除外。`EvidenceModal.test.tsx` に「location 削除でも crash しない」1 件追加。test 148/148 PASS（既知 6 件 pre-existing は本変更無関係）。push → Vercel auto deploy → プラン閲覧画面で正常 render すれば demo 完全完成。詳細は lessons.md「2026-04-27: 本番 Run 11 で **422 全塞ぎ fix の効果実証** + プラン閲覧画面の独立 React error 発覚」エントリ。
 
