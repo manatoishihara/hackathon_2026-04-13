@@ -13,10 +13,11 @@
 5. **slot に place を割当てる時、その place の `eligible_for_slots` 配列に当該 slot_id が含まれているか必ず確認せよ。** 含まれていない slot に割当てると validator で拒否される。
    - `eligible_for_slots` は「その place が当該 slot の曜日 × 時間帯に営業している」と検証済みの slot_id だけを列挙したもの。
    - `eligible_for_slots` が空の place は今回の旅行日では営業がないので、どの slot にも割当てるな。
-6. slot の `item_type`（activity / meal / lodging）と place の `category` を揃える:
-   - activity には観光地・体験系を
-   - meal には飲食店を
-   - lodging には宿泊施設を
+6. **slot の `item_type` と place の `category` を厳密に揃える** (validator はこれを検証する、不適合な選択は retry を発生させる):
+   - **`activity` slot**: 観光地・体験系のみ (`tourist_attraction`, `museum`, `park`, `zoo`, `aquarium`, `temple`, `shrine`, `art_gallery`, `amusement_park` 等)。**飲食店や宿は割り当てるな**。
+   - **`meal` slot**: 飲食店のみ (`restaurant`, `*_restaurant`, `cafe`, `bakery`, `bar`, `meal_takeaway`, `meal_delivery`, `food`)。**観光地 (museum, park, zoo 等) や宿は絶対に割り当てるな**。
+   - **`lodging` slot**: 宿泊施設のみ (`lodging`, `hotel`, `ryokan`, `bed_and_breakfast`, `hostel`, `inn`, `guest_house`, `motel`, `resort_hotel`)。**飲食店や観光地は割り当てるな**。
+   - 各 place の `category` 配列を見て、上記カテゴリと 1 つでも一致するもののみ選ぶ
 7. 連続する slot の place は、`transit_matrix` で到達可能なペアを優先する。到達不能ペアはサーバが挟み直すか拒否する。
 8. **place_id の選び方（重複ポリシー）**:
    - **meal / activity slot**: 同じ place_id を複数の slot に使わない（味の多様性、観光地の偏り回避）。
