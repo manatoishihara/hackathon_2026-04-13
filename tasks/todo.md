@@ -5,7 +5,23 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-28 更新）
+## 🏁 進捗サマリ（2026-04-28 更新、本番 Run 13e で v4 も 422 再発、構造的詰み判明）
+
+**Phase 2 polish v4 (2026-04-28): 実装 + push 完了、ただし本番 Run 13e で 422 再発、追加 fix が必要**: 🔴 **`fix/pack-expansion-fuzzy-match` ブランチで A (pack 拡張) + C (fuzzy match) を 2 commits 実装 → develop merge + push 済 (commit `cb39aa5 / 4b96a37`) → 本番 deploy 完了**。**Codex review 1+2 サイクル Blocker 0 認定**。しかし **本番 Run 13e (草津 4 日 / お任せ / 80,000 円) で `/api/plans/generate → 422` 再発**。
+- **Run 13e 4 attempts breakdown**:
+  - attempt 1: `outside_opening_hours` (草津店舗が 2026-11-22 日曜定休、新パターン)
+  - attempt 2: `unknown_place_id` `ChIHhY2RO4...` (`ChIJ` → `ChIH` typo、**Codex review 1 Minor 1 の `ChIJ` prefix guard で fuzzy 救済対象外**)
+  - attempt 3: `unknown_place_id` `ChIhY2RO4...` (`ChIJ` → `ChIh` typo、同じく guard で除外)
+  - attempt 4: `unknown_transit_edge` (重複防止 swap 連発で候補枯渇、`total_places=17 / used=9`)
+- **致命的発見 1**: Codex Minor 1 で追加した `ChIJ` prefix guard が **逆効果**。`ChIH` / `ChIh` の J typo が最頻パターンなのに guard で除外。false positive 抑制 (理論) vs 実本番 typo パターン (実害) の乖離
+- **致命的発見 2**: pack cap=22 でも search 結果が薄く pack=17 停止。草津エリアは Google Places retrievable 候補絶対量不足
+- **致命的発見 3**: 4 日 lodging slot=3 + 草津 lodging 薄候補で重複完全禁止前提が原理的に不可能
+- **v5 fix 候補 (user 判断待ち)**:
+  - **MVP-pragmatic** (~10 分): fuzzy guard `ChIJ` → 削除 + lodging 連泊許容 (quota 3→2)
+  - **構造的根治** (~30 分): day-scoped duplicate prevention (同日内 unique、日跨ぎ許容)
+  - **諦め路線**: Run 13d/13e の知見を残し、demo は 1〜2 日プランか箱根/京都/東京で動作確認に切替
+- 詳細: lessons.md「2026-04-28: Phase 2 polish v4 実装 + 本番 Run 13e で別パターンの 422 再発」エントリ
+- **モグラ叩き感**: v3 (transit) → v4 (pack + fuzzy) → 422 再発、Phase 2 polish の対症療法が限界。demo 提出後に重複防止設計そのものを見直す必要
 
 **フロント UX: API ヘルスチェックバナーの UX 改善**: ✅ **2026-04-27 完了（commit 提案待ち）**。ページ読み込み直後に「サーバーに接続できません」と表示されていた問題を修正。
 - `apiAvailable === null`（確認中）のとき: スピナー + 「サーバーの状態を確認中...」バナー表示、submit ボタンは disabled のまま「プランを生成」
