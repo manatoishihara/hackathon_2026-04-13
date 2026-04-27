@@ -410,8 +410,13 @@ def test_assemble_plan_swaps_ineligible_to_any_eligible_when_no_same_category():
     assert activity.place_id == "P_other_cat"
 
 
-def test_assemble_plan_raises_when_no_eligible_alternate_at_all():
-    """pack 全ての place が当該 slot に不適合なら IneligiblePlaceForSlotError で raise。"""
+def test_assemble_plan_accepts_when_no_eligible_alternate_at_all(caplog):
+    """Phase 2 polish v5: pack 全 place が当該 slot に不適合 + 代替なしのとき、
+    旧設計は raise IneligiblePlaceForSlotError。新設計は warn + accept で plan を組み上げ、
+    validator が後段で OUTSIDE_OPENING_HOURS を catch して retry に流す。
+    """
+    import logging
+
     p_tue_only_a = _place("P1", opening=[(1, "09:00", "20:00")])  # 火曜のみ
     p_tue_only_b = _place("P2", opening=[(1, "09:00", "20:00")])
     pack = _make_pack(places=[p_tue_only_a, p_tue_only_b], edges=[])
@@ -424,24 +429,30 @@ def test_assemble_plan_raises_when_no_eligible_alternate_at_all():
             )
         ]
     )
-    with pytest.raises(IneligiblePlaceForSlotError):
-        assemble_plan(plan_v2, pack)
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    # 元 P1 をそのまま採用、validator catch 委譲
+    final_pids = [it.place_id for it in result.items if it.place_id is not None]
+    assert "P1" in final_pids
+    # warn log で「ineligible accepting (validator will catch and retry)」が出る
+    assert any(
+        "ineligible" in rec.getMessage() and "accepting" in rec.getMessage()
+        for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
 
 
-def test_assemble_plan_raises_when_post_shift_start_outside_opening():
-    """Codex Critical fix: transit shift で start_dt が place の opening close を
-    超えた場合、assembler が `IneligiblePlaceForSlotError` を raise して retry に
-    委譲する（旧仕様は assembler が黙って通し、validator で OUTSIDE_OPENING_HOURS
-    を catch していた）。
+def test_assemble_plan_accepts_post_shift_start_outside_opening(caplog):
+    """Phase 2 polish v5: transit shift で start_dt が place の opening close を超える
+    ケース、旧設計は raise IneligiblePlaceForSlotError、新設計は warn + accept で plan
+    を組み上げ、validator が後段で OUTSIDE_OPENING_HOURS を catch して retry に流す。
     """
+    import logging
+
     # day1_morning は月曜 09:00-11:30
-    # P_prev: 月曜 09:00-22:00、prev_end_dt = 11:30
     p_prev = _place("P_prev", opening=[(0, "09:00", "22:00")], category=["restaurant"])
-    # P_target: 月曜 11:00-12:30 のみ。lunch slot 12:00-13:30 と重なるが close=12:30 でタイト
+    # P_target: 月曜 11:00-12:30 のみ。post-shift で close 超え
     p_target = _place("P_target", opening=[(0, "11:00", "12:30")], category=["restaurant"])
-    # 代替: 月曜 11:00-22:00 で post-shift も OK
     p_alt = _place("P_alt", opening=[(0, "11:00", "22:00")], category=["restaurant"])
-    # 90 分の長距離 transit で start_dt=12:00 → 13:00 にシフト → P_target close=12:30 を過ぎる
     edges = [
         TransitEdge(
             from_place_id="P_prev",
@@ -469,9 +480,15 @@ def test_assemble_plan_raises_when_post_shift_start_outside_opening():
             LlmSlotAssignment(slot_id="day1_lunch", place_id="P_target", rationale="post-shift breaks opening"),
         ]
     )
-    # post-shift で P_target は opening close 超え → raise
-    with pytest.raises(IneligiblePlaceForSlotError):
-        assemble_plan(plan_v2, pack)
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    # plan は組み上がる、warn log で post-shift accept を確認
+    final_pids = [it.place_id for it in result.items if it.place_id is not None]
+    assert "P_prev" in final_pids
+    assert any(
+        "post-shift" in rec.getMessage() and "accepting" in rec.getMessage()
+        for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
 
 
 def test_assemble_plan_rejects_ambiguous_case_insensitive_match():
@@ -495,10 +512,14 @@ def test_assemble_plan_rejects_ambiguous_case_insensitive_match():
         assemble_plan(plan_v2, pack)
 
 
-def test_assemble_plan_missing_transit_edge_raises_when_no_alternate():
+def test_assemble_plan_missing_transit_edge_skips_transit_item(caplog):
+    """Phase 2 polish v5: transit edge 不在 + 代替候補なしのとき、旧設計は raise
+    NoFeasibleTransitError。新設計は transit item を skip + place_id をそのまま採用。
+    """
+    import logging
+
     p_a = _place("P_A")
     p_b = _place("P_B")
-    # edges 空 = 2 slot 連続使用で transit が取れず、代替候補も存在しない
     pack = _make_pack(places=[p_a, p_b], edges=[])
     plan_v2 = LlmGeneratedPlanV2(
         slots=[
@@ -506,8 +527,17 @@ def test_assemble_plan_missing_transit_edge_raises_when_no_alternate():
             LlmSlotAssignment(slot_id="day1_lunch", place_id="P_B", rationale="needs transit 40 yen"),
         ]
     )
-    with pytest.raises(NoFeasibleTransitError):
-        assemble_plan(plan_v2, pack)
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    final_pids = [it.place_id for it in result.items if it.place_id is not None]
+    assert final_pids == ["P_A", "P_B"]
+    # transit item は skip されているので含まれない
+    transit_count = sum(1 for it in result.items if it.item_type == "transit")
+    assert transit_count == 0
+    assert any(
+        "skipping transit item" in rec.getMessage()
+        for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
 
 
 # ==============================
@@ -577,8 +607,14 @@ def test_assemble_plan_alternate_selection_prefers_higher_rating():
     assert meal.place_id == "P_high"
 
 
-def test_assemble_plan_alternate_selection_respects_category_match():
-    """target と共通 category を 1 つも持たない候補は選ばれない。"""
+def test_assemble_plan_alternate_selection_respects_category_match(caplog):
+    """target と共通 category を 1 つも持たない候補は alternate に選ばれない。
+
+    Phase 2 polish v5: 旧設計は raise NoFeasibleTransitError。
+    新設計は alternate 不在のとき transit item skip + place_id をそのまま採用。
+    """
+    import logging
+
     p_a = _place("P_A", category=["tourist_attraction"])
     p_target = _place("P_target", category=["restaurant"])
     p_wrong_category = _place("P_cafe", category=["cafe"])  # restaurant との共通なし
@@ -592,12 +628,22 @@ def test_assemble_plan_alternate_selection_respects_category_match():
             LlmSlotAssignment(
                 slot_id="day1_lunch",
                 place_id="P_target",
-                rationale="category が合わない候補しかないので raise 想定",
+                rationale="category が合わない候補しかないので skip 想定",
             ),
         ]
     )
-    with pytest.raises(NoFeasibleTransitError):
-        assemble_plan(plan_v2, pack)
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    # P_target そのまま採用、transit item は skip
+    final_pids = [it.place_id for it in result.items if it.place_id is not None]
+    assert final_pids == ["P_A", "P_target"]
+    transit_count = sum(1 for it in result.items if it.item_type == "transit")
+    assert transit_count == 0
+    # category 不一致で alternate なし → transit skip log
+    assert any(
+        "skipping transit item" in rec.getMessage()
+        for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
 
 
 def test_assemble_plan_alternate_selection_loose_category_intersection():
@@ -663,18 +709,20 @@ def test_assemble_plan_transit_departure_time_picks_from_candidate_departures():
     assert transit.transit_ref.departure_time == "12:00"
 
 
-def test_assemble_plan_transit_departure_raises_when_all_candidates_before_start():
-    """Codex Major fix: 全 candidate_departures が start_dt より前なら
-    `NoFeasibleTransitError` を raise（過去出発時刻を返す max() fallback は
-    意味的に誤った plan になるため廃止、retry 経路に委譲）。
+def test_assemble_plan_transit_departure_skips_when_all_candidates_before_start(caplog):
+    """Phase 2 polish v5: 全 candidate_departures が start_dt より前のとき、
+    旧設計は raise NoFeasibleTransitError。新設計は transit item を skip + place を採用。
+    過去時刻 transit を出さない原則は維持しつつ、retry に委ねず graceful に続行。
     """
+    import logging
+
     p_a = _place("P_A", category=["point_of_interest"])
     p_b = _place("P_B", category=["point_of_interest"])
     edge_ab = TransitEdge(
         from_place_id="P_A",
         to_place_id="P_B",
         mode="train",
-        route_summary="fallback raise テスト",
+        route_summary="fallback skip テスト",
         duration_min=20,
         fare_jpy=500,
         candidate_departures=["06:00", "07:00"],  # 全て morning 終了前
@@ -686,8 +734,16 @@ def test_assemble_plan_transit_departure_raises_when_all_candidates_before_start
             LlmSlotAssignment(slot_id="day1_lunch", place_id="P_B", rationale="departure fallback"),
         ]
     )
-    with pytest.raises(NoFeasibleTransitError):
-        assemble_plan(plan_v2, pack)
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    final_pids = [it.place_id for it in result.items if it.place_id is not None]
+    assert final_pids == ["P_A", "P_B"]
+    transit_count = sum(1 for it in result.items if it.item_type == "transit")
+    assert transit_count == 0
+    assert any(
+        "departure infeasible" in rec.getMessage()
+        for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
 
 
 def test_assemble_plan_alternate_selection_avoids_self_loop():
@@ -1400,16 +1456,28 @@ def test_resolve_fuzzy_place_id_rejects_large_length_diff():
     assert _resolve_fuzzy_place_id(llm_id, places_by_id) is None
 
 
-def test_resolve_fuzzy_place_id_requires_chij_prefix():
-    """Codex review 1 Minor 1: ChIJ prefix を持たない LLM 出力は救済しない (false positive 抑制)。"""
+def test_resolve_fuzzy_place_id_catches_j_to_h_typo():
+    """Phase 2 polish v5 (Codex review 1 Minor 1 reverse): 旧 `ChIJ` prefix guard
+    を削除したことで、本番 Run 13e で観測された `ChIJ` → `ChIH` typo を救済できる。
+    """
     from src.llm.assembly import _resolve_fuzzy_place_id
 
-    # pack 側は正しい ChIJ prefix
-    pack_id = "ChIJOriginalAttractionXYZ123"
+    pack_id = "ChIJhY2RO4XnHWAReFs51v9XU3A"  # 27 chars
     places_by_id = {pack_id: object()}
-    # LLM が ChIJ prefix を失った出力 → 救済しない
-    llm_id = "XYZJOriginalAttractionXYZ123"
-    assert _resolve_fuzzy_place_id(llm_id, places_by_id) is None
+    # LLM が J を H に typo
+    llm_id = "ChIHhY2RO4XnHWAReFs51v9XU3A"
+    assert _resolve_fuzzy_place_id(llm_id, places_by_id) == pack_id
+
+
+def test_resolve_fuzzy_place_id_catches_j_to_lowercase_typo():
+    """Run 13e attempt 3 で観測された `ChIJ` → `ChIh` (J を h に lowercase) も救済。"""
+    from src.llm.assembly import _resolve_fuzzy_place_id
+
+    pack_id = "ChIJhY2RO4XnHWAReFs51v9XU3A"  # 27 chars
+    places_by_id = {pack_id: object()}
+    # LLM が J を h に lowercase + 残りはそのまま (28 → 27 文字)
+    llm_id = "ChIhY2RO4XnHWAReFs51v9XU3A"
+    assert _resolve_fuzzy_place_id(llm_id, places_by_id) == pack_id
 
 
 def test_assemble_plan_resolves_fuzzy_match_in_assembly(caplog):
@@ -1445,3 +1513,254 @@ def test_assemble_plan_resolves_fuzzy_match_in_assembly(caplog):
     assert any(
         "fuzzy-matched place_id" in rec.getMessage() for rec in caplog.records
     ), [rec.getMessage() for rec in caplog.records]
+
+
+# ==============================
+# Phase 2 polish v5: lodging 連泊許容 / meal/activity soft duplicate / 連続同 place skip
+# ==============================
+
+
+def test_assemble_plan_allows_lodging_repeat_for_consecutive_nights(caplog):
+    """Phase 2 polish v5 (Codex review 1 Major 1 反映): lodging slot は同 place_id の
+    連泊を許容する。total_days=3 で day1_lodging + day2_lodging に同じ宿を割当てて、
+    swap log が出ない + 両方が plan に採用されることを確認する。
+    """
+    import logging
+
+    p_attr1 = _place("P_attr1", category=["tourist_attraction"])
+    p_attr2 = _place("P_attr2", category=["tourist_attraction"])
+    p_attr3 = _place("P_attr3", category=["tourist_attraction"])
+    p_meal1 = _place("P_meal1", category=["restaurant"])
+    p_meal2 = _place("P_meal2", category=["restaurant"])
+    p_meal3 = _place("P_meal3", category=["restaurant"])
+    p_meal4 = _place("P_meal4", category=["restaurant"])
+    p_meal5 = _place("P_meal5", category=["restaurant"])
+    p_meal6 = _place("P_meal6", category=["restaurant"])
+    p_lodging = _place(
+        "P_lodging",
+        category=["lodging"],
+        opening=[(dow, "00:00", "23:59") for dow in range(7)],
+    )
+    pids = [p.place_id for p in [p_attr1, p_attr2, p_attr3, p_meal1, p_meal2, p_meal3, p_meal4, p_meal5, p_meal6, p_lodging]]
+    edges = [_edge(i, j) for i in pids for j in pids if i != j]
+    pack = _make_pack(
+        places=[p_attr1, p_attr2, p_attr3, p_meal1, p_meal2, p_meal3, p_meal4, p_meal5, p_meal6, p_lodging],
+        edges=edges,
+        total_days=3,
+    )
+    # day1_lodging と day2_lodging に同じ P_lodging を割当 (連泊)。day3 は最終日で lodging skip。
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_attr1", rationale="day1 朝の観光地巡り"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_meal1", rationale="day1 ランチ食事処"),
+            LlmSlotAssignment(slot_id="day1_afternoon", place_id="P_attr2", rationale="day1 午後観光地散策"),
+            LlmSlotAssignment(slot_id="day1_dinner", place_id="P_meal2", rationale="day1 ディナー和食"),
+            LlmSlotAssignment(slot_id="day1_lodging", place_id="P_lodging", rationale="day1 旅館連泊予定"),
+            LlmSlotAssignment(slot_id="day2_morning", place_id="P_attr3", rationale="day2 朝の観光地巡り"),
+            LlmSlotAssignment(slot_id="day2_lunch", place_id="P_meal3", rationale="day2 ランチ別店"),
+            LlmSlotAssignment(slot_id="day2_afternoon", place_id="P_attr1", rationale="day2 午後観光地散策"),  # 重複 OK 想定
+            LlmSlotAssignment(slot_id="day2_dinner", place_id="P_meal4", rationale="day2 ディナー和食"),
+            LlmSlotAssignment(slot_id="day2_lodging", place_id="P_lodging", rationale="day2 同宿連泊継続"),
+            LlmSlotAssignment(slot_id="day3_morning", place_id="P_attr2", rationale="day3 朝の観光地巡り"),
+            LlmSlotAssignment(slot_id="day3_lunch", place_id="P_meal5", rationale="day3 帰路ランチ"),
+            LlmSlotAssignment(slot_id="day3_afternoon", place_id="P_attr3", rationale="day3 午後観光地散策"),
+            LlmSlotAssignment(slot_id="day3_dinner", place_id="P_meal6", rationale="day3 ディナー和食"),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    place_items = [it for it in result.items if it.place_id is not None]
+    # day1_lodging / day2_lodging の両方に P_lodging が連泊で採用される
+    lodging_slot_items = [it for it in place_items if it.item_type == "lodging"]
+    assert len(lodging_slot_items) == 2, (
+        f"3 日 plan の lodging slot は day1+day2 で 2 件 (got {len(lodging_slot_items)})"
+    )
+    assert all(it.place_id == "P_lodging" for it in lodging_slot_items), (
+        f"両 lodging slot に P_lodging が連泊採用されるべき (got {[it.place_id for it in lodging_slot_items]})"
+    )
+    # P_lodging が「重複検出の subject」として log に登場しない (used_place_ids exclusion 動作確認)
+    # ※ "swapped to 'P_lodging'" のような subject 以外の出現は除外する
+    lodging_subject_dup_logs = [
+        rec.getMessage() for rec in caplog.records
+        if "Duplicate place_id 'P_lodging'" in rec.getMessage()
+    ]
+    assert lodging_subject_dup_logs == [], (
+        f"lodging slot で重複検出が起きてはいけない (used_place_ids exclusion): {lodging_subject_dup_logs}"
+    )
+
+
+def test_assemble_plan_meal_duplicate_falls_back_to_accept_when_no_alternate(caplog):
+    """Phase 2 polish v5: meal slot で重複検出 + alternate なしのとき、warn + accept で
+    plan を組み上げる (旧設計は item drop で continue)。
+    """
+    import logging
+
+    p_attr = _place("P_attr", category=["tourist_attraction"])
+    # meal restaurant 候補が 1 件しかない、もう 1 件 meal slot に重複させる
+    p_meal = _place("P_meal", category=["restaurant"])
+    edges = [_edge("P_attr", "P_meal"), _edge("P_meal", "P_attr"), _edge("P_meal", "P_meal")]
+    pack = _make_pack(places=[p_attr, p_meal], edges=edges, total_days=1)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_attr", rationale="day1 起点観光地巡り"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_meal", rationale="day1 lunch 1 つ目"),
+            LlmSlotAssignment(slot_id="day1_dinner", place_id="P_meal", rationale="day1 dinner 重複"),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    place_items = [it for it in result.items if it.place_id is not None]
+    # P_meal は重複したまま 2 度採用される (旧 v1 の drop なし、v5 の accept fallback)
+    p_meal_count = sum(1 for it in place_items if it.place_id == "P_meal")
+    assert p_meal_count == 2
+    assert any(
+        "accepting duplicate" in rec.getMessage()
+        for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
+
+
+def test_assemble_plan_skips_transit_for_consecutive_same_place(caplog):
+    """Phase 2 polish v5 (Codex review 2 Major 3): 連続 slot で同 place_id のとき
+    self-loop transit edge は禁止のため transit item を生成 skip。lodging 連泊 + 翌朝
+    同宿で朝食的な使い方を想定。
+    """
+    import logging
+
+    p_lodge = _place(
+        "P_lodge",
+        category=["lodging"],
+        opening=[(dow, "00:00", "23:59") for dow in range(7)],
+    )
+    pack = _make_pack(places=[p_lodge], edges=[], total_days=2)
+    # day1_lodging → day2_morning で同じ宿 (連泊して朝食)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_lodging", place_id="P_lodge", rationale="day1 lodging 連泊予定"),
+            LlmSlotAssignment(slot_id="day2_morning", place_id="P_lodge", rationale="day2 朝食同宿で連泊"),
+        ]
+    )
+    with caplog.at_level(logging.INFO, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    transit_count = sum(1 for it in result.items if it.item_type == "transit")
+    assert transit_count == 0  # 連続同 place で transit skip
+    assert any(
+        "Same place as previous slot" in rec.getMessage()
+        for rec in caplog.records
+    ), [rec.getMessage() for rec in caplog.records]
+
+
+def test_assemble_plan_lodging_repeat_does_not_trigger_swap(caplog):
+    """Phase 2 polish v5 (Codex review 1 Minor 1 反映): lodging slot は重複検出から
+    除外されるので、3 日 plan で連泊させたとき lodging に対する swap log が一切出ない。
+    `used_place_ids` に lodging を加えない設計の検証。
+    """
+    import logging
+
+    p_attr = _place("P_attr", category=["tourist_attraction"])
+    p_attr2 = _place("P_attr2", category=["tourist_attraction"])
+    p_meal1 = _place("P_meal1", category=["restaurant"])
+    p_meal2 = _place("P_meal2", category=["restaurant"])
+    p_meal3 = _place("P_meal3", category=["restaurant"])
+    p_lodge = _place(
+        "P_lodge",
+        category=["lodging"],
+        opening=[(dow, "00:00", "23:59") for dow in range(7)],
+    )
+    pids = ["P_attr", "P_attr2", "P_meal1", "P_meal2", "P_meal3", "P_lodge"]
+    edges = [_edge(i, j) for i in pids for j in pids if i != j]
+    pack = _make_pack(
+        places=[p_attr, p_attr2, p_meal1, p_meal2, p_meal3, p_lodge],
+        edges=edges,
+        total_days=3,
+    )
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_attr", rationale="day1 朝の観光地巡り"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_meal1", rationale="day1 ランチ食事処"),
+            LlmSlotAssignment(slot_id="day1_lodging", place_id="P_lodge", rationale="day1 lodging 連泊予定"),
+            LlmSlotAssignment(slot_id="day2_morning", place_id="P_attr2", rationale="day2 朝の観光別所"),
+            LlmSlotAssignment(slot_id="day2_lunch", place_id="P_meal2", rationale="day2 ランチ別店訪"),
+            LlmSlotAssignment(slot_id="day2_lodging", place_id="P_lodge", rationale="day2 同宿連泊継続"),
+            LlmSlotAssignment(slot_id="day3_morning", place_id="P_attr", rationale="day3 朝の観光再訪"),
+            LlmSlotAssignment(slot_id="day3_lunch", place_id="P_meal3", rationale="day3 帰路ランチ"),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    place_items = [it for it in result.items if it.place_id is not None]
+    # P_lodge は day1 + day2 lodging で重複採用 (連泊)
+    lodge_count = sum(1 for it in place_items if it.place_id == "P_lodge")
+    assert lodge_count == 2
+    # P_lodge を subject とする「Duplicate place_id 'P_lodge' in slot ...」が出ない
+    # (lodging exclusion で重複検出 path に入らない)
+    lodge_subject_dup_logs = [
+        rec.getMessage() for rec in caplog.records
+        if "Duplicate place_id 'P_lodge'" in rec.getMessage()
+    ]
+    assert lodge_subject_dup_logs == [], (
+        f"lodging slot で重複検出が起きてはいけない: {lodge_subject_dup_logs}"
+    )
+
+
+def test_assemble_plan_transit_skip_path_preserves_monotonic_start_time():
+    """Phase 2 polish v5 (Codex review 1 Minor 2): transit skip path (edge なし → skip)
+    で時刻補正 `max(start_dt, prev_end_dt)` が効いて、後 slot の start_time が前 slot の
+    end_time より遅いことを assert する。`OVERLAPPING_ITEMS` 防止の invariant。
+    """
+    p_a = _place(
+        "P_A",
+        category=["point_of_interest"],
+        opening=[(dow, "00:00", "23:59") for dow in range(7)],
+    )
+    p_b = _place(
+        "P_B",
+        category=["point_of_interest"],
+        opening=[(dow, "00:00", "23:59") for dow in range(7)],
+    )
+    # edge 不在 → transit item skip path に入る
+    pack = _make_pack(places=[p_a, p_b], edges=[], total_days=1)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_A", rationale="day1 朝の観光地巡り"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_B", rationale="day1 ランチ食事処"),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    place_items = [it for it in result.items if it.place_id is not None]
+    assert len(place_items) == 2
+    # 後 slot の start_time が前 slot の end_time 以降
+    from datetime import datetime as _dt
+    prev_end = _dt.fromisoformat(place_items[0].end_time)
+    next_start = _dt.fromisoformat(place_items[1].start_time)
+    assert next_start >= prev_end, (
+        f"transit skip path で後 slot start_time={next_start} は前 slot end_time={prev_end} 以降であるべき"
+    )
+
+
+def test_assemble_plan_consecutive_same_place_preserves_monotonic_start_time():
+    """Phase 2 polish v5 (Codex review 2 Minor 1): 連続同 place skip path で時刻補正
+    `max(start_dt, prev_end_dt)` が効いて、後 slot の start_time が前 slot の end_time
+    より遅いことを assert する。lodging 連泊 + 翌朝同宿シナリオの invariant。
+    """
+    p_lodge = _place(
+        "P_lodge",
+        category=["lodging"],
+        opening=[(dow, "00:00", "23:59") for dow in range(7)],
+    )
+    pack = _make_pack(places=[p_lodge], edges=[], total_days=2)
+    # day1_lodging → day2_morning で同 place (連続同 place path)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_lodging", place_id="P_lodge", rationale="day1 lodging 連泊予定"),
+            LlmSlotAssignment(slot_id="day2_morning", place_id="P_lodge", rationale="day2 朝食同宿で連泊"),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    place_items = [it for it in result.items if it.place_id is not None]
+    assert len(place_items) == 2
+    from datetime import datetime as _dt
+    prev_end = _dt.fromisoformat(place_items[0].end_time)
+    next_start = _dt.fromisoformat(place_items[1].start_time)
+    assert next_start >= prev_end, (
+        f"連続同 place skip path で後 slot start_time={next_start} は前 slot end_time={prev_end} 以降であるべき"
+    )
