@@ -122,26 +122,29 @@ def generate_slot_catalog(total_days: int) -> list[dict]:
 
 _PRICE_MAP: dict[str, dict[int | None, tuple[int, str]]] = {
     # item_type: { price_level or None: (jpy, confidence) }
+    # 2026-04-28 (Task A2): None キーの confidence を "unknown" → "estimated" に修正。
+    # 値はあるが heuristic、というのが正しい semantics。card↔modal の表記不整合
+    # (badge ✓ なのに modal で「価格帯 不明」) を解消する。
     "meal": {
         1: (1500, "estimated"),
         2: (2500, "estimated"),
         3: (4500, "estimated"),
         4: (8000, "estimated"),
-        None: (2500, "unknown"),
+        None: (2500, "estimated"),
     },
     "activity": {
         1: (1000, "estimated"),
         2: (2000, "estimated"),
         3: (3500, "estimated"),
         4: (6000, "estimated"),
-        None: (1500, "unknown"),
+        None: (1500, "estimated"),
     },
     "lodging": {
         1: (8000, "estimated"),
         2: (14000, "estimated"),
         3: (22000, "estimated"),
         4: (35000, "estimated"),
-        None: (15000, "unknown"),
+        None: (15000, "estimated"),
     },
 }
 
@@ -156,15 +159,19 @@ def _resolve_cost_with_rakuten_override(
     place: PlacePoint,
     pack: EvidencePack,
 ) -> tuple[int, str]:
-    """cost 決定 logic に楽天 lodging の verified 経路を追加 (Phase 3 polish 案 D 第 6 段、2026-04-28)。
+    """3 段優先順位で cost を解決する (Phase 3 polish 案 D 第 9 段 / Task A2、2026-04-28)。
 
-    楽天 lodging (place_id が `rakuten_` prefix) は API で実価格を取得済なので、
-    `_PRICE_MAP` の estimated 値で上書きせず、`pack.lodging_options` から
-    `price_jpy_per_night` を直接引いて cost_confidence="verified" にする。
-
-    対象外 (Google Places の lodging / meal / activity / 楽天マッチしない place_id):
-        従来通り `_resolve_cost` で `_PRICE_MAP[item_type][price_level]` 経由。
+    priority 0 (lodging のみ): 楽天 lodging (place_id が `rakuten_` prefix) は
+        VacantHotelSearch で取得済の実価格を `pack.lodging_options.price_jpy_per_night`
+        から引いて confidence="verified"。
+    priority 1: place.price_range_jpy が取れている (Google Places の priceRange) →
+        midpoint を採用、confidence="verified"。多くの飲食店で取れる実価格範囲。
+    priority 2: place.price_level が取れている (1〜4 enum) →
+        `_PRICE_MAP[item_type][level]` の jpy、confidence="estimated"。
+    priority 3: 両方 None → `_PRICE_MAP[item_type][None]` の heuristic 値、
+        confidence="estimated" (旧 "unknown" から修正、値はあるが heuristic と認める)。
     """
+    # priority 0: 楽天 lodging (Phase 3 polish 案 D 第 6 段、2026-04-28)
     if (
         item_type == "lodging"
         and place.place_id.startswith("rakuten_")
@@ -173,6 +180,14 @@ def _resolve_cost_with_rakuten_override(
         for lo in pack.lodging_options:
             if lo.place_id == place.place_id:
                 return (lo.price_jpy_per_night, "verified")
+
+    # priority 1: Google Places priceRange (Task A2、2026-04-28)
+    if place.price_range_jpy is not None:
+        start, end = place.price_range_jpy
+        midpoint = (start + end) // 2
+        return (midpoint, "verified")
+
+    # priority 2 & 3: _PRICE_MAP fallback (どちらも estimated)
     return _resolve_cost(item_type, place.price_level)
 
 

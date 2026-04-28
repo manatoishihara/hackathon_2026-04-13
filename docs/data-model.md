@@ -264,6 +264,8 @@ export type Evidence = {
   opening_hours?: string;
   rating?: number;
   price_level?: number; // 1-4
+  price_range_jpy?: { start: number; end: number }; // Phase 3 polish 第 9 段、Google Places priceRange の JPY 換算
+  external_url?: string; // Phase 3 polish 第 9 段、楽天トラベル等の外部詳細ページ URL
   verified_at?: string; // ISO datetime
   sources: string[]; // ["Google Places", "楽天トラベル"]
 };

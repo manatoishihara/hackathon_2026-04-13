@@ -272,6 +272,67 @@ describe("EvidenceModal", () => {
     });
   });
 
+  describe("lodging 表記の自然化 (Task B2)", () => {
+    it("lodging item で opening_hours 不在のとき '終日' 表記を表示する", () => {
+      const item = makeItem({
+        item_type: "lodging",
+        evidence: { sources: ["楽天トラベル"] },
+      });
+      render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+      const hoursLabel = screen.getByText("営業時間");
+      const text = hoursLabel.parentElement?.textContent ?? "";
+      // 「— 不明」ではなく「終日」を含む
+      expect(text).not.toContain("— 不明");
+      expect(text).toContain("終日");
+    });
+
+    it("lodging item で評価が不在のとき '評価情報なし' 表記を表示する", () => {
+      const item = makeItem({
+        item_type: "lodging",
+        evidence: { sources: ["楽天トラベル"] },
+      });
+      render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+      const ratingLabel = screen.getByText("評価");
+      const text = ratingLabel.parentElement?.textContent ?? "";
+      expect(text).toContain("評価情報なし");
+    });
+
+    it("lodging 以外で opening_hours 不在は '— 不明' 維持", () => {
+      const item = makeItem({
+        item_type: "activity",
+        evidence: { sources: ["Google Places"] },
+      });
+      render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+      const hoursLabel = screen.getByText("営業時間");
+      const text = hoursLabel.parentElement?.textContent ?? "";
+      expect(text).toContain("— 不明");
+    });
+  });
+
+  describe("楽天トラベルリンク (external_url)", () => {
+    it("evidence.external_url があるとき楽天トラベルリンクを表示する", () => {
+      const item = makeItem({
+        evidence: {
+          sources: ["楽天トラベル"],
+          external_url: "https://hb.afl.rakuten.co.jp/test",
+        },
+      });
+      render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+      const link = screen.getByLabelText(/楽天トラベルで詳細を開く/);
+      expect(link).toHaveAttribute("href", "https://hb.afl.rakuten.co.jp/test");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    });
+
+    it("evidence.external_url が無いとき楽天リンクは表示されない", () => {
+      const item = makeItem({
+        evidence: { sources: ["Google Places"] },
+      });
+      render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+      expect(screen.queryByLabelText(/楽天トラベルで詳細を開く/)).toBeNull();
+    });
+  });
+
   describe("a11y", () => {
     it("dialog 要素が title と aria-labelledby で関連付けされている", () => {
       render(

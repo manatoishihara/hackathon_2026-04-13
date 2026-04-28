@@ -102,6 +102,16 @@ class PlacePoint(_PackBase):
     user_ratings_total: int | None
     relevance_tags: list[str] = Field(default_factory=list)
     """参加者の希望とのマッチ度ラベル。Phase 1.3 で埋める（現状は常に空）。"""
+    price_range_jpy: tuple[int, int] | None = None
+    """Places API (New) priceRange を JPY tuple (start, end) に変換したもの。
+    currencyCode が JPY のときだけ採用、それ以外は None。多くの飲食店で取れる
+    実価格範囲 (例: ¥1,000〜¥2,000)。`assembly._resolve_cost` で priority 1 として
+    cost_confidence='verified' に流す。"""
+    external_url: str | None = None
+    """外部詳細ページ URL (例: 楽天トラベルの宿予約ページ)。lodging で楽天が
+    返したらここに入る。Google Places の場合は None (Maps URL は別経路で組み立てる)。
+    Phase 3 polish 第 9 段 (2026-04-28) で追加、Evidence Modal の「楽天トラベルで見る」
+    リンクに使う。"""
 
 
 class TransitEdge(_PackBase):

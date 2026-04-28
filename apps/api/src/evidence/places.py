@@ -26,6 +26,7 @@ _FIELD_MASK = ",".join(
         "places.location",
         "places.regularOpeningHours.weekdayDescriptions",
         "places.priceLevel",
+        "places.priceRange",
         "places.rating",
         "places.userRatingCount",
         "places.types",
@@ -42,6 +43,7 @@ _DETAILS_FIELD_MASK = ",".join(
         "location",
         "regularOpeningHours.weekdayDescriptions",
         "priceLevel",
+        "priceRange",
         "rating",
         "userRatingCount",
         "types",
@@ -154,12 +156,39 @@ def fetch_place_details(
     return _to_place_point(res.json())
 
 
+def _parse_price_range_jpy(price_range: dict[str, Any] | None) -> tuple[int, int] | None:
+    """Places API (New) priceRange を (start_jpy, end_jpy) に変換する。
+
+    priceRange の構造:
+        { "startPrice": { "currencyCode": "JPY", "units": "1000", "nanos": 0 },
+          "endPrice":   { "currencyCode": "JPY", "units": "2000", "nanos": 0 } }
+
+    JPY 以外の通貨や、start/end どちらか欠落、不正値 (start > end など) は None。
+    nanos は JPY では常に 0 想定なので無視 (units だけ採用)。
+    """
+    if not isinstance(price_range, dict):
+        return None
+    start = price_range.get("startPrice") or {}
+    end = price_range.get("endPrice") or {}
+    if start.get("currencyCode") != "JPY" or end.get("currencyCode") != "JPY":
+        return None
+    try:
+        start_units = int(start.get("units", 0))
+        end_units = int(end.get("units", 0))
+    except (TypeError, ValueError):
+        return None
+    if start_units < 0 or end_units < 0 or start_units > end_units:
+        return None
+    return (start_units, end_units)
+
+
 def _to_place_point(raw: dict[str, Any]) -> PlacePoint:
     """Google の生レスポンスを PlacePoint に正規化する。"""
     location = raw.get("location") or {}
     display_name = raw.get("displayName") or {}
     opening = raw.get("regularOpeningHours") or {}
     price_level_str = raw.get("priceLevel")
+    price_range_jpy = _parse_price_range_jpy(raw.get("priceRange"))
 
     weekday_descriptions = list(opening.get("weekdayDescriptions", []))
     parsed_hours = parse_weekday_descriptions(weekday_descriptions)
@@ -177,4 +206,5 @@ def _to_place_point(raw: dict[str, Any]) -> PlacePoint:
         rating=raw.get("rating"),
         user_ratings_total=raw.get("userRatingCount"),
         relevance_tags=[],
+        price_range_jpy=price_range_jpy,
     )

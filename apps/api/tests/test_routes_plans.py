@@ -1129,3 +1129,351 @@ def test_serialize_plan_item_evidence_empty_for_transit():
     assert serialized["evidence"]["sources"] == []
     assert "opening_hours" not in serialized["evidence"]
     assert "rating" not in serialized["evidence"]
+
+
+def test_serialize_plan_item_includes_external_url_for_rakuten_lodging():
+    """Phase 3 polish 第 9 段 (Task B1): 楽天 lodging の external_url が
+    evidence dict に含まれる。フロント EvidenceModal で「楽天トラベルで見る」
+    リンクを描画する根拠。
+    """
+    from src.routes.plan_routes import _serialize_plan_item
+    from src.llm.schema import LlmPlanItem
+
+    place = PlacePoint(
+        place_id="rakuten_19684",
+        name="箱根温泉旅館",
+        category=["lodging", "ryokan"],
+        lat=35.20,
+        lng=139.10,
+        address="神奈川県箱根町",
+        opening_hours=[],
+        opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
+        price_level=2,
+        rating=4.4,
+        user_ratings_total=None,
+        relevance_tags=[],
+        external_url="https://hb.afl.rakuten.co.jp/test",
+    )
+    pack = EvidencePack(
+        query_context=QueryContext(
+            region="箱根",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 2),
+            departure_point="東京",
+            start_mode="auto",
+            mode_payload=None,
+            participants=[],
+        ),
+        places=[place],
+        transit_matrix=[],
+        lodging_options=None,
+        budget_constraints=BudgetConstraints(
+            total_jpy_per_person=30000,
+            breakdown_percent=BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10),
+            breakdown_jpy=BudgetBreakdownJPY(lodging=12000, meal=9000, activity=6000, transit=3000),
+        ),
+        temporal_constraints=TemporalConstraints(
+            start_datetime="2026-06-01T15:00:00+09:00",
+            end_datetime="2026-06-02T10:00:00+09:00",
+            total_days=2,
+            check_in_earliest="15:00",
+            check_out_latest="10:00",
+        ),
+    )
+    item = LlmPlanItem(
+        order_index=0,
+        item_type="lodging",
+        title="箱根温泉旅館で宿泊",
+        description="温泉でゆっくり寛ぐ。",
+        start_time="2026-06-01T20:00:00+09:00",
+        end_time="2026-06-01T22:00:00+09:00",
+        place_id="rakuten_19684",
+        cost_jpy=12000,
+        cost_confidence="verified",
+        transit_ref=None,
+    )
+    serialized = _serialize_plan_item(item, pack)
+    assert serialized["evidence"]["external_url"] == "https://hb.afl.rakuten.co.jp/test"
+
+
+def test_serialize_plan_item_omits_external_url_when_absent():
+    """external_url が PlacePoint に無いとき evidence dict にも含まれない
+    (Optional フィールドとして key 自体省略)。
+    """
+    from src.routes.plan_routes import _serialize_plan_item
+    from src.llm.schema import LlmPlanItem
+
+    place = PlacePoint(
+        place_id="ChIJtest",
+        name="観光地",
+        category=["tourist_attraction"],
+        lat=35.20,
+        lng=139.10,
+        address="神奈川県箱根町",
+        opening_hours=[],
+        opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
+        price_level=None,
+        rating=None,
+        user_ratings_total=None,
+        relevance_tags=[],
+    )
+    pack = EvidencePack(
+        query_context=QueryContext(
+            region="箱根",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 1),
+            departure_point="東京",
+            start_mode="auto",
+            mode_payload=None,
+            participants=[],
+        ),
+        places=[place],
+        transit_matrix=[],
+        lodging_options=None,
+        budget_constraints=BudgetConstraints(
+            total_jpy_per_person=30000,
+            breakdown_percent=BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10),
+            breakdown_jpy=BudgetBreakdownJPY(lodging=12000, meal=9000, activity=6000, transit=3000),
+        ),
+        temporal_constraints=TemporalConstraints(
+            start_datetime="2026-06-01T09:00:00+09:00",
+            end_datetime="2026-06-01T22:00:00+09:00",
+            total_days=1,
+            check_in_earliest="15:00",
+            check_out_latest="10:00",
+        ),
+    )
+    item = LlmPlanItem(
+        order_index=0,
+        item_type="activity",
+        title="観光",
+        description="観光地を巡る。",
+        start_time="2026-06-01T10:00:00+09:00",
+        end_time="2026-06-01T11:00:00+09:00",
+        place_id="ChIJtest",
+        cost_jpy=0,
+        cost_confidence="estimated",
+        transit_ref=None,
+    )
+    serialized = _serialize_plan_item(item, pack)
+    assert "external_url" not in serialized["evidence"]
+
+
+def test_serialize_plan_item_includes_price_range_jpy_when_available():
+    """Phase 3 polish 第 9 段 (Task B1): Google Places priceRange ありの place で
+    evidence.price_range_jpy が dict 形式 ({"start": int, "end": int}) で含まれる。
+    """
+    from src.routes.plan_routes import _serialize_plan_item
+    from src.llm.schema import LlmPlanItem
+
+    place = PlacePoint(
+        place_id="ChIJtest",
+        name="テスト食堂",
+        category=["restaurant"],
+        lat=35.0,
+        lng=139.0,
+        address="東京都...",
+        opening_hours=[],
+        opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
+        price_level=2,
+        rating=None,
+        user_ratings_total=None,
+        relevance_tags=[],
+        price_range_jpy=(1000, 2000),
+    )
+    pack = EvidencePack(
+        query_context=QueryContext(
+            region="東京",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 1),
+            departure_point="東京",
+            start_mode="auto",
+            mode_payload=None,
+            participants=[],
+        ),
+        places=[place],
+        transit_matrix=[],
+        lodging_options=None,
+        budget_constraints=BudgetConstraints(
+            total_jpy_per_person=30000,
+            breakdown_percent=BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10),
+            breakdown_jpy=BudgetBreakdownJPY(lodging=12000, meal=9000, activity=6000, transit=3000),
+        ),
+        temporal_constraints=TemporalConstraints(
+            start_datetime="2026-06-01T09:00:00+09:00",
+            end_datetime="2026-06-01T22:00:00+09:00",
+            total_days=1,
+            check_in_earliest="15:00",
+            check_out_latest="10:00",
+        ),
+    )
+    item = LlmPlanItem(
+        order_index=0,
+        item_type="meal",
+        title="ランチ",
+        description="ランチを食べる。",
+        start_time="2026-06-01T12:00:00+09:00",
+        end_time="2026-06-01T13:00:00+09:00",
+        place_id="ChIJtest",
+        cost_jpy=1500,
+        cost_confidence="verified",
+        transit_ref=None,
+    )
+    serialized = _serialize_plan_item(item, pack)
+    assert serialized["evidence"]["price_range_jpy"] == {"start": 1000, "end": 2000}
+
+
+def test_serialize_plan_item_omits_price_range_jpy_when_absent():
+    """price_range_jpy が PlacePoint に None のとき evidence dict にも含まれない。"""
+    from src.routes.plan_routes import _serialize_plan_item
+    from src.llm.schema import LlmPlanItem
+
+    place = PlacePoint(
+        place_id="ChIJtest",
+        name="施設",
+        category=["tourist_attraction"],
+        lat=35.0,
+        lng=139.0,
+        address="...",
+        opening_hours=[],
+        opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
+        price_level=None,
+        rating=None,
+        user_ratings_total=None,
+        relevance_tags=[],
+    )
+    pack = EvidencePack(
+        query_context=QueryContext(
+            region="東京",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 1),
+            departure_point="東京",
+            start_mode="auto",
+            mode_payload=None,
+            participants=[],
+        ),
+        places=[place],
+        transit_matrix=[],
+        lodging_options=None,
+        budget_constraints=BudgetConstraints(
+            total_jpy_per_person=30000,
+            breakdown_percent=BudgetBreakdown(lodging=40, meal=30, activity=20, transit=10),
+            breakdown_jpy=BudgetBreakdownJPY(lodging=12000, meal=9000, activity=6000, transit=3000),
+        ),
+        temporal_constraints=TemporalConstraints(
+            start_datetime="2026-06-01T09:00:00+09:00",
+            end_datetime="2026-06-01T22:00:00+09:00",
+            total_days=1,
+            check_in_earliest="15:00",
+            check_out_latest="10:00",
+        ),
+    )
+    item = LlmPlanItem(
+        order_index=0,
+        item_type="activity",
+        title="観光",
+        description="観光する。",
+        start_time="2026-06-01T10:00:00+09:00",
+        end_time="2026-06-01T11:00:00+09:00",
+        place_id="ChIJtest",
+        cost_jpy=0,
+        cost_confidence="estimated",
+        transit_ref=None,
+    )
+    serialized = _serialize_plan_item(item, pack)
+    assert "price_range_jpy" not in serialized["evidence"]
+
+
+class TestSynthesizeRakutenTransit:
+    """楽天 lodging 直前の non-transit item に transit_to_next を haversine で合成する。
+
+    Phase 3 polish 案 D 第 9 段 (2026-04-28): フロント `transit.ts` で楽天 place_id を
+    Maps DirectionsService 対象から除外している副作用 (第 5 段) で、LLM が楽天 lodging
+    への transit edge を emit できず PlanTimeline で「車で移動・X分」帯が抜ける問題を
+    fallback 補完する Task C1 の test。
+    """
+
+    def test_synthesizes_transit_to_next_for_rakuten_lodging(self):
+        """楽天 lodging の前に transit item が無い場合、直前 non-transit item の
+        transit_to_next を合成する。"""
+        from src.routes.plan_routes import _synthesize_missing_transit_for_rakuten_lodging
+
+        items = [
+            # dinner (non-transit)
+            {
+                "order_index": 0,
+                "item_type": "meal",
+                "title": "dinner",
+                "lat": 35.230, "lng": 139.090,
+                "end_time": "2026-06-01T19:30:00+09:00",
+                "transit_to_next": None,
+            },
+            # 楽天 lodging (transit item 無しで直接続く)
+            {
+                "order_index": 1,
+                "item_type": "lodging",
+                "title": "lodging",
+                "place_id": "rakuten_19684",
+                "lat": 35.226, "lng": 139.092,
+                "start_time": "2026-06-01T20:00:00+09:00",
+                "transit_to_next": None,
+            },
+        ]
+        result = _synthesize_missing_transit_for_rakuten_lodging(items)
+
+        # dinner.transit_to_next が合成された
+        assert result[0]["transit_to_next"] is not None
+        synth = result[0]["transit_to_next"]
+        assert synth["mode"] == "car"
+        assert synth["route"] == "車で移動 (推定)"
+        assert synth["duration_min"] >= 1  # 距離 ~0.5km × 40km/h × 60 = 0.75 分 → max(1, round) = 1
+        assert synth["fare_jpy"] is None
+        assert synth["polyline"] is None
+        # departure_time は prev.end_time の HH:mm
+        assert synth["departure_time"] == "19:30"
+
+    def test_skip_synthesis_when_transit_item_exists_between(self):
+        """既に transit item があれば合成しない。"""
+        from src.routes.plan_routes import _synthesize_missing_transit_for_rakuten_lodging
+
+        items = [
+            {"order_index": 0, "item_type": "meal", "lat": 35.0, "lng": 139.0,
+             "end_time": "2026-06-01T19:30:00+09:00", "transit_to_next": None, "title": "x"},
+            {"order_index": 1, "item_type": "transit", "title": "電車で移動",
+             "transit_to_next": None},
+            {"order_index": 2, "item_type": "lodging", "title": "y",
+             "place_id": "rakuten_1", "lat": 35.1, "lng": 139.1,
+             "start_time": "2026-06-01T20:00:00+09:00", "transit_to_next": None},
+        ]
+        result = _synthesize_missing_transit_for_rakuten_lodging(items)
+        # 何も変わらない
+        assert result[0]["transit_to_next"] is None
+        assert result[1]["transit_to_next"] is None
+
+    def test_skip_synthesis_for_non_rakuten_lodging(self):
+        """Google Places lodging には合成しない (LLM が transit emit する想定)。"""
+        from src.routes.plan_routes import _synthesize_missing_transit_for_rakuten_lodging
+
+        items = [
+            {"order_index": 0, "item_type": "meal", "lat": 35.0, "lng": 139.0,
+             "end_time": "2026-06-01T19:30:00+09:00", "transit_to_next": None, "title": "x"},
+            {"order_index": 1, "item_type": "lodging", "title": "y",
+             "place_id": "ChIJxxx", "lat": 35.1, "lng": 139.1,
+             "start_time": "2026-06-01T20:00:00+09:00", "transit_to_next": None},
+        ]
+        result = _synthesize_missing_transit_for_rakuten_lodging(items)
+        assert result[0]["transit_to_next"] is None
+
+    def test_skip_synthesis_when_lat_lng_missing(self):
+        """lat/lng どちらかが None なら合成不可、skip。"""
+        from src.routes.plan_routes import _synthesize_missing_transit_for_rakuten_lodging
+
+        items = [
+            {"order_index": 0, "item_type": "meal", "lat": None, "lng": 139.0,
+             "end_time": "2026-06-01T19:30:00+09:00", "transit_to_next": None, "title": "x"},
+            {"order_index": 1, "item_type": "lodging", "title": "y",
+             "place_id": "rakuten_1", "lat": 35.1, "lng": 139.1,
+             "start_time": "2026-06-01T20:00:00+09:00", "transit_to_next": None},
+        ]
+        result = _synthesize_missing_transit_for_rakuten_lodging(items)
+        assert result[0]["transit_to_next"] is None

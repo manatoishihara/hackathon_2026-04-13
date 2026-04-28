@@ -242,6 +242,9 @@ def _lodging_to_place_point(lodging: LodgingOption) -> PlacePoint:
         rating=lodging.rating,
         user_ratings_total=None,
         relevance_tags=[],
+        # Phase 3 polish 第 9 段 (2026-04-28): 楽天 hotelInformationUrl を Evidence Modal
+        # の「楽天トラベルで見る」リンクに carry。
+        external_url=lodging.url,
     )
 
 

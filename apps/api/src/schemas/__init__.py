@@ -116,6 +116,14 @@ class Evidence(_StrictBase):
     opening_hours: str | None = None
     rating: float | None = None
     price_level: int | None = Field(default=None, ge=1, le=4)
+    # Phase 3 polish 第 9 段 (2026-04-28): Google Places priceRange を JPY に正規化したもの
+    # ({"start": int, "end": int})。TS の `{ start: number; end: number }` 互換 dict 形式
+    # で送る (Python 内部 PlacePoint は tuple[int, int] | None で持つが、JSON シリアライズ
+    # で list になるため API 境界では dict に変換)。
+    price_range_jpy: dict[str, int] | None = None
+    # Phase 3 polish 第 9 段: 楽天トラベル等の外部詳細ページ URL。lodging で楽天が
+    # 返したらここに入る。Google Places の場合は None (Maps URL は別経路で組み立てる)。
+    external_url: str | None = None
     verified_at: datetime | None = None
     sources: list[str]
 

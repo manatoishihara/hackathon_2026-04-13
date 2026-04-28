@@ -967,8 +967,13 @@ def test_assemble_plan_anchor_with_invalid_payload_no_check():
     assert len(result.items) == 1
 
 
-def test_assemble_plan_cost_for_unknown_price_level():
-    """price_level=None の meal は jpy マップの None 行から取り、cost_confidence=unknown。"""
+def test_assemble_plan_cost_for_unknown_price_level_returns_estimated():
+    """price_level=None の meal は _PRICE_MAP の None 行から取り、cost_confidence=estimated。
+
+    2026-04-28 (Task A2): `_PRICE_MAP[item_type][None]` の confidence を旧 "unknown" から
+    "estimated" に修正した。値は heuristic だが値そのものは存在する、という semantics。
+    card↔modal の表記不整合 (badge ✓ なのに modal「価格帯 不明」) を解消するため。
+    """
     p = _place("P_A", price_level=None)
     pack = _make_pack(places=[p], edges=[])
     plan_v2 = LlmGeneratedPlanV2(
@@ -980,7 +985,7 @@ def test_assemble_plan_cost_for_unknown_price_level():
     assert len(result.items) == 1
     meal = result.items[0]
     assert meal.cost_jpy == 2500
-    assert meal.cost_confidence == "unknown"
+    assert meal.cost_confidence == "estimated"  # 旧 "unknown" から変更 (Task A2)
 
 
 def test_assemble_plan_rakuten_lodging_uses_verified_actual_price():
@@ -2040,3 +2045,97 @@ def test_find_item_type_compatible_used_place_skips_when_no_compatible_in_used()
         prev_place_id=None,
     )
     assert result is None  # used に meal-compatible なし
+
+
+# ======================================================================
+# Task A2 (2026-04-28): cost 解決 3 段優先順位
+# priority 1: place.price_range_jpy → midpoint, "verified"
+# priority 2: place.price_level → _PRICE_MAP[level], "estimated"
+# priority 3: 両方 None → _PRICE_MAP[None], "estimated" (旧 "unknown" から修正)
+# ======================================================================
+
+
+class TestResolveCostThreeTier:
+    """cost 解決の優先順位:
+    priority 1: place.price_range_jpy が取れている → midpoint, "verified"
+    priority 2: place.price_level が取れている → _PRICE_MAP[level], "estimated"
+    priority 3: 両方 None → _PRICE_MAP[None], "estimated" (旧 "unknown" から修正)
+    """
+
+    def _make_place(self, **overrides) -> PlacePoint:
+        defaults = dict(
+            place_id="ChIJtest",
+            name="テスト",
+            category=["restaurant"],
+            lat=35.0,
+            lng=139.0,
+            address="...",
+            opening_hours=[],
+            opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
+            price_level=None,
+            rating=None,
+            user_ratings_total=None,
+            relevance_tags=[],
+            price_range_jpy=None,
+        )
+        defaults.update(overrides)
+        return PlacePoint(**defaults)
+
+    def _make_pack(self, place: PlacePoint, lodging_options=None) -> EvidencePack:
+        return EvidencePack(
+            query_context=QueryContext(
+                region="箱根",
+                start_date=date(2026, 6, 1),
+                end_date=date(2026, 6, 2),
+                departure_point="現地集合",
+                start_mode="auto",
+                mode_payload=None,
+                participants=[],
+            ),
+            places=[place],
+            transit_matrix=[],
+            lodging_options=lodging_options,
+            budget_constraints=BudgetConstraints(
+                total_jpy_per_person=30000,
+                breakdown_percent=BudgetBreakdown(
+                    lodging=40, meal=30, activity=20, transit=10
+                ),
+                breakdown_jpy=BudgetBreakdownJPY(
+                    lodging=12000, meal=9000, activity=6000, transit=3000
+                ),
+            ),
+            temporal_constraints=TemporalConstraints(
+                start_datetime="2026-06-01T09:00:00+09:00",
+                end_datetime="2026-06-02T18:00:00+09:00",
+                total_days=2,
+            ),
+        )
+
+    def test_priority_1_price_range_jpy_returns_verified_midpoint(self):
+        from src.llm.assembly import _resolve_cost_with_rakuten_override
+
+        place = self._make_place(price_range_jpy=(1000, 2000), price_level=2)
+        pack = self._make_pack(place)
+        cost, conf = _resolve_cost_with_rakuten_override("meal", place, pack)
+        assert cost == 1500  # midpoint
+        assert conf == "verified"
+
+    def test_priority_2_price_level_only_returns_estimated(self):
+        from src.llm.assembly import _resolve_cost_with_rakuten_override
+
+        place = self._make_place(price_range_jpy=None, price_level=2)
+        pack = self._make_pack(place)
+        cost, conf = _resolve_cost_with_rakuten_override("meal", place, pack)
+        assert cost == 2500
+        assert conf == "estimated"
+
+    def test_priority_3_both_none_returns_estimated_not_unknown(self):
+        """_PRICE_MAP[None] の confidence を 'unknown' から 'estimated' に変更したことの確認。
+        値はあるが heuristic、というのが正しい semantics。"""
+        from src.llm.assembly import _resolve_cost_with_rakuten_override
+
+        place = self._make_place(price_range_jpy=None, price_level=None)
+        pack = self._make_pack(place)
+        cost, conf = _resolve_cost_with_rakuten_override("activity", place, pack)
+        assert cost == 1500  # _PRICE_MAP["activity"][None] の jpy
+        assert conf == "estimated"  # 旧 "unknown" から変更

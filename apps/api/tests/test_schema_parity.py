@@ -70,6 +70,8 @@ EXPECTED_FIELDS: dict[str, set[str]] = {
         "opening_hours",
         "rating",
         "price_level",
+        "price_range_jpy",
+        "external_url",
         "verified_at",
         "sources",
     },

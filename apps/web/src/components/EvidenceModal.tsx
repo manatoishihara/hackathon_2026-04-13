@@ -29,7 +29,11 @@ export function EvidenceModal({ item, open, onOpenChange }: Props) {
   const titleId = useId();
   const evidence = item.evidence;
 
-  const rating = formatRating(evidence.rating);
+  // Task B2 (2026-04-28): lodging item は 24h 営業前提なので、opening_hours 不在
+  // でも「— 不明」ではなく「終日 (チェックイン 15:00 / チェックアウト 10:00)」と
+  // 自然に表記する。評価も lodging 不在時は「評価情報なし (レビュー数不足)」と原因明示。
+  const isLodging = item.item_type === "lodging";
+  const rating = formatRating(evidence.rating, isLodging);
   // Phase 3 polish 案 D 第 4 段 (2026-04-28): price_level が無くても cost_jpy が
   // estimated として埋まっていれば「¥X,XXX (推定)」で表示する。価格帯=不明のまま
   // plan には cost が出てる乖離を解消する。
@@ -43,7 +47,9 @@ export function EvidenceModal({ item, open, onOpenChange }: Props) {
   // codex review 2 回目 Minor: 空文字 / 空白のみも「不在」扱い
   const openingHours = evidence.opening_hours?.trim()
     ? evidence.opening_hours
-    : UNKNOWN_VALUE_LABEL;
+    : isLodging
+      ? "終日 (チェックイン 15:00 / チェックアウト 10:00)"
+      : UNKNOWN_VALUE_LABEL;
 
   // transit item や location 不在の item で `item.location` が undefined になる
   // ケース（Phase 2.5 design でも null セーフガード漏れ）。Optional chaining で
@@ -85,6 +91,21 @@ export function EvidenceModal({ item, open, onOpenChange }: Props) {
           <Row label="出典" value={sources.text} dim={sources.dim} />
           <Row label="検証日時" value={verifiedAt} dim={verifiedAt === UNKNOWN_VALUE_LABEL} />
         </dl>
+
+        {evidence.external_url ? (
+          <div className="mt-2 flex justify-end">
+            <a
+              href={evidence.external_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="楽天トラベルで詳細を開く（新しいタブ）"
+              className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--color-accent)] bg-[color:var(--color-surface)] px-3 py-1.5 text-xs font-medium text-[color:var(--color-accent)] transition-colors hover:bg-[color:var(--color-accent)] hover:text-[color:var(--color-surface)]"
+            >
+              <ArrowSquareOut size={14} weight="bold" />
+              楽天トラベルで見る
+            </a>
+          </div>
+        ) : null}
 
         {mapsUrl ? (
           <div className="mt-2 flex justify-end">
@@ -132,9 +153,17 @@ function Row({
   );
 }
 
-function formatRating(rating: number | undefined): { text: string; dim: boolean } {
+function formatRating(
+  rating: number | undefined,
+  isLodging: boolean,
+): { text: string; dim: boolean } {
   if (typeof rating !== "number" || Number.isNaN(rating)) {
-    return { text: UNKNOWN_VALUE_LABEL, dim: true };
+    // Task B2 (2026-04-28): lodging は楽天トラベルの hotelRatingInfo.reviewAverage が
+    // レビュー数不足で None になることがあるので、原因明示の文言にする。
+    return {
+      text: isLodging ? "評価情報なし (レビュー数不足)" : UNKNOWN_VALUE_LABEL,
+      dim: true,
+    };
   }
   return { text: `★ ${rating.toFixed(1)} / 5.0`, dim: false };
 }

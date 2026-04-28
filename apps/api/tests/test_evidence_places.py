@@ -156,6 +156,83 @@ def test_missing_optional_fields_become_none(mock_post):
 
 
 # ==============================
+# priceRange (Places API New) パーステスト (Phase 3 polish 第 9 段, 2026-04-28)
+# ==============================
+
+
+def test_to_place_point_extracts_price_range_jpy():
+    """priceRange が JPY で取れているとき (start, end) tuple を抽出する。"""
+    from src.evidence.places import _to_place_point
+
+    raw = {
+        "id": "ChIJtest123",
+        "displayName": {"text": "テスト食堂"},
+        "formattedAddress": "東京都...",
+        "location": {"latitude": 35.0, "longitude": 139.0},
+        "types": ["restaurant"],
+        "priceRange": {
+            "startPrice": {"currencyCode": "JPY", "units": "1000", "nanos": 0},
+            "endPrice": {"currencyCode": "JPY", "units": "2000", "nanos": 0},
+        },
+    }
+    place = _to_place_point(raw)
+    assert place.price_range_jpy == (1000, 2000)
+
+
+def test_to_place_point_price_range_absent_returns_none():
+    """priceRange field 自体が無いときは None。"""
+    from src.evidence.places import _to_place_point
+
+    raw = {
+        "id": "ChIJtest456",
+        "displayName": {"text": "テスト店"},
+        "formattedAddress": "...",
+        "location": {"latitude": 35.0, "longitude": 139.0},
+        "types": ["restaurant"],
+    }
+    place = _to_place_point(raw)
+    assert place.price_range_jpy is None
+
+
+def test_to_place_point_price_range_non_jpy_returns_none():
+    """JPY 以外の通貨は採用しない。"""
+    from src.evidence.places import _to_place_point
+
+    raw = {
+        "id": "ChIJtest789",
+        "displayName": {"text": "テスト店"},
+        "formattedAddress": "...",
+        "location": {"latitude": 35.0, "longitude": 139.0},
+        "types": ["restaurant"],
+        "priceRange": {
+            "startPrice": {"currencyCode": "USD", "units": "10"},
+            "endPrice": {"currencyCode": "USD", "units": "20"},
+        },
+    }
+    place = _to_place_point(raw)
+    assert place.price_range_jpy is None
+
+
+def test_to_place_point_price_range_invalid_units_returns_none():
+    """start > end など不正値は None。"""
+    from src.evidence.places import _to_place_point
+
+    raw = {
+        "id": "ChIJtestbad",
+        "displayName": {"text": "テスト店"},
+        "formattedAddress": "...",
+        "location": {"latitude": 35.0, "longitude": 139.0},
+        "types": ["restaurant"],
+        "priceRange": {
+            "startPrice": {"currencyCode": "JPY", "units": "5000"},
+            "endPrice": {"currencyCode": "JPY", "units": "1000"},
+        },
+    }
+    place = _to_place_point(raw)
+    assert place.price_range_jpy is None
+
+
+# ==============================
 # Integration（ライブ API）
 # ==============================
 

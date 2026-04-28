@@ -35,13 +35,14 @@
 from __future__ import annotations
 
 import hashlib
+import math
 
 from flask import Blueprint, current_app, g, jsonify, request
 from pydantic import ValidationError
 
 from ..auth import require_session
 from ..evidence.cache import load_pack
-from ..evidence.pack import EvidencePack
+from ..evidence.pack import EvidencePack, PlacePoint
 from ..evidence.validator import (
     TransitMatrixValidationError,
     validate_client_transit_matrix,
@@ -156,6 +157,9 @@ def generate_plan():
 
         # LLM 出力を plan_items ペイロードに変換（merged pack の places から場所情報を引く）
         items_payload = [_serialize_plan_item(item, merged) for item in generated.items]
+        # Phase 3 polish 案 D 第 9 段 (2026-04-28): 楽天 lodging 直前の transit_to_next を
+        # haversine で fallback 合成 (フロント transit.ts の rakuten_ prefix 除外副作用補完)
+        items_payload = _synthesize_missing_transit_for_rakuten_lodging(items_payload)
 
         # 原子保存 RPC
         try:
@@ -246,6 +250,7 @@ def _serialize_plan_item(item: LlmPlanItem, pack: EvidencePack) -> dict:
     rating: float | None = None
     price_level: int | None = None
     sources: list[str] = []
+    place: PlacePoint | None = None
 
     if item.place_id is not None:
         place = next((p for p in pack.places if p.place_id == item.place_id), None)
@@ -272,6 +277,13 @@ def _serialize_plan_item(item: LlmPlanItem, pack: EvidencePack) -> dict:
         evidence["rating"] = rating
     if price_level is not None:
         evidence["price_level"] = price_level
+    # Phase 3 polish 第 9 段 (2026-04-28): Google Places priceRange / 楽天 hotelInformationUrl
+    # を Evidence Modal に流す。priceRange は内部 tuple → API 境界で dict 変換。
+    if place is not None and place.price_range_jpy is not None:
+        start, end = place.price_range_jpy
+        evidence["price_range_jpy"] = {"start": start, "end": end}
+    if place is not None and place.external_url:
+        evidence["external_url"] = place.external_url
     if sources:
         # verified_at は plan 生成時刻 (= 現在時刻、UTC)。これにより EvidenceModal で
         # 「2026-04-28 17:36 verified」のように検証日時を表示できる。
@@ -295,3 +307,91 @@ def _serialize_plan_item(item: LlmPlanItem, pack: EvidencePack) -> dict:
         "transit_to_next": None,
         "notes": None,
     }
+
+
+def _synthesize_missing_transit_for_rakuten_lodging(
+    items: list[dict],
+) -> list[dict]:
+    """楽天 lodging item の直前 non-transit item に transit_to_next を haversine で合成する。
+
+    Phase 3 polish 案 D 第 9 段 (2026-04-28): フロント `transit.ts` で楽天 place_id を
+    Maps DirectionsService 対象から除外している副作用 (第 5 段) で、LLM が楽天 lodging
+    への transit edge を emit できず PlanTimeline で「車で移動・X分」帯が抜ける問題を
+    fallback 補完する。
+    車速 40km/h 仮定で duration を概算、verified ではないが情報欠落より良い。
+
+    対象条件 (全て満たすときのみ合成):
+        (a) item_type が "lodging" で place_id が "rakuten_" prefix
+        (b) その直前の item が item_type != "transit" (= 既に transit がない)
+        (c) 直前 item と lodging 双方に lat/lng が揃っている
+
+    items (list of dict、_serialize_plan_item 出力後の形式) を mutate せず、
+    新しい list を返す。
+    """
+    if not items:
+        return items
+
+    result = [dict(it) for it in items]  # shallow copy
+
+    for i in range(1, len(result)):
+        cur = result[i]
+        prev = result[i - 1]
+
+        # (a) 楽天 lodging 判定
+        is_rakuten_lodging = (
+            cur.get("item_type") == "lodging"
+            and isinstance(cur.get("place_id"), str)
+            and cur["place_id"].startswith("rakuten_")
+        )
+        if not is_rakuten_lodging:
+            continue
+
+        # (b) 直前が既に transit ならスキップ
+        if prev.get("item_type") == "transit":
+            continue
+
+        # (c) lat/lng 必須
+        plat, plng = prev.get("lat"), prev.get("lng")
+        clat, clng = cur.get("lat"), cur.get("lng")
+        if any(v is None for v in (plat, plng, clat, clng)):
+            continue
+
+        # haversine 距離 (km)
+        distance_km = _haversine_km(plat, plng, clat, clng)
+        # 車速 40km/h 仮定で分換算、最低 1 分
+        duration_min = max(1, round(distance_km / 40 * 60))
+
+        prev["transit_to_next"] = {
+            "mode": "car",
+            "route": "車で移動 (推定)",
+            "departure_time": _extract_hhmm(prev.get("end_time")),
+            "duration_min": duration_min,
+            "fare_jpy": None,
+            "polyline": None,
+        }
+
+    return result
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """2 地点間の大圏距離 (km)。"""
+    R = 6371.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+def _extract_hhmm(iso_dt: str | None) -> str:
+    """ISO datetime 文字列から HH:mm を抽出。失敗時は '00:00'。"""
+    if not iso_dt:
+        return "00:00"
+    try:
+        from datetime import datetime as _dt
+        dt = _dt.fromisoformat(iso_dt.replace("Z", "+00:00"))
+        return dt.strftime("%H:%M")
+    except (ValueError, AttributeError):
+        return "00:00"
