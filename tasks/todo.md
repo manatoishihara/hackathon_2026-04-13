@@ -7,6 +7,44 @@
 
 ## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中）
 
+---
+
+## 📋 次セッション継続事項 (2026-04-28 セッション末、user 「別チャットで詰める」宣言)
+
+**現在の git 状態**:
+- ブランチ: `feat/lodging-rakuten-only` (develop の `60f46a7` から派生、未 push)
+- working tree 未 commit ファイル (4 件):
+  - `apps/api/src/evidence/builder.py` (第 8 段 楽天 only 方針本体)
+  - `apps/api/tests/test_evidence_builder.py` (新規 test 3 件)
+  - `tasks/lessons.md` (第 8 段 learning エントリ追加)
+  - `tasks/todo.md` (本 entry 追加 + 第 8 段 進捗反映)
+
+**直近 1 ステップでやるべきこと (次セッション最初の手)**:
+1. **再 verify**: dev server で再 submit 5〜10 回、(i) lodging slot に楽天宿のみ登場、(ii) meal slot に hotel 誤選なし、(iii) 422 解消、の 3 点確認
+2. **検証 OK なら commit**: 前セッション末に提案した 2 commit (本体 + docs) で commit → develop merge → push
+3. **本番 deploy**: Vercel / Render auto deploy 確認、本番 env に `RAKUTEN_APPLICATION_ID` (UUID) + `RAKUTEN_ACCESS_KEY` (`pk_...`) + `RAKUTEN_AFFILIATE_ID` + `SITE_BASE_URL` 投入
+4. **demo verify (本番)**: 本番 URL で submit → 楽天宿が plan に出ること確認
+
+**verify が NG (422 が残る) ときの追加対応候補**:
+- 楽天が 0 件取れる region は demo target から外す (箱根 / 京都 / 草津 / 鎌倉 等の主要観光地に限定)
+- 第 8 段の `_classify_bucket(p) != "lodging"` filter が attraction 系まで誤排除してないか確認 (例: tourist_attraction + lodging の複合カテゴリ)
+- `kind_summary` 別の対応:
+  - `outside_opening_hours` 残るなら水曜出発を避ける UI 注意 or v6.3 reuse 強化
+  - `unknown_place_id` ならハルシネーション再発、prompt 強化
+
+**demo 直前の polish 残候補 (時間あれば)**:
+- フロントの「お名前」フィールドのデフォルト値設定 (現状空でエラー出やすい)
+- ランディングページのヒーロー文言調整
+- 「もう一度生成」ボタンの動線確認
+- 楽天宿の url を Plan view から外部リンクで開けるようにする (現状 evidence.sources にしか入ってない)
+
+**触らないでいい (実装済 + verify 済)**:
+- D 案 (出発地点撤去 + 現地集合・現地解散スコープ) ← merge 済
+- Phase 3 polish 案 D 第 1-7 段 (forced 注入 + verified cost + 推定表示等) ← 全部 develop に merge 済
+- Phase 2 polish v6.x ← v6.2 まで全部 merge 済
+
+---
+
 **🟡 Phase 3 polish 案 D 第 8 段 (2026-04-28、楽天 only 方針への切替、working tree 未 commit)**: 第 2-7 段の forced 注入後 verify で 2 連続 422、kind_summary 全 attempts `item_type_category_mismatch` 支配。真因 = Google Places の複合カテゴリ hotel (例: hotel + restaurant + spa + wedding_venue) が LLM の meal/lodging 判断を混乱させる構造問題。user 提案で「楽天 only」方針へ切替:
 - `apps/api/src/evidence/builder.py:build_evidence_pack`: 楽天 lodging が 1 件以上取れたら search_results から Google Places の lodging を `_classify_bucket(p) == "lodging"` filter で完全排除、bucket を楽天で占有
 - 楽天 0 件 (env 未設定 / API 障害 / 検索範囲外) は fallback で Google Places lodging を残す (demo blocker 回避)
