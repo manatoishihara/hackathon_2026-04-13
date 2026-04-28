@@ -1010,6 +1010,119 @@ def test_rakuten_lodging_empty_does_not_break_pack(mock_search, mock_lodging):
     assert pack.lodging_options is None
 
 
+# Phase 3 polish 案 D 第 8 段 (2026-04-28、楽天 only 方針)
+# ==============================
+
+
+@patch("src.evidence.builder._fetch_lodging_safe")
+@patch("src.evidence.builder.search_by_text")
+def test_rakuten_only_when_present_excludes_google_lodging(mock_search, mock_lodging):
+    """Phase 3 polish 案 D 第 8 段: 楽天 lodging が 1 件以上取れたとき、Google Places の
+    lodging は pack から完全排除される。LLM が複合カテゴリ Google hotel を meal slot に
+    誤選する事故を構造的に防ぐため。
+    """
+    google_hotel = _place(
+        "google_hotel_1", "Google ホテル箱根", 35.21, 139.03, category=["lodging", "hotel"],
+    )
+    google_attraction = _place(
+        "google_park", "箱根強羅公園", 35.25, 139.04, category=["tourist_attraction", "park"],
+    )
+    google_restaurant = _place(
+        "google_meal", "そば処", 35.22, 139.06, category=["restaurant", "food"],
+    )
+    mock_search.return_value = [google_hotel, google_attraction, google_restaurant]
+    mock_lodging.return_value = [
+        LodgingOption(
+            place_id="rakuten_55555",
+            name="楽天宿テスト",
+            price_jpy_per_night=15000,
+            lat=35.23,
+            lng=139.10,
+            url="https://travel.rakuten.co.jp/hotel/55555/",
+            rating=4.5,
+        ),
+    ]
+
+    pack = build_evidence_pack(_sample_request())
+    place_ids = {p.place_id for p in pack.places}
+
+    # 楽天宿は pack に入る
+    assert "rakuten_55555" in place_ids
+    # Google Places の lodging は排除される (本対策の核心)
+    assert "google_hotel_1" not in place_ids
+    # attraction / meal は維持
+    assert "google_park" in place_ids
+    assert "google_meal" in place_ids
+
+
+@patch("src.evidence.builder._fetch_lodging_safe")
+@patch("src.evidence.builder.search_by_text")
+def test_rakuten_zero_keeps_google_lodging_as_fallback(mock_search, mock_lodging):
+    """Phase 3 polish 案 D 第 8 段: 楽天 0 件 (env 未設定 / API 障害 / 検索範囲外) の
+    ときは Google Places の lodging を pack に残す fallback で demo blocker を回避。
+    """
+    google_hotel = _place(
+        "google_hotel_1", "Google ホテル箱根", 35.21, 139.03, category=["lodging", "hotel"],
+    )
+    google_attraction = _place(
+        "google_park", "箱根強羅公園", 35.25, 139.04, category=["tourist_attraction"],
+    )
+    mock_search.return_value = [google_hotel, google_attraction]
+    mock_lodging.return_value = []  # 楽天 0 件
+
+    pack = build_evidence_pack(_sample_request())
+    place_ids = {p.place_id for p in pack.places}
+
+    # 楽天 0 件のときは Google Places lodging が fallback で残る
+    assert "google_hotel_1" in place_ids
+    assert "google_park" in place_ids
+    # 楽天は当然存在しない
+    assert not any(pid.startswith("rakuten_") for pid in place_ids)
+
+
+@patch("src.evidence.builder._fetch_lodging_safe")
+@patch("src.evidence.builder.search_by_text")
+def test_rakuten_only_keeps_attraction_meal_other_buckets(mock_search, mock_lodging):
+    """Phase 3 polish 案 D 第 8 段: 楽天 only モード時も attraction / meal / other の
+    bucket は Google Places で従来通り埋まる (lodging だけが楽天で占有)。
+    """
+    # 各 bucket に十分な candidate を用意
+    attractions = [
+        _place(f"a{i}", f"観光地{i}", 35.20 + 0.01 * i, 139.02, category=["tourist_attraction"])
+        for i in range(5)
+    ]
+    meals = [
+        _place(f"m{i}", f"食事{i}", 35.30 + 0.01 * i, 139.05, category=["restaurant"])
+        for i in range(5)
+    ]
+    google_hotel = _place(
+        "google_h1", "Google ホテル", 35.21, 139.03, category=["lodging", "hotel"],
+    )
+    mock_search.return_value = attractions + meals + [google_hotel]
+    mock_lodging.return_value = [
+        LodgingOption(
+            place_id="rakuten_99999",
+            name="楽天 only テスト宿",
+            price_jpy_per_night=12000,
+            lat=35.23,
+            lng=139.10,
+            rating=4.0,
+        ),
+    ]
+
+    pack = build_evidence_pack(_sample_request())
+    place_ids = {p.place_id for p in pack.places}
+
+    # 楽天宿は入る、Google hotel は排除
+    assert "rakuten_99999" in place_ids
+    assert "google_h1" not in place_ids
+    # attraction / meal は Google Places で残る
+    google_attraction_ids = [p.place_id for p in pack.places if p.place_id.startswith("a")]
+    google_meal_ids = [p.place_id for p in pack.places if p.place_id.startswith("m")]
+    assert len(google_attraction_ids) > 0, "attraction bucket は Google Places で残るべき"
+    assert len(google_meal_ids) > 0, "meal bucket は Google Places で残るべき"
+
+
 def test_lodging_to_place_point_conversion():
     """_lodging_to_place_point が LodgingOption → PlacePoint に正しく変換することを単体検証。
 

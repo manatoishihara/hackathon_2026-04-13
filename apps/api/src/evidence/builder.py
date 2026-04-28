@@ -167,21 +167,43 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
         ctx, request, temporal, budget, lat=_center_lat, lng=_center_lng,
     )
 
-    # Phase 3 polish 案 D 第 2 段 (2026-04-28): 楽天 LodgingOption を PlacePoint 化して
-    # pack.places に forced 注入し、LLM の slot 候補として認識させる。
-    # 旧構造は楽天 lodging が pack.lodging_options にしか入らず LLM プロンプトに届か
-    # なかったため、楽天 5 件取得しても plan には Google Places の hotel しか登場しない
-    # 問題があった (本番 dev で確認、ログで `rakuten_<数字>` place_id が swap log に
-    # 一度も登場しなかった事実)。anchor 同等扱いで area filter / quota / 距離ガード
-    # を bypass する forced_places として再 merge する。
+    # Phase 3 polish 案 D 第 8 段 (2026-04-28、楽天 only 方針への切替):
+    # 第 2-7 段までの forced 注入では Google Places の lodging と楽天 lodging が pack に
+    # 共存していたが、本番 verify で副作用が発覚:
+    #   - Google Places の lodging はカテゴリが複合的 (例: hotel + restaurant + spa +
+    #     wedding_venue + chinese_restaurant + ...)、LLM が meal slot に hotel を誤選 →
+    #     swap で楽天宿に → 楽天宿の category=["lodging", "hotel", "ryokan"] は meal
+    #     不互換で reuse fallback も効かず validator catch、422 連発
+    #   - 楽天 place 経由の transit edge が transit_matrix に無いため (フロント transit
+    #     fetch で `rakuten_` prefix を除外)、楽天宿が前 slot のとき構造が壊れがち
+    #
+    # 解: **楽天 lodging を取得できたら、Google Places の lodging を pack から完全排除**
+    # して lodging bucket を楽天で占有させる方針に切替。
+    #   - 利点: 楽天は実価格 + 評価 verified、category 固定で LLM の誤選確率↓、
+    #     demo 訴求点として「楽天連携で実価格・実評価」を強くアピールできる
+    #   - 楽天 0 件 (env 未設定 / API 障害 / 検索範囲外) の fallback: interim_places
+    #     (Google Places の lodging を含む) をそのまま採用、demo blocker 回避
     rakuten_lodging_places = [_lodging_to_place_point(lo) for lo in lodging_options]
+    # rating 最高優先で sort (forced 注入時の優先順位、cap 内収まらないとき rating 高い順で残す)
+    rakuten_lodging_places.sort(key=lambda p: -(p.rating or 0.0))
+
     if rakuten_lodging_places:
+        # 楽天 lodging があれば、search_results から Google Places の lodging を完全排除
+        # して bucket を楽天で占有。attraction / meal / other は維持。
+        search_results_no_google_lodging = [
+            [p for p in batch if _classify_bucket(p) != "lodging"]
+            for batch in search_results
+        ]
         forced_places = anchor_places + rakuten_lodging_places
         places = _merge_anchors_and_search(
-            forced_places, search_results, cap, total_days=temporal.total_days
+            forced_places,
+            search_results_no_google_lodging,
+            cap,
+            total_days=temporal.total_days,
         )
     else:
-        # 楽天 fetch 失敗 / fail-soft で 0 件のときは interim をそのまま採用 (再 merge 無駄なので)
+        # 楽天 0 件 fallback: interim_places (Google Places lodging 含む) を採用、
+        # demo blocker 回避 (env 未設定 / API 障害 / 検索範囲外で楽天が 0 件のケース)
         places = _interim_places
 
     return EvidencePack(
