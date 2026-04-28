@@ -199,7 +199,11 @@ export async function createPlanAndParticipants(args: {
     region: form.region,
     start_date: form.start_date,
     end_date: form.end_date,
-    departure_point: form.departure_point,
+    // D 案 (2026-04-28): 出発地点入力は demo スコープから外した（現地集合・現地解散）。
+    // form.departure_point は空文字で来るので、DB の TEXT NOT NULL を満たすために
+    // フロントで「現地集合」デフォルトを補う。Backend / Pydantic / DDL は無変更。
+    // 将来 B 案実装時は form.departure_point の min(1) 制約を復活させてここの fallback も外す。
+    departure_point: form.departure_point?.trim() || "現地集合",
     budget_per_person_jpy: form.budget_per_person_jpy,
     budget_breakdown: form.budget_breakdown,
     start_mode: form.start_mode,

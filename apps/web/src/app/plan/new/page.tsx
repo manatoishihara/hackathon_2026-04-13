@@ -223,10 +223,10 @@ export default function NewPlanPage() {
       : null;
 
   // 入力埋まり率（飛行機の進行に使う）
+  // D 案 (2026-04-28): departure_point は demo スコープから外したので進捗計算からも除外。
   const baseFields: Array<string | undefined> = [
     watched.title,
     watched.region,
-    watched.departure_point,
     watched.start_date,
     watched.end_date,
   ];
@@ -241,7 +241,7 @@ export default function NewPlanPage() {
       (p.wishes_text?.trim() ? 1 : 0),
     0,
   );
-  const totalFields = 5 + 1 + participants.length * 2;
+  const totalFields = 4 + 1 + participants.length * 2;
   const progress = (baseFilled + budgetFilled + participantFilled) / totalFields;
 
   const handleAddParticipant = () => {
@@ -378,20 +378,12 @@ export default function NewPlanPage() {
               </p>
             ) : null}
           </div>
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 sm:col-span-2">
             <Label htmlFor="region">行き先エリア</Label>
             <Input
               id="region"
               placeholder="箱根"
               {...register("region")}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="departure_point">出発地</Label>
-            <Input
-              id="departure_point"
-              placeholder="新宿駅"
-              {...register("departure_point")}
             />
           </div>
           <div className="sm:col-span-2">

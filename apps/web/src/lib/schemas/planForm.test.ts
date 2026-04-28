@@ -139,4 +139,18 @@ describe("planFormSchema (Phase 2.1: discriminated union for start_mode)", () =>
     });
     expect(result.success).toBe(false);
   });
+
+  // D 案 (2026-04-28 user 判断): demo スコープでは出発地点を「現地集合・現地解散」前提で
+  // 構造から外した。出発地は必須入力ではなくなり、空文字で送信される（フロントが
+  // submit 時に内部で「現地集合」デフォルトを補う）。将来 B 案（Google Geocoding +
+  // フロント Maps SDK 長距離 transit）を実装するときに復活させる。
+  it("accepts empty departure_point (D 案: 現地集合・現地解散スコープ)", () => {
+    const result = planFormSchema.safeParse({
+      ...baseValid,
+      departure_point: "",
+      start_mode: "auto",
+      mode_payload: null,
+    });
+    expect(result.success).toBe(true);
+  });
 });

@@ -41,7 +41,7 @@ CREATE TABLE plans (
   region TEXT NOT NULL,
   start_date DATE NOT NULL,
   end_date DATE NOT NULL,
-  departure_point TEXT NOT NULL,
+  departure_point TEXT NOT NULL, -- D 案 (2026-04-28): demo スコープでは「現地集合・現地解散」前提でフロント入力欄を撤去、空入力時は "現地集合" 固定値を保存。将来 B 案 (Geocoding + 長距離 transit) 実装時に再活性
   budget_per_person_jpy INTEGER NOT NULL,
   budget_breakdown JSONB NOT NULL, -- {lodging: 40, meal: 30, activity: 20, transit: 10}
   start_mode TEXT NOT NULL CHECK (start_mode IN ('auto', 'anchor', 'theme')),

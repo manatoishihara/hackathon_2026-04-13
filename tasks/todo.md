@@ -5,7 +5,32 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-28 更新、v6.2 で meal candidate 不足の根本対策、demo ready 想定）
+## 🏁 進捗サマリ（2026-04-28 確定、demo ready: 2 泊 3 日 plan 完成、4 日 plan は demo スコープ外）
+
+**D 案: 現地集合・現地解散スコープに割り切り (2026-04-28、working tree、未 commit)**: 🟡 user 報告「出発地点を指定しても旅程は旅先から始まる、交通費が予算から弾かれている」を systematic-debugging で根本原因確定 → A/B/C/D 4 案検討 → user 判断で **D 案 (フロント入力撤去 + 「現地集合・現地解散」コンセプトに割り切り)** 確定 + 実装完了。
+- **変更**: `apps/web/src/app/plan/new/page.tsx` の「出発地」Input + Label 撤去 / zod schema を `z.string().min(1)` → `z.string()` (空文字許容) / `apps/web/src/lib/api.ts` で `form.departure_point?.trim() || "現地集合"` をフロントから送信 (DDL / Pydantic 無変更) / `docs/data-model.md` の departure_point フィールドコメント更新
+- **検証**: web test **165/165 PASS** (新規「accepts empty departure_point」1 件追加、既存 fixture 影響なし) / tsc clean / build PASS
+- **設計判断の defensibility**: 既存 `assembly.py:generate_slot_catalog` が「最終日 lodging skip = 帰宅前提」で symmetric に作られていたところ、出発側も「現地到着済み」前提にすれば対称 = 後付け正当化ではなくコードが既にそうなっている
+- **将来展望 (demo 提出後の polish、tasks/lessons.md 「2026-04-28: departure_point 構造的欠落」エントリ参照)**: B 案で Geocoding + 長距離 transit を有効化、`_PRICE_MAP[transit_long_distance]` の決定論カタログで運賃補完。実装目安 4〜6 時間
+- **次のアクション (user)**: commit 提案 → develop merge → push → 本番再 verify
+
+**🎉 Demo ready (2 泊 3 日 plan)**: v3 → v4 → v5 → v6 → v6.1 → v6.2 の段階的修正により、本番で以下が完成:
+- ✅ `/api/plans/generate → 200` 達成 (草津 3 日 / 30,000-80,000 円 / お任せ)
+- ✅ Evidence Modal で **「Google Places」「営業時間」「評価」**表示 (v6 evidence populate + v6.1 badge fix)
+- ✅ Map マーカー表示 (v6.1 location ネスト変換)
+- ✅ **dinner / lodging 含む全 slot 埋まる** (v6.1 prompt 強化 + v6.2 reuse fallback)
+- ✅ assembler 構造的エラー (transit skip / item_type swap / 連泊許容) すべて graceful path
+
+**🔴 4 日 plan は demo スコープ外として保留**: 本番 Run 13g で `budget_exceeded` × 4 + `item_type_category_mismatch` × 2 で 422。原因 = pack の meal candidate 不足 (草津 17-18 places 中 meal 系 3-4 件) で 6 食を埋めるのに同 restaurant を 5-6 回重複 → 食費累積で予算超過。**user 判断で 4 日 plan は demo target から外す、3 日 plan で demo 実施**。後続の根治候補 (v6.3 以降):
+- (a) generator で `budget_exceeded` を soft issue に分類、retry 流さず plan 採用
+- (b) cost 計算で重複 place は累積しない logic
+- (c) Pack 構築時に meal candidate を強化検索 (pack に meal 7-8 件保証)
+
+**Phase 2 polish v6.2 (2026-04-28、本番 deploy 完了)**: 🟢 commits `7aa2c08`、`8852cc8` で develop merge + push 済。`_find_item_type_compatible_used_place` helper で item_type pre-check の枯渇時に used 集合 reuse、lodging 連泊許容と同じ思想を meal/activity に適用。Run 13g log で reuse 動作実証 (`reusing already-used 'ChIJu7dnyl' to keep item_type integrity`)。
+
+**Phase 2 polish v6.1 (2026-04-28、本番 deploy 完了)**: 🟢 commits `85559de`、`2e834f4` で develop merge + push 済。Map 不表示 fix (`getPlanItems` で `_transformPlanItemRow`)、Evidence「不明」表示 fix (`getEvidenceBadgeInfo` 4 段階判定)、dinner/lodging 欠損対策 (system.md 第 4 項強化 + `_BASE_KEYWORD_SUFFIXES` に「旅館 ホテル」追加 + `_MAX_KEYWORDS` 5→7)。
+
+**Phase 2 polish v6 (2026-04-28、本番 deploy 完了): 4 日 plan 生成成功実証**: 🟢 commits `c7c2983 / 586ae86 / 95c3fcd`、`707a4e3` で develop merge + push 済。
 
 **Phase 2 polish v6.2 (2026-04-28、本番 Run 13f で 422 再発の真因対策、working tree、未 commit)**: 🟡 v6.1 deploy 後の本番 Run 13f で `item_type_category_mismatch` × 5 が 4 attempts 全部出現、422 連発。Render Live tail から **真因 = pack の meal candidate 不足** (草津 17 places 中 meal 系 3-4 件、lunch+dinner 6 slot に対して足りない) を確定。
 - **v6.2 fix**: `_find_item_type_compatible_used_place` helper 追加、item_type pre-check の枯渇時に **used 集合内** で item_type compatible な place を **再使用** する fallback (lodging 連泊許容と同じ思想を meal/activity にも適用)
