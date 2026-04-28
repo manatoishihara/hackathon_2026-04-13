@@ -62,7 +62,9 @@ describe("Home (landing)", () => {
 describe("NewPlanPage (1.5)", () => {
   it("crash せず描画、参加者初期 2 人ぶんのタブと生成ボタンを含む", () => {
     render(<NewPlanPage />);
-    expect(screen.getByText(/プランを生成/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /プランを生成/ }),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText(/プランのタイトル/)).toBeInTheDocument();
   });
 });

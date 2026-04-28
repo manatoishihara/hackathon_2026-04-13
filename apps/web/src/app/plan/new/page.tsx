@@ -1,10 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowRight, Spinner, WarningCircle, WifiSlash } from "@phosphor-icons/react/dist/ssr";
+import { ArrowRight, Info, Spinner, WarningCircle, WifiSlash } from "@phosphor-icons/react/dist/ssr";
 
 import type { StartMode } from "shared-types";
 
@@ -15,8 +15,8 @@ import {
   createPlanAndParticipants,
   postEvidencePlaces,
   updatePlanStatus,
-  ApiError,
 } from "@/lib/api";
+import { classifyError } from "@/lib/errorClassifier";
 import { formatJpy } from "@/lib/format";
 import {
   planFormSchema,
@@ -29,6 +29,10 @@ import { DateRangePicker } from "@/components/DateRangePicker";
 import { ModeSelector } from "@/components/ModeSelector";
 import { ParticipantTabs } from "@/components/ParticipantTabs";
 import { StepProgressRunway } from "@/components/plan-new/StepProgressRunway";
+import {
+  getActiveDraft,
+  useFormDraftStore,
+} from "@/stores/formDraftStore";
 import { useGenerationSessionStore } from "@/stores/generationSessionStore";
 
 // blue hour 配色（5 人を区別する色パレット、どれもブランドトーンに沿う）
@@ -87,65 +91,20 @@ const DEFAULT_VALUES: PlanFormValues = {
  */
 type SubmitStep = "session" | "plan" | "evidence" | null;
 
-function classifyError(err: unknown): { message: string; detail?: string } {
-  // ネットワーク層エラー（DNS 解決失敗・接続拒否・タイムアウト）
-  if (err instanceof TypeError && (err.message.includes("fetch") || err.message.includes("network") || err.message.includes("Failed to fetch"))) {
-    return { message: "サーバーに接続できませんでした", detail: "インターネット接続またはサーバーの状態を確認してください。" };
-  }
-  if (err instanceof DOMException && err.name === "AbortError") {
-    return { message: "接続がタイムアウトしました", detail: "サーバーの応答が遅い可能性があります。しばらくしてから再試行してください。" };
-  }
-
-  if (err instanceof ApiError) {
-    // 422: LLM バリデーション失敗 or Evidence Pack 検証失敗
-    if (err.status === 422) {
-      return {
-        message: "プラン生成の検証に失敗しました（422）",
-        detail: "スポット情報の整合性チェックで問題が発生しました。しばらくしてから再試行してください。",
-      };
-    }
-    // 429: レート制限
-    if (err.status === 429) {
-      return { message: "リクエストが集中しています（429）", detail: "少し時間をおいてから再試行してください。" };
-    }
-    // 401: セッション認証切れ
-    if (err.status === 401) {
-      return { message: "セッション認証エラー（401）", detail: "ページを再読み込みしてください。" };
-    }
-    // 403: API キー制限またはアクセス権限なし
-    if (err.status === 403) {
-      return { message: "アクセス権限エラー（403）", detail: "APIキーの制限または権限設定の問題の可能性があります。" };
-    }
-    // 404: Evidence Pack の有効期限切れなど
-    if (err.status === 404) {
-      return { message: "リソースが見つかりません（404）", detail: "セッションの有効期限が切れた可能性があります。最初からやり直してください。" };
-    }
-    // 502/503/504: ゲートウェイ・Render コールドスタート
-    if (err.status === 502 || err.status === 503 || err.status === 504) {
-      return {
-        message: `APIサーバーが応答していません（${err.status}）`,
-        detail: "Render のコールドスタート中の可能性があります。30秒ほど待ってから再試行してください。",
-      };
-    }
-    // 500: サーバー内部エラー
-    if (err.status === 500) {
-      return { message: "サーバー内部エラー（500）", detail: err.message || "予期しないエラーが発生しました。" };
-    }
-    // その他のHTTPエラー
-    return { message: `エラーが発生しました（${err.status}）`, detail: err.message };
-  }
-
-  if (err instanceof Error) {
-    return { message: err.message };
-  }
-  return { message: "プラン生成の開始に失敗しました。" };
-}
-
 export default function NewPlanPage() {
   const router = useRouter();
   const setSession = useGenerationSessionStore((s) => s.setSession);
+  const saveDraft = useFormDraftStore((s) => s.saveDraft);
+
+  // 1.6 generating ページから auto-redirect で戻ってきた時に、入力内容と
+  // 失敗理由を取り出す。mount 時に 1 度だけ評価して以降は固定（user 編集を
+  // store と同期し続ける必要はない、submit 時に saveDraft で書き戻す方針）。
+  const initialDraft = useMemo(() => getActiveDraft(), []);
+
   const [activeParticipantIndex, setActiveParticipantIndex] = useState(0);
-  const [submitError, setSubmitError] = useState<{ message: string; detail?: string } | null>(null);
+  const [submitError, setSubmitError] = useState<{ message: string; detail?: string } | null>(
+    initialDraft?.error ?? null,
+  );
   const [apiAvailable, setApiAvailable] = useState<boolean | null>(null);
   const [submitStep, setSubmitStep] = useState<SubmitStep>(null);
 
@@ -155,7 +114,7 @@ export default function NewPlanPage() {
 
   const form = useForm<PlanFormValues>({
     resolver: zodResolver(planFormSchema),
-    defaultValues: DEFAULT_VALUES,
+    defaultValues: initialDraft?.values ?? DEFAULT_VALUES,
   });
   const { control, register, handleSubmit, watch, setValue, clearErrors, formState } = form;
   const participants = watch("participants");
@@ -217,6 +176,29 @@ export default function NewPlanPage() {
   const totalFields = 4 + 1 + participants.length * 2;
   const progress = (baseFilled + budgetFilled + participantFilled) / totalFields;
 
+  // 入力不足の項目を列挙して「ボタンを押せない理由」を表示する（タスク 2）。
+  // schema.min(1) や anchor mode の必須チェックと同じ条件で人間可読な日本語を作る。
+  const missingItems: string[] = [];
+  if (!watched.title?.trim()) missingItems.push("プランのタイトル");
+  if (!watched.region?.trim()) missingItems.push("行き先エリア");
+  if (!watched.start_date) missingItems.push("出発日");
+  if (!watched.end_date) missingItems.push("帰着日");
+  if (!watched.budget_per_person_jpy || watched.budget_per_person_jpy < 1000) {
+    missingItems.push("1 人あたり予算");
+  }
+  participants.forEach((p, i) => {
+    const name = p.display_name?.trim();
+    if (!name) missingItems.push(`参加者 ${i + 1} の名前`);
+    if (!p.wishes_text?.trim()) {
+      // 名前が入っていれば「{名前} の旅で叶えたいこと」、未入力なら「参加者 N の旅で〜」
+      const subject = name ? name : `参加者 ${i + 1}`;
+      missingItems.push(`${subject} の旅で叶えたいこと`);
+    }
+  });
+  if (startMode === "anchor" && anchorIds.length === 0) {
+    missingItems.push("こだわりのスポット（1 件以上）");
+  }
+
   const handleAddParticipant = () => {
     if (participants.length >= 5) return;
     const nextIndex = participants.length;
@@ -246,6 +228,9 @@ export default function NewPlanPage() {
   const onSubmit = async (values: PlanFormValues) => {
     setSubmitError(null);
     setSubmitStep(null);
+    // 1.6 generating で失敗した時に値を復元できるよう、submit 時点の form 内容を
+    // store に保存する。成功時は generating 側で clearDraft する。
+    saveDraft(values, null);
     let planId: string | null = null;
     try {
       // 1. 匿名サインイン（session_id を確定）
@@ -287,7 +272,11 @@ export default function NewPlanPage() {
       // 6. 遷移
       router.push(`/plan/${planId}/generating`);
     } catch (err) {
-      setSubmitError(classifyError(err));
+      const errorInfo = classifyError(err);
+      setSubmitError(errorInfo);
+      // 失敗状態の draft を更新（user が値を編集したまま放置 → 戻ってきた時にも
+      // 最新内容 + 失敗理由を復元できる）。
+      saveDraft(values, errorInfo);
       setSubmitStep(null);
       if (planId) {
         void updatePlanStatus(planId, "failed").catch((e) => {
@@ -297,6 +286,7 @@ export default function NewPlanPage() {
     }
   };
 
+
   const SUBMIT_STEP_LABELS: Record<NonNullable<SubmitStep>, string> = {
     session: "セッション確認中...",
     plan: "プランを保存中...",
@@ -305,7 +295,9 @@ export default function NewPlanPage() {
 
   const isApiChecking = apiAvailable === null;
   const isApiDown = apiAvailable === false;
-  const canSubmit = !isSubmitting && !isApiDown && !isApiChecking;
+  const hasMissing = missingItems.length > 0;
+  const canSubmit =
+    !isSubmitting && !isApiDown && !isApiChecking && !hasMissing;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-12">
@@ -493,7 +485,10 @@ export default function NewPlanPage() {
         </section>
 
         {submitError ? (
-          <div className="rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/5 p-4 text-sm leading-relaxed">
+          <div
+            role="alert"
+            className="rounded-md border border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/5 p-4 text-sm leading-relaxed"
+          >
             <div className="flex items-start gap-3 font-medium text-[color:var(--color-danger)]">
               <WarningCircle size={18} weight="bold" className="mt-0.5 shrink-0" />
               <span>{submitError.message}</span>
@@ -506,11 +501,38 @@ export default function NewPlanPage() {
           </div>
         ) : null}
 
+        {hasMissing && !isSubmitting ? (
+          <div
+            id="missing-items-hint"
+            role="status"
+            aria-live="polite"
+            data-testid="missing-items-hint"
+            className="flex items-start gap-3 rounded-md border-l-4 border-[color:var(--color-accent)] bg-[color:var(--color-accent)]/8 p-4 text-sm leading-relaxed"
+          >
+            <Info
+              size={20}
+              weight="bold"
+              className="mt-0.5 shrink-0 text-[color:var(--color-accent)]"
+            />
+            <div className="flex flex-col gap-1.5">
+              <p className="font-semibold text-[color:var(--color-text-primary)]">
+                プランを生成するには、以下を入力してください
+              </p>
+              <ul className="list-disc space-y-0.5 pl-5 text-[color:var(--color-text-secondary)]">
+                {missingItems.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ) : null}
+
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
             type="submit"
             disabled={!canSubmit}
             aria-busy={isSubmitting}
+            aria-describedby={hasMissing ? "missing-items-hint" : undefined}
             className="inline-flex items-center gap-2 rounded-full bg-[color:var(--color-primary)] px-7 py-3.5 text-base font-medium text-[color:var(--color-background)] shadow-[0_8px_24px_rgba(4,44,83,0.18)] transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {isSubmitting ? (
