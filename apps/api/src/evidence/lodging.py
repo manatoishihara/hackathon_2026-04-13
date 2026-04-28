@@ -1,7 +1,10 @@
-"""楽天トラベル SimpleHotelSearch API から宿泊候補を取得する。
+"""楽天トラベル API から宿泊候補を取得する。
 
-エンドポイント: Travel/SimpleHotelSearch/20170426
-ドキュメント: https://webservice.rakuten.co.jp/documentation/simple-hotel-search
+利用 API:
+    - VacantHotelSearch (優先): 日付・人数指定で実際の空室料金を取得
+      エンドポイント: Travel/VacantHotelSearch/20170426
+    - SimpleHotelSearch (フォールバック): 日付指定なしで施設情報と最安値目安を取得
+      エンドポイント: Travel/SimpleHotelSearch/20170426
 
 環境変数:
     RAKUTEN_APPLICATION_ID  必須
@@ -10,9 +13,8 @@
     SITE_BASE_URL           任意（Referer ヘッダー用、登録アプリ URL と一致させること）
 
 注意:
-    SimpleHotelSearch は施設情報のみ返す（空室・料金検索は VacantHotelSearch）。
-    価格は hotelMinCharge（1部屋1泊最安値の目安）を使用する。
     緯度経度は datumType=1（世界測地系 WGS84、度単位）で送受信する。
+    VacantHotelSearch が 0 件 or 失敗の場合、SimpleHotelSearch にフォールバックする。
 """
 
 from __future__ import annotations
@@ -27,7 +29,8 @@ from .pack import LodgingOption
 
 logger = logging.getLogger(__name__)
 
-_ENDPOINT = "https://openapi.rakuten.co.jp/engine/api/Travel/SimpleHotelSearch/20170426"
+_VACANT_ENDPOINT = "https://openapi.rakuten.co.jp/engine/api/Travel/VacantHotelSearch/20170426"
+_SIMPLE_ENDPOINT = "https://openapi.rakuten.co.jp/engine/api/Travel/SimpleHotelSearch/20170426"
 _TIMEOUT_SEC = 8
 _MAX_RESULTS = 5  # LLM プロンプトに載せる最大件数
 
@@ -75,32 +78,105 @@ def fetch_lodging_options(
         return []
 
     affiliate_id = os.environ.get("RAKUTEN_AFFILIATE_ID", "")
+    site_base_url = os.environ.get("SITE_BASE_URL", "https://hackathon-2026-04-13.vercel.app/")
+    headers = {"Referer": site_base_url}
 
-    params: dict[str, Any] = {
+    common_params: dict[str, Any] = {
         "applicationId": app_id,
         "accessKey": access_key,
         "format": "json",
         "latitude": lat,
         "longitude": lng,
-        "searchRadius": 3,      # 半径 3km
-        "datumType": 1,         # WGS84 度単位（省略時は日本測地系・秒単位になり別場所を検索）
+        "searchRadius": 3,
+        "datumType": 1,
         "hits": _MAX_RESULTS,
-        "sort": "standard",     # 近い順
-        "responseType": "middle",
+        "sort": "standard",
     }
     if affiliate_id:
-        params["affiliateId"] = affiliate_id
-
-    site_base_url = os.environ.get("SITE_BASE_URL", "https://hackathon-2026-04-13.vercel.app/")
-    headers = {"Referer": site_base_url}
+        common_params["affiliateId"] = affiliate_id
 
     logger.info(
-        "rakuten lodging search: region=%s lat=%.4f lng=%.4f max_charge=%d",
-        region, lat, lng, max_charge_per_night,
+        "rakuten lodging search: region=%s lat=%.4f lng=%.4f max_charge=%d checkin=%s checkout=%s adult=%d",
+        region, lat, lng, max_charge_per_night, checkin_date, checkout_date, adult_num,
     )
 
+    # VacantHotelSearch で実際の空室・料金を取得（優先）
+    results = _fetch_vacant(
+        common_params=common_params,
+        headers=headers,
+        checkin_date=checkin_date,
+        checkout_date=checkout_date,
+        adult_num=adult_num,
+        max_charge_per_night=max_charge_per_night,
+    )
+
+    if results:
+        logger.info("rakuten lodging: VacantHotelSearch で %d 件取得", len(results))
+        return results
+
+    # フォールバック: SimpleHotelSearch（日付・人数指定不要、hotelMinCharge を参考価格として使用）
+    logger.info("rakuten lodging: VacantHotelSearch が 0 件 → SimpleHotelSearch にフォールバック")
+    return _fetch_simple(
+        common_params=common_params,
+        headers=headers,
+        max_charge_per_night=max_charge_per_night,
+    )
+
+
+def _fetch_vacant(
+    common_params: dict[str, Any],
+    headers: dict[str, str],
+    checkin_date: str,
+    checkout_date: str,
+    adult_num: int,
+    max_charge_per_night: int,
+) -> list[LodgingOption]:
+    """VacantHotelSearch で実際の空室・1泊料金を取得する。失敗時は空リストを返す。"""
+    params = {
+        **common_params,
+        "checkinDate": checkin_date.replace("-", ""),   # YYYYMMDD 形式
+        "checkoutDate": checkout_date.replace("-", ""),
+        "adultNum": adult_num,
+        "maxCharge": max_charge_per_night,
+    }
+
     try:
-        resp = requests.get(_ENDPOINT, params=params, headers=headers, timeout=_TIMEOUT_SEC)
+        resp = requests.get(_VACANT_ENDPOINT, params=params, headers=headers, timeout=_TIMEOUT_SEC)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.HTTPError as e:
+        body_summary = ""
+        try:
+            body_summary = resp.text[:500]
+        except Exception:
+            pass
+        logger.warning("VacantHotelSearch 失敗: %s (body: %r)", e, body_summary)
+        return []
+    except requests.RequestException as e:
+        logger.warning("VacantHotelSearch リクエスト失敗: %s", e)
+        return []
+
+    raw_hotels = data.get("hotels", [])
+    logger.info("VacantHotelSearch: %d 件取得", len(raw_hotels))
+
+    results = []
+    for entry in raw_hotels:
+        opt = _to_lodging_option_vacant(entry)
+        if opt is not None:
+            results.append(opt)
+    return results
+
+
+def _fetch_simple(
+    common_params: dict[str, Any],
+    headers: dict[str, str],
+    max_charge_per_night: int,
+) -> list[LodgingOption]:
+    """SimpleHotelSearch で施設情報 + 最安値目安を取得する。"""
+    params = {**common_params, "responseType": "middle"}
+
+    try:
+        resp = requests.get(_SIMPLE_ENDPOINT, params=params, headers=headers, timeout=_TIMEOUT_SEC)
         resp.raise_for_status()
         data = resp.json()
     except requests.HTTPError as e:
@@ -115,22 +191,102 @@ def fetch_lodging_options(
     except requests.RequestException as e:
         raise RakutenLodgingError(f"楽天トラベル API リクエスト失敗: {e}") from e
 
-    # レスポンス構造（formatVersion=1 デフォルト）:
-    # {"hotels": [{"hotel": [{"hotelBasicInfo": {...}}, {"hotelRatingInfo": {...}}]}, ...]}
     raw_hotels = data.get("hotels", [])
-    logger.info("rakuten lodging: %d 件取得 (max_charge フィルタ前)", len(raw_hotels))
+    logger.info("SimpleHotelSearch: %d 件取得 (max_charge フィルタ前)", len(raw_hotels))
 
     results = []
     for entry in raw_hotels:
         opt = _to_lodging_option(entry)
         if opt is None:
             continue
-        # 価格上限フィルタ（SimpleHotelSearch は API 側で maxCharge 指定不可のため client 側で絞る）
         if opt.price_jpy_per_night <= max_charge_per_night:
             results.append(opt)
 
-    logger.info("rakuten lodging: %d 件（max_charge=%d 以下）", len(results), max_charge_per_night)
+    logger.info("SimpleHotelSearch: %d 件（max_charge=%d 以下）", len(results), max_charge_per_night)
     return results
+
+
+def _to_lodging_option_vacant(hotel_entry: dict) -> LodgingOption | None:
+    """VacantHotelSearch のレスポンスエントリを LodgingOption に変換する。
+
+    VacantHotelSearch の構造 (formatVersion=1):
+        hotel_entry = {
+            "hotel": [
+                {"hotelBasicInfo": {...}},
+                {"hotelRatingInfo": {...}},
+                {"roomInfo": [{"roomBasicInfo": {...}, "dailyCharge": {"stayDate": [{"rakutenCharge": 15000, ...}]}}]},
+            ]
+        }
+    """
+    try:
+        hotel_list = hotel_entry.get("hotel", [])
+        if not hotel_list:
+            return None
+
+        info: dict = {}
+        rating_info: dict = {}
+        room_info_list: list = []
+
+        for item in hotel_list:
+            if "hotelBasicInfo" in item:
+                info = item["hotelBasicInfo"]
+            elif "hotelRatingInfo" in item:
+                rating_info = item["hotelRatingInfo"]
+            elif "roomInfo" in item:
+                room_info_list = item["roomInfo"]
+
+        if not info:
+            return None
+
+        name = info.get("hotelName", "")
+        hotel_lat = info.get("latitude")
+        hotel_lng = info.get("longitude")
+        url = info.get("hotelInformationUrl") or info.get("planListUrl")
+        hotel_id = str(info.get("hotelNo", ""))
+
+        # VacantHotelSearch の実際の料金を取得（1泊あたりの最安値）
+        # chargeFlag=0: rakutenCharge は大人1名あたりの料金 → total が1室合計
+        # chargeFlag=1: rakutenCharge は1室あたりの料金（total も同じ）
+        # price_jpy_per_night には「1室あたりの1泊料金」として total を使う
+        price: int | None = None
+        for room in room_info_list:
+            daily = room.get("dailyCharge", {})
+            stay_dates = daily.get("stayDate", [])
+            for stay in stay_dates:
+                total = stay.get("total")
+                # total が取れない場合は rakutenCharge で代用
+                charge = total if isinstance(total, (int, float)) and total > 0 else stay.get("rakutenCharge")
+                if isinstance(charge, (int, float)) and charge > 0:
+                    # 最安値の部屋タイプを採用
+                    if price is None or int(charge) < price:
+                        price = int(charge)
+
+        # 部屋料金が取れなかった場合は hotelMinCharge にフォールバック
+        if price is None:
+            price = info.get("hotelMinCharge")
+
+        if not name or price is None:
+            return None
+
+        review_average: float | None = None
+        ra = rating_info.get("reviewAverage")
+        if isinstance(ra, (int, float)) and 0 <= ra <= 5:
+            review_average = float(ra)
+
+        place_id = f"rakuten_{hotel_id}" if hotel_id else f"rakuten_{name[:20]}"
+
+        return LodgingOption(
+            place_id=place_id,
+            name=name,
+            price_jpy_per_night=int(price),
+            lat=float(hotel_lat) if hotel_lat is not None else None,
+            lng=float(hotel_lng) if hotel_lng is not None else None,
+            url=url,
+            rating=review_average,
+        )
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        logger.warning("rakuten vacant hotel entry parse error: %s — %s", e, hotel_entry)
+        return None
 
 
 def _to_lodging_option(hotel_entry: dict) -> LodgingOption | None:
