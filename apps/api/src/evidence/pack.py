@@ -165,6 +165,10 @@ class LodgingOption(_PackBase):
     lat: float | None = None
     lng: float | None = None
     url: str | None = None
+    # Phase 3 polish 案 D 第 3 段 (2026-04-28): 楽天評価を引き継いで Evidence Modal で
+    # 「~ 不明」を消す。楽天 hotelRatingInfo.reviewAverage が取得できれば 0.0〜5.0 の
+    # 範囲、取れなかった場合は None。
+    rating: float | None = None
 
 
 # ==============================

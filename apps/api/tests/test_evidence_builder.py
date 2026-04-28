@@ -1011,7 +1011,10 @@ def test_rakuten_lodging_empty_does_not_break_pack(mock_search, mock_lodging):
 
 
 def test_lodging_to_place_point_conversion():
-    """_lodging_to_place_point が LodgingOption → PlacePoint に正しく変換することを単体検証。"""
+    """_lodging_to_place_point が LodgingOption → PlacePoint に正しく変換することを単体検証。
+
+    Phase 3 polish 案 D 第 3 段 (2026-04-28): rating + price_level も引き継がれる。
+    """
     from src.evidence.builder import _lodging_to_place_point
 
     lo = LodgingOption(
@@ -1021,6 +1024,7 @@ def test_lodging_to_place_point_conversion():
         lat=35.5,
         lng=139.5,
         url="https://example.com/",
+        rating=4.3,
     )
     pp = _lodging_to_place_point(lo)
     assert pp.place_id == "rakuten_99999"
@@ -1032,8 +1036,10 @@ def test_lodging_to_place_point_conversion():
     # opening_hours は空、unknown_days は全曜日
     assert pp.opening_hours == []
     assert set(pp.opening_hours_unknown_days) == {0, 1, 2, 3, 4, 5, 6}
-    # rating / user_ratings_total は LodgingOption に無いので None
-    assert pp.rating is None
+    # Phase 3 案 D 第 3 段: rating は LodgingOption から引き継がれる
+    assert pp.rating == 4.3
+    # 価格は 12000 → level 2 (8000〜15000 円)
+    assert pp.price_level == 2
     assert pp.user_ratings_total is None
 
 
@@ -1052,6 +1058,51 @@ def test_lodging_to_place_point_handles_missing_coords():
     pp = _lodging_to_place_point(lo)
     assert pp.lat == 0.0
     assert pp.lng == 0.0
+
+
+def test_price_jpy_to_level_thresholds():
+    """Phase 3 polish 案 D 第 3 段: price_jpy → price_level (1〜4) の閾値変換を検証。
+
+    閾値:
+    - level 1: < 8,000 円 (ビジホ・ゲストハウス)
+    - level 2: 8,000 〜 15,000 円 (中位旅館・標準温泉宿)
+    - level 3: 15,000 〜 30,000 円 (上位旅館)
+    - level 4: 30,000 円 以上 (高級旅館・リゾート)
+    """
+    from src.evidence.builder import _price_jpy_to_level
+
+    # 境界値 + 代表値
+    assert _price_jpy_to_level(0) == 1
+    assert _price_jpy_to_level(7_999) == 1
+    assert _price_jpy_to_level(8_000) == 2
+    assert _price_jpy_to_level(12_000) == 2
+    assert _price_jpy_to_level(14_999) == 2
+    assert _price_jpy_to_level(15_000) == 3
+    assert _price_jpy_to_level(25_000) == 3
+    assert _price_jpy_to_level(29_999) == 3
+    assert _price_jpy_to_level(30_000) == 4
+    assert _price_jpy_to_level(100_000) == 4
+
+
+def test_lodging_to_place_point_rating_fallback_to_none():
+    """LodgingOption.rating が None なら PlacePoint.rating も None。
+
+    楽天 hotelRatingInfo が無い hotel (新規開業 / 評価未集計) では None になる挙動を保証。
+    """
+    from src.evidence.builder import _lodging_to_place_point
+
+    lo = LodgingOption(
+        place_id="rakuten_no_rating",
+        name="評価無し宿",
+        price_jpy_per_night=10000,
+        lat=35.0,
+        lng=139.0,
+        rating=None,
+    )
+    pp = _lodging_to_place_point(lo)
+    assert pp.rating is None
+    # price_level は引き継がれる (10000 → level 2)
+    assert pp.price_level == 2
 
 
 # ==============================
