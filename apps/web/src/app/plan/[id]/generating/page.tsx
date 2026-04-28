@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
-import { ApiError, postPlanGenerate, updatePlanStatus } from "@/lib/api";
+import { postPlanGenerate, updatePlanStatus } from "@/lib/api";
+import { classifyError } from "@/lib/errorClassifier";
 import { fetchTransitMatrix } from "@/lib/transit";
+import { useFormDraftStore } from "@/stores/formDraftStore";
 import {
   getActiveSession,
   useGenerationSessionStore,
@@ -154,19 +156,13 @@ export default function GeneratingPage() {
         // 重複 generate の懸念は startedRef による 1 回ガード + React Query 側の整合で緩和。
         setStep("ready-mock");
       } catch (err) {
-        const message = (() => {
-          if (err instanceof ApiError) {
-            if (err.status === 422) return "プラン生成の検証に失敗しました（422）。スポット情報の整合性チェックで問題が発生しました。";
-            if (err.status === 429) return "リクエストが集中しています（429）。少し時間をおいてから再試行してください。";
-            if (err.status === 502 || err.status === 503 || err.status === 504) return `APIサーバーが応答していません（${err.status}）。しばらくしてから再試行してください。`;
-            if (err.status === 500) return `サーバー内部エラー（500）: ${err.message}`;
-            return `エラーが発生しました（${err.status}）: ${err.message}`;
-          }
-          if (err instanceof TypeError && (err.message.includes("fetch") || err.message.includes("network"))) return "サーバーに接続できませんでした。ネットワーク接続を確認してください。";
-          if (err instanceof DOMException && err.name === "AbortError") return "接続がタイムアウトしました。しばらくしてから再試行してください。";
-          return err instanceof Error ? err.message : "生成に失敗しました";
-        })();
-        setError(message);
+        const errorInfo = classifyError(err);
+        // 入力ページ側で失敗理由を表示できるよう draft に書き戻す（タスク 1+3）。
+        // /plan/new submit 時に saveDraft 済なので draft は通常存在する。
+        useFormDraftStore.getState().setDraftError(errorInfo);
+        setError(errorInfo.detail
+          ? `${errorInfo.message} — ${errorInfo.detail}`
+          : errorInfo.message);
         setStep("error");
         // status を failed に更新（失敗時も session は保持せず破棄、再入力からやり直させる）
         clearSession();
@@ -174,6 +170,8 @@ export default function GeneratingPage() {
         void updatePlanStatus(urlPlanId, "failed").catch((e) => {
           console.warn("updatePlanStatus(failed) failed", e);
         });
+        // 自動で /plan/new に戻す（draft + error が hydrate される）。
+        router.replace("/plan/new");
       }
     };
 
