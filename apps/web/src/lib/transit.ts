@@ -492,7 +492,14 @@ export async function fetchTransitMatrix(
   // バッチ投入時と per-call timeout の両方でこの deadline を参照する。
   const deadlineEpochMs = Date.now() + globalDeadlineMs;
 
-  const undirected = selectPairs(places, distanceKm, maxPairs);
+  // Phase 3 polish 案 D 第 5 段 (2026-04-28): 楽天 lodging (place_id が `rakuten_` prefix)
+  // は Google Maps DirectionsService が認識せず INVALID_REQUEST を返すため、transit
+  // fetch の対象から除外する。LLM の slot 候補としては pack.places に残る (forced 注入
+  // の効果は維持)、ただし transit_matrix には乗らないので assembler 側の self-loop /
+  // 連泊 lodging transit skip path で吸収される設計。
+  const transitablePlaces = places.filter((p) => !p.place_id.startsWith("rakuten_"));
+
+  const undirected = selectPairs(transitablePlaces, distanceKm, maxPairs);
   const directed: [EvidencePlacesPlaceSummary, EvidencePlacesPlaceSummary][] = [];
   for (const [a, b] of undirected) {
     directed.push([a, b]);
