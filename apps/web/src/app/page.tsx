@@ -10,7 +10,7 @@ const features: Feature[] = [
   {
     number: "01",
     label: "EVIDENCE-BASED PLACES",
-    title: "実在するスポット だけを提案する",
+    title: "実在するスポットだけを提案する",
     description:
       "Google PlacesのAPIを使って実際にある店や観光地のみを提案します。",
     icon: <MapTrifold size={88} weight="duotone" />,
@@ -18,7 +18,7 @@ const features: Feature[] = [
   {
     number: "02",
     label: "TIME-AWARE PLAN",
-    title: "時間的に成立する 旅程を組む",
+    title: "時間的に成立する旅程を組む",
     description: "Google MapsのAPIを使って移動時間を計算しています。",
     icon: <Calendar size={88} weight="duotone" />,
   },

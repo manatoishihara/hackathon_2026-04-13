@@ -322,7 +322,7 @@ export default function NewPlanPage() {
             どこへ、誰と、どんな旅にしますか？
           </h1>
           <p className="max-w-xl text-sm leading-[1.85] text-[color:var(--color-text-primary)] opacity-80">
-            参加者 2〜5 人の希望と予算配分を入力してください。LLM がその場で合意案を組み立てます。
+            参加者 2〜5 人の希望と予算配分を入力してください。
           </p>
         </div>
       </header>
@@ -507,12 +507,12 @@ export default function NewPlanPage() {
             role="status"
             aria-live="polite"
             data-testid="missing-items-hint"
-            className="flex items-start gap-3 rounded-md border-l-4 border-[color:var(--color-accent)] bg-[color:var(--color-accent)]/8 p-4 text-sm leading-relaxed"
+            className="flex items-start gap-3 rounded-md border border-[color:var(--color-evidence-estimated)] border-l-4 bg-[color:var(--color-evidence-estimated)]/8 p-4 text-sm leading-relaxed"
           >
             <Info
               size={20}
               weight="bold"
-              className="mt-0.5 shrink-0 text-[color:var(--color-accent)]"
+              className="mt-0.5 shrink-0 text-[color:var(--color-evidence-estimated)]"
             />
             <div className="flex flex-col gap-1.5">
               <p className="font-semibold text-[color:var(--color-text-primary)]">

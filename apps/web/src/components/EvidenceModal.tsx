@@ -100,7 +100,7 @@ export function EvidenceModal({ item, open, onOpenChange }: Props) {
               target="_blank"
               rel="noopener noreferrer"
               aria-label="楽天トラベルで詳細を開く（新しいタブ）"
-              className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--color-accent)] bg-[color:var(--color-surface)] px-3 py-1.5 text-xs font-medium text-[color:var(--color-accent)] transition-colors hover:bg-[color:var(--color-accent)] hover:text-[color:var(--color-surface)]"
+              className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--color-accent)] bg-[color:var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[color:var(--color-surface)] transition-opacity hover:opacity-90"
             >
               <ArrowSquareOut size={14} weight="bold" />
               楽天トラベルで見る

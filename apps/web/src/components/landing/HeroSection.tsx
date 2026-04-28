@@ -32,15 +32,15 @@ export function HeroSection() {
         transition={{ duration: 0.9, delay: 0.55, ease: easing }}
         className="mt-12 max-w-md text-base leading-[1.95] text-[color:var(--color-text-primary)]"
       >
-        みんなで 1 画面を囲んで、
+        みんなで1画面を囲んで、
         <span className="relative mx-1 inline-block">
-          <span className="relative z-10">その場で合意する</span>
+          <span className="relative z-10">AIと一緒に理想の旅行を計画する</span>
           <span
             aria-hidden
             className="absolute inset-x-0 bottom-0.5 z-0 h-2 bg-[color:var(--color-accent)] opacity-40"
           />
         </span>
-        旅行計画。
+        。
       </motion.p>
 
       <motion.div
