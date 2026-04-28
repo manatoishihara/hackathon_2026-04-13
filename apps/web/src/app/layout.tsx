@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     template: "%s | Routeful",
   },
   description:
-    "対面で使う AI 旅行計画ツール。実在するスポット・正確な交通・根拠ある予算まで提示する evidence-based プランニング。",
+    "対面で使う AI 旅行計画ツール。実在するスポット・正確な移動時間まで提示する正確なプランニング。",
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },

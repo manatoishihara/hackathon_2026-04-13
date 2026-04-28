@@ -22,9 +22,9 @@ type Step =
   | "error";
 
 const STEP_LABELS: Record<Step, string> = {
-  "loading-session": "搭乗手続き",
+  "loading-session": "準備",
   "fetching-transit": "ルート計算",
-  "generating-plan": "プラン編集",
+  "generating-plan": "プラン作成",
   "ready-mock": "サーバー応答待ち",
   done: "完了",
   error: "エラー",
@@ -201,12 +201,12 @@ export default function GeneratingPage() {
 
   const headline =
     step === "error"
-      ? "離陸できませんでした"
+      ? "プランを作成できませんでした"
       : step === "ready-mock"
         ? "サーバーの応答を待っています"
         : step === "done"
-          ? "目的地に到着しました"
-          : "プランを編んでいます";
+          ? "プランが完成しました"
+          : "プランを作成しています";
 
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col items-center justify-center gap-10 px-6 py-16 text-center">
