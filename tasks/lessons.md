@@ -27,6 +27,37 @@
 
 ## ログ
 
+## 2026-04-28: 並行 branch で同機能 (楽天 VacantHotelSearch) を実装、merge 衝突をハイブリッドで resolve
+- 問題: `feat/cost-and-evidence-verified` (Task A3、VacantHotelSearch only + per-person 割算) を develop から派生して 3 commit 積んだ後、origin/develop に既に別作業者の VacantHotelSearch + SimpleHotelSearch fallback ハイブリッド実装 (commit `2d72749`) が入っており、`apps/api/src/evidence/lodging.py` と `apps/api/tests/test_lodging.py` で大規模 conflict が発生
+- 原因: branch を切る前に `git fetch && git log origin/develop` で「上流に類似実装が進行中か」を確認していなかった。同じ user 要望 (楽天で実価格取得) に対して 2 つの作業ストリームが並行進行
+- ルール: **branch を新規作成する直前に `git fetch origin && git log --oneline <base>..origin/develop` で上流が触ったファイルと commit 内容を必ず確認する**。同機能の commit が既にあれば PR 重複なので、自分の作業を rebase or 上流の実装に合流させる方針を user と先に合意する
+- 解決: 「両方のいいとこどり」方針で merge: origin の hybrid 構造 (Vacant 失敗時 Simple fallback) を base にして、我々の per-person 化 (`total // adult_num`) を `_fetch_vacant` / `_fetch_simple` の post-process (`_to_per_person` helper) として後付けで組み込んだ。test 期待値も per-room → per-person (adult_num=2 で除算した値) に更新。lodging.py 16 件 PASS
+- → 1 回目なので lessons 記録のみ。2 回目に同種衝突が起きたら `.claude/rules/` に昇格し、branch 切る前の上流 fetch を強制する運用を検討
+
+## 2026-04-28: 楽天トラベル VacantHotelSearch — chargeFlag と total の使い分け
+- **発見（実 API レスポンスで判明）**: `dailyCharge` に `chargeFlag` フィールドがあり、`rakutenCharge` の意味が変わる
+  - `chargeFlag=0`: `rakutenCharge` = 大人1名あたりの料金（2名なら ×2 が必要）
+  - `chargeFlag=1`: `rakutenCharge` = 1室あたりの料金
+  - `total` は **chargeFlag に関わらず常に「1室あたりの合計料金」**（実例: rakutenCharge=13200 × 2名 = total=26400）
+- **修正**: 当初 `rakutenCharge` をそのまま `price_jpy_per_night` に使っていたが、`total` を使うように変更
+- **1人あたりの料金計算**: `total ÷ adultNum`（例: 26,400 ÷ 2 = 13,200円/人）
+- **ルール**: VacantHotelSearch の料金取得には必ず `total` を使う。`rakutenCharge` は `chargeFlag` 次第で per-person にも per-room にもなるため混乱の原因
+- **参照**: `docs/rakuten-vacant-hotel-pricing.md` に chargeFlag 解説 + Python 実装例 + 複数泊の計算方法をまとめた
+
+## 2026-04-28: 楽天トラベル VacantHotelSearch で1泊の実際の料金を取得する実装
+- **背景**: SimpleHotelSearch の `hotelMinCharge` は「目安の最安値」で日付・人数指定なし。実際の空室確認と 1泊料金を取得するには VacantHotelSearch を使う必要があった
+- **実装方針（優先 + フォールバック）**:
+  - VacantHotelSearch を優先呼び出し（`checkinDate`, `checkoutDate`, `adultNum`, `maxCharge` で絞り込み）
+  - 0 件 or HTTP エラーの場合のみ SimpleHotelSearch にフォールバック
+  - VacantHotelSearch の料金は `roomInfo[].dailyCharge.stayDate[].total`（1室あたり合計）を採用
+- **チェックイン日フォーマット**: VacantHotelSearch は `checkinDate=20260601` (YYYYMMDD) 形式。入力は `"2026-06-01"` なので `.replace("-", "")` で変換
+- **SimpleHotelSearch との住み分け**:
+  - VacantHotelSearch は日程の空室がある宿のみ返す（正確な情報）
+  - SimpleHotelSearch は日程無関係に施設情報を返す（候補が 0 件になりにくい）
+  - 優先パスが空のときだけフォールバックすることで「実価格 > 参考価格」の順序を守る
+- **ルール**: 楽天トラベルの `hotelMinCharge` は参考価格であり確定価格ではない。日程・人数指定の実価格が必要なら VacantHotelSearch を使う
+- **テスト**: 15 件 PASS (VacantHotelSearch 優先パス 5 件 / フォールバックパス 10 件)
+
 ## 2026-04-28: Phase 3 polish 案 D 第 8 段 — 楽天 lodging only 方針への切替で Google Places の複合カテゴリ hotel 起因の 422 を構造的に解消
 - **背景**: 第 2-7 段の forced 注入後の verify で 2 連続 422、kind_summary 全 attempts `item_type_category_mismatch` 支配。log 解析で:
   - LLM が複合 hotel `ChIJU2N6Vn... category=['hotel', 'banquet_hall', 'wedding_venue', 'public_bath', 'chinese_restaurant', 'spa', 'french_restaurant', 'japanese_restaurant', 'lodging', 'restaurant', ...]` を **meal slot に誤選**

@@ -17,13 +17,13 @@ export function StatsCard({ items }: Props) {
   const rows: Array<[string, string]> = [
     ["移動", formatDurationMin(stats.transitMin)],
     ["想定予算", formatJpy(stats.totalCost)],
-    ["立ち寄り", `${stats.spotsCount}か所`],
+    ["訪れる場所", `${stats.spotsCount}か所`],
   ];
 
   return (
     <section className="flex flex-col gap-3 rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-surface)] p-4">
       <h3 className="font-heading text-sm font-medium text-[color:var(--color-text-primary)]">
-        その日の輪郭
+        詳細
       </h3>
       <dl className="flex flex-col gap-1.5">
         {rows.map(([k, v]) => (

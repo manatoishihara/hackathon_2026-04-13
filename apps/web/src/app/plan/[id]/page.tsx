@@ -12,7 +12,6 @@ import { MapMiniStrip } from "@/components/MapMiniStrip";
 import { DayTabs } from "@/components/plan-view/DayTabs";
 import { PlanHeader } from "@/components/plan-view/PlanHeader";
 import { StatsCard } from "@/components/plan-view/StatsCard";
-import { SuggestionCard } from "@/components/plan-view/SuggestionCard";
 import { LoadingState } from "@/components/ui/states/LoadingState";
 import { SkeletonTimeline } from "@/components/ui/states/SkeletonPlanItem";
 import { ErrorState } from "@/components/ui/states/ErrorState";
@@ -152,7 +151,6 @@ export default function PlanPage() {
           </section>
           <MapMiniStrip items={activeItems} />
           <StatsCard items={activeItems} />
-          <SuggestionCard />
         </aside>
       </div>
     </main>
