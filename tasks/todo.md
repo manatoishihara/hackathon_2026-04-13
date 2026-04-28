@@ -9,6 +9,33 @@
 
 ---
 
+## 🟡 Phase 3 polish 第 9 段 + Modal priceRange 配線 hotfix (2026-04-28、現状)
+
+**現在のブランチ状況**:
+- `develop` (origin/develop と同期、HEAD `d0bf6a0`): 第 9 段 6 タスク本体は merge 済 (`5794d6d` + `1ad4cf9`)、追加で origin の `6b58c6e 日本語の修正` も含む
+- `fix/evidence-modal-price-range-display` (HEAD `5e1db79`、ahead 1 / behind 2): Modal priceRange 配線 hotfix (第 9 段 Task A1 で抽出した priceRange を UI まで通す配線抜け fix)、未 push、develop に未 merge
+- `feat/cost-and-evidence-verified` (origin push 済、HEAD `1ad4cf9`): 第 9 段の作業ブランチ (既に develop merge 済)
+
+**Modal priceRange 配線 hotfix の経緯 (lessons.md「Evidence Modal の priceRange 配線抜け」エントリ参照)**:
+- 第 9 段 Task A1 で backend から UI までの 5 段階のうち 4 段階 (places.py 抽出 / pack.py field / schemas / serialize) を実装したが、最後の **Modal 引数 wire-up が抜けた**
+- 結果: `evidence.price_range_jpy` は API レスポンスにある、shared-types 型もある、しかし `EvidenceModal.tsx:formatPriceLevel` が引数で受け取ってないので UI に表示されない
+- user が GORA BREWERY&GRILL の Modal で「価格帯 ¥¥¥」(数値なし) を確認、報告
+- hotfix: `formatPriceLevel(priceRange, level, costJpy, costConfidence)` に priceRange を引数 1 番目で追加、最優先で「￥1,500〜￥3,000」表示、不在時は ¥¥¥ 記号 fallback
+- test 3 件追加 (range / 単一値 / fallback)、Web test 27/27 PASS、tsc clean
+
+**次セッション最初の手順 (user 手動)**:
+1. `fix/evidence-modal-price-range-display` を develop に merge:
+   ```bash
+   git checkout develop
+   git merge --no-ff fix/evidence-modal-price-range-display
+   # conflict (EvidenceModal.tsx) 出たら formatPriceLevel 新 signature を採用 + 日本語修正 (origin) を維持
+   git push origin develop
+   ```
+2. Vercel + Render auto deploy 完了後、本番 URL で再 submit
+3. 食事 item の Evidence Modal で「￥X,XXX〜￥Y,YYY」レンジ表示を確認 (priceRange が取れる place の場合)
+
+---
+
 ## 🟢 Phase 3 polish 案 D 第 9 段 (2026-04-28、6 タスク sub-agent 実装完了 working tree、user commit 待ち)
 
 `tasks/plans/2026-04-28-cost-and-evidence-fixes.md` の計画書に基づき、6 タスクを sub-agent dispatch で実装完了。working tree 編集のみ、user 手動 commit 待ち。

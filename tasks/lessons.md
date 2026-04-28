@@ -27,6 +27,13 @@
 
 ## ログ
 
+## 2026-04-28: Evidence Modal の priceRange 配線抜け — backend で抽出 + serialize しても UI 引数で受け取らないと表示されない
+- 問題: 第 9 段 Task A1 で `places.py` に `_parse_price_range_jpy` 実装、`PlacePoint.price_range_jpy` フィールド追加、`plan_routes.py` で `evidence.price_range_jpy = {start, end}` serialize、`packages/shared-types/src/index.ts` の `Evidence` 型にも `price_range_jpy?: { start: number; end: number }` 追加。**しかし `EvidenceModal.tsx:formatPriceLevel` が `evidence.price_range_jpy` を引数で受け取らず無視していた**。GORA BREWERY&GRILL のような Google Places で priceRange が取れている place で「価格帯 ¥¥¥」と price_level 記号のみ表示され、user が「数字が入ってない、取れてはいるんじゃないのか」と指摘
+- 原因: 第 9 段の sub-agent 実装で **「データを抽出する」(Task A1) と「UI で表示する」(Modal 配線) を別タスクと意識せず、A1 完了で UI も使えると暗黙に思い込んだ**。実際は formatPriceLevel の signature 変更まで行わないと UI 反映されない。pack.py / schemas / shared-types / evidence serialize / Modal の 5 段階のうち 4 段階は実装したが Modal 引数追加が抜けた
+- 解決: `formatPriceLevel(priceRange, level, costJpy, costConfidence)` に引数 1 番目 priceRange 追加、優先順位を「priceRange あり → 「￥1,500〜￥3,000」表示 / 不在 → ¥¥¥ 記号 / cost_jpy + estimated → 「￥X,XXX (推定)」 / 不明」に。test 3 件追加 (range / 単一値 / fallback)。commit `5e1db79`
+- ルール: **新 field を backend → API → UI まで通す改修では「Modal / page component の引数 (props) まで wire-up したか」をチェックリスト最終項目に置く**。テストでは「render → 値が見えるか」までやらないと実害が見えない、formatXxx 関数の単体 test だけでは Modal の caller 側で引数渡し忘れを検出できない (今回はまさにそれ)
+- → 1 回目だが「データ抽出 = 表示」と思い込む同種ミスは将来も起きうる。2 回目記録時に `.claude/rules/frontend-design.md` の「データを backend で抽出したら UI props まで通す確認」項目に昇格候補
+
 ## 2026-04-28: 並行 branch で同機能 (楽天 VacantHotelSearch) を実装、merge 衝突をハイブリッドで resolve
 - 問題: `feat/cost-and-evidence-verified` (Task A3、VacantHotelSearch only + per-person 割算) を develop から派生して 3 commit 積んだ後、origin/develop に既に別作業者の VacantHotelSearch + SimpleHotelSearch fallback ハイブリッド実装 (commit `2d72749`) が入っており、`apps/api/src/evidence/lodging.py` と `apps/api/tests/test_lodging.py` で大規模 conflict が発生
 - 原因: branch を切る前に `git fetch && git log origin/develop` で「上流に類似実装が進行中か」を確認していなかった。同じ user 要望 (楽天で実価格取得) に対して 2 つの作業ストリームが並行進行
