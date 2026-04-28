@@ -447,7 +447,7 @@ export default function NewPlanPage() {
 
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-[color:var(--color-text-secondary)]">
-            予算配分（合計 100%）
+            予算配分
           </h2>
           <Controller
             control={control}

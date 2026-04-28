@@ -1,8 +1,4 @@
-import {
-  Calendar,
-  MapTrifold,
-  ShieldCheck,
-} from "@phosphor-icons/react/dist/ssr";
+import { Calendar, MapTrifold } from "@phosphor-icons/react/dist/ssr";
 import {
   FeatureSection,
   type Feature,
@@ -16,24 +12,15 @@ const features: Feature[] = [
     label: "EVIDENCE-BASED PLACES",
     title: "実在するスポット だけを提案する",
     description:
-      "Google Places で検証した店や観光地のみ提案。LLM が架空の店名を作り出す心配はありません。",
+      "Google PlacesのAPIを使って実際にある店や観光地のみを提案します。",
     icon: <MapTrifold size={88} weight="duotone" />,
   },
   {
     number: "02",
     label: "TIME-AWARE PLAN",
     title: "時間的に成立する 旅程を組む",
-    description:
-      "Google Maps の transit 情報で移動時間を計算し、営業時間を踏まえてアイテムを並べます。",
+    description: "Google MapsのAPIを使って移動時間を計算しています。",
     icon: <Calendar size={88} weight="duotone" />,
-  },
-  {
-    number: "03",
-    label: "GROUNDED BUDGET",
-    title: "根拠ある予算を 添える",
-    description:
-      "宿泊・食事・観光・交通ごとに、推定値か検証値かを Evidence バッジで明示します。",
-    icon: <ShieldCheck size={88} weight="duotone" />,
   },
 ];
 
