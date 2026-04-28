@@ -27,6 +27,58 @@
 
 ## ログ
 
+## 2026-04-28: Phase 3 polish 案 1+2+3 verify 結果 — 1/3 成功 (前回 0/3) で改善確認、ただし public_bath only place の pack 混入と楽天 applicationId UUID 形式問題が残課題
+- **verify 結果 (本番 dev で 3 回 submit)**:
+  - Run 1 (14:53:18): **200 OK** ← 案 3 (`outside_opening_hours` reuse fallback) が attempt 3 で発動して救済成功 (`reusing already-used 'ChIJAdpH56ajGWARpFe4ALTyfas' to keep item_type integrity`)
+  - Run 2 (14:55:42): 422
+  - Run 3 (14:57:16): 422
+  - 改善率: 0/3 → 1/3 (33%)、Phase 3 polish の効果は確認できたが demo 安定性として不十分
+- **残課題 1: public_bath / sauna only place の pack 混入 (主因)**
+  - log 繰り返しパターン: LLM が **`category=['public_bath', 'point_of_interest', 'establishment']`** のような「お風呂屋さん only」place を meal slot に誤選 → swap 失敗 → validator catch
+  - 例 1: `ChIJp9Vk7AajGWARUYrjpXc1SYg` (public_bath only) → day1_dinner / day3_dinner に LLM が割当
+  - 例 2: `ChIJAdpH56ajGWARpFe4ALTyfas` (sauna+spa+japanese_restaurant) → 案 3 reuse で救済される (restaurant 含むので meal compatible) が、まず lodging slot に LLM が誤選する → swap で正しい hotel に置換
+  - 真因: `_classify_bucket` で `public_bath` / `sauna` / `spa` は `"other"` 分類、quota 2 件分 pack に入り、LLM が「温泉 = 食事もできる」と誤選
+- **残課題 2: 楽天 applicationId が UUID 形式で API reject 継続**
+  - log: `applicationId=bf17fc69-ec1b-45c9-914e-0885d491a2c7` → `400 wrong_parameter "specify valid applicationId"`
+  - user が「アプリ ID/デベロッパー ID」ページで **デベロッパー ID** (UUID 32 hex chars) を間違えてコピーした可能性大
+  - 正しい値は **アプリ ID (Application ID)** = **18-19 桁数字**
+  - 副次: `affiliateId=53374f89.9deecdc4.53374f8a.b14caea3` も hex.hex 形式で怪しい
+- **追加対策方針 (実装予定)**:
+  - **対策 A: pack pre-filter で public_bath only を除外** (~15 分): `apps/api/src/evidence/builder.py` に `_is_useful_place` 関数追加、`_classify_bucket` が `"other"` を返す place のうち shopping/store/market 系以外は pack 投入時に弾く。public_bath / sauna / spa only の place は pack に入らなくなる
+  - **対策 D: user 作業で楽天 applicationId 再取得** (UUID ではなく数字 ID をコピー): 楽天ウェブサービスのアプリ ID 発行ページで「アプリ ID」(数字) と「デベロッパー ID」(UUID) は別物、必要なのは前者
+- **学び 1 (バグ報告の解釈)**: user の「3 回に 1 回しか生成できない」という体感報告は重要なシグナル。1 回成功した事実は Phase 3 polish の効果実証だが、unstable な生成は demo 提出に致命的なので追加対策必須
+- **学び 2 (pack quality 検証の精緻化)**: 単に「pack に places 17 件あるか」だけでは不十分、**「全 17 件が validator の item_type filter で通るか」**の事前検証ルートが要る。現状は LLM が誤選してから validator catch する事後型で retry コストが高い
+- **学び 3 (外部 API 認証情報の identifier 紛らわしさ)**: 楽天は「アプリ ID」「デベロッパー ID」「アクセストークン」「アフィリエイト ID」の 4 種を同じページに表示しており、user が間違える率が高い。**`.env` template に `# 18-19 桁数字、UUID ではない`** のようなコメントを書いておくべき (rule 昇格候補)
+- **次のアクション**:
+  - Claude: 対策 A を実装 (assembly では救済しきれない、pack 投入時 pre-filter が筋)
+  - user: 楽天アプリ ID の正しい値を再取得 + .env 更新
+
+## 2026-04-28: Phase 3 polish 案 1+2+3 実装 — lodging 多様性 + opening_hours reuse fallback + system prompt 強化 で 422 根治試行
+- **背景**: Phase 3 polish 第 1 弾 (pageSize 倍増 + 「名所」keyword + post-rank sort) を deploy して再 submit したが、本番 dev で **422 再発**。log 解析 (kind_summary 全 attempts `item_type_category_mismatch` 2-3 件支配) で:
+  - LLM が **lodging slot に「サウナ + 飲食 + スパの複合施設」** (`category=['sauna', 'public_bath', 'beauty_salon', 'japanese_restaurant', 'spa', 'restaurant', ...]`) を割当 → validator catch
+  - 真因: pack の lodging 候補が `_bucket_quota` で **2 件しかなく**、重複防止 swap で枯渇 → LLM が苦し紛れに非 lodging を選ぶ
+  - 副因: `outside_opening_hours` 軸の reuse fallback が無く、water 曜定休で candidate=1 縮退時の救済路がない
+  - 構造的副因: `RAKUTEN_APPLICATION_ID 未設定` で楽天トラベル lodging fetch skip (user 作業: App ID 取得 + .env 投入が必要)
+- **user の鋭い指摘**: 「ホテルに関しては楽天トラベルを使えたら解決するという問題ではないか」→ **半分その通り、ただし楽天が動こうが動くまいが robust な状態を作る方向**で 案 1+2+3 全実装する判断
+- **実装内容 (3 つを 1 ブランチで、auto モード)**:
+  - **案 1: bucket_quota lodging +1 増量 + system prompt 強化**
+    - `_bucket_quota`: 各 total_days で lodging quota +1 (1泊: 1→2 / 2泊: 2→3 / 3泊: 3→4 / 5日+: -1→0)。合計 cap 維持 (attraction -1 でバランス)
+    - `prompts/v2.0.0/system.md` rule 6 に「`category` に `spa` / `sauna` / `public_bath` / `restaurant` / `cafe` のみを持ち、`lodging` / `hotel` / `ryokan` / `inn` を一切含まない place は lodging slot 絶対禁止」+「苦し紛れに spa 系より同じ宿の連泊 100 倍マシ」を明示
+  - **案 2: lodging keyword 細分化**
+    - `_BASE_KEYWORD_SUFFIXES` の「旅館 ホテル」(複合 1 keyword) を **「旅館」 + 「ホテル」 + 「温泉宿」** の 3 keyword に分割
+    - `_MAX_KEYWORDS` 8 → 10 (base 6 → 8 + theme + tag 余地 +2)
+    - 効果: pageSize 20 × 3 lodging keyword = 60 lodging 候補 dedup → 5-10 件確保
+  - **案 3: outside_opening_hours reuse fallback**
+    - `assembly.py` の opening_hours mismatch path に v6.2 と同じ reuse fallback を追加
+    - `_find_eligible_alternate_for_slot` が None を返した時、`_find_item_type_compatible_used_place` を呼んで used 集合内で reuse 試行 (関数内で is_place_eligible_for_slot を呼ぶので opening_hours 軸でも自然に救済可能)
+    - 「水曜定休で candidate=1 縮退」のような状況を assembler 内で吸収、422 reach 前に救済
+- **検証**: API 444 PASS (既存 8 base axes / lodging quota 増 / merge / theme / max_10 関連 test を全部更新 + 新規 popularity sort test 維持。既知の test_supabase env 依存 2 件 fail は本変更無関係)
+- **本番効果検証 (working tree、user verify 待ち)**: pnpm dev で再 submit → 大涌谷・芦ノ湖が pack に入り、lodging 候補が 5-10 件確保され、422 自体が解消するか確認予定
+- **学び 1 (構造修正の積み上げ)**: 1 つの blocker (`item_type_category_mismatch` 主因) に対して **複数軸の修正を並行投入**することで根治確率を上げる戦略は MVP 提出フェーズで有効。各軸単独で銀の弾丸ではないが、3 軸併用で「楽天が動こうが動くまいが」robust になる
+- **学び 2 (user の suspicion を真摯に扱う)**: user が「楽天 API が動けば解決するんじゃ?」と指摘したのは正しい観察。ただし「user 作業に依存する解決」を持つ設計は demo 直前に脆い。**user 作業を待たず、独立して動く改善**を優先する判断が正解
+- **学び 3 (reuse fallback の汎用性)**: `_find_item_type_compatible_used_place` は本来 v6.2 で item_type 軸用に作られたが、**関数内で `is_place_eligible_for_slot` を呼ぶ実装**だったため、opening_hours 軸の救済にもそのまま流用可能だった。「単一責任原則」を守る関数設計は副次効用 (将来の別軸救済への流用) を生む
+- **次のアクション (user)**: pnpm dev で再 submit → 結果報告 (200 / 422 + log の kind_summary) → 効果あれば commit 提案、効果なければ追加策 (Region anchor list 等) 検討
+
 ## 2026-04-28: Phase 3 polish 実装 — Places API search の iconic spot coverage 改善 (pageSize 倍増 + 「名所」keyword 追加 + post-rank sort)
 - **背景**: user 報告「箱根プランで本当に箱根の有名どころが取れているのか疑問」→ Network タブで pack 17 件を実態確認 → **大涌谷 / 芦ノ湖 / ポーラ美術館 / 箱根海賊船 / ガラスの森が一切含まれていない**ことが確定。代わりに飛竜の滝 / 玉簾の瀧のような中規模 spot や、地元 meal が 8 件 (3 日 plan で 6 meal slot に対して過剰) で観光地枠を圧迫
 - **実装内容 (3 つを 1 commit)**:

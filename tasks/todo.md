@@ -7,7 +7,22 @@
 
 ## 🏁 進捗サマリ（2026-04-28 確定、demo ready: 2 泊 3 日 plan 完成、4 日 plan は demo スコープ外）
 
-**🟡 Phase 3 polish: iconic spot coverage 改善 (2026-04-28、working tree、本番 verify 待ち)**: user 疑念「箱根プランで本当に箱根の有名どころが取れているのか」を Network タブで実態確認 → pack 17 件中 大涌谷 / 芦ノ湖 / ポーラ美術館 / 箱根海賊船 / ガラスの森 が**一切含まれていない**ことが確定 → 3 つの構造改善を 1 commit で実装:
+**🟡 Phase 3 polish 案 1+2+3 verify 完了 (2026-04-28、1/3 成功で改善確認、追加対策 A 実装予定)**: 本番 dev で 3 回 submit → Run 1 = 200 (案 3 の outside_opening_hours reuse が attempt 3 で発動して救済)、Run 2/3 = 422。改善率 0/3 → 1/3 (33%)、案 1+2+3 の効果は確認できたが demo 安定性として不十分。残課題:
+- **主因: public_bath / sauna only place の pack 混入** → LLM が「温泉 = 食事もできる」と誤判断して meal slot に割当 → validator catch 量産。`_classify_bucket` で `"other"` 分類、quota 2 件分 pack に入る
+- **副因: 楽天 API 未動作 (user が UUID 形式 `bf17fc69-...` を applicationId 欄に入れていた、必要なのは 18-19 桁数字)**
+- **対策 A 実装予定 (~15 分)**: `apps/api/src/evidence/builder.py` に `_is_useful_place` 関数追加、`_classify_bucket` が `"other"` を返す place のうち shopping/store/market 系以外は pack 投入時に弾く。public_bath / sauna / spa only の place を pack pre-filter で除外
+- **対策 D (user 作業)**: 楽天ウェブサービスの「アプリ ID」(数字、デベロッパー ID UUID と別物) を再取得 + .env 更新
+- 詳細: lessons.md「Phase 3 polish 案 1+2+3 verify 結果 — 1/3 成功で改善確認、ただし public_bath only place の pack 混入と楽天 applicationId UUID 形式問題が残課題」エントリ参照
+
+**🟡 Phase 3 polish 案 1+2+3 実装 (2026-04-28、working tree、verify 完了、追加対策 A 続く)**: 第 1 弾 (pageSize 倍増 + 「名所」 + post-rank sort) deploy 後の再 submit で 422 再発、kind_summary 全 attempts `item_type_category_mismatch` 支配。真因 = pack の lodging 候補 2 件で重複防止 swap 枯渇 → LLM が苦し紛れに spa 系を lodging slot に割当 → validator catch。user 指摘「楽天 API 動けば解決するのでは」→ 半分正しいが楽天 user 作業待ちなので、独立 robust な改善を 3 軸並行投入:
+- **案 1: bucket_quota lodging +1 増量 + system prompt 強化** (1 泊 1→2 / 2 泊 2→3 / 3 泊 3→4 / 5 日+ +1、attraction -1 でバランス、合計 cap 維持。system.md rule 6 に「spa / sauna / restaurant のみ持つ place は lodging 絶対禁止」明示)
+- **案 2: lodging keyword 細分化** (「旅館 ホテル」複合 1 keyword → 「旅館」「ホテル」「温泉宿」の 3 keyword、`_MAX_KEYWORDS` 8 → 10。pageSize 20 × 3 で lodging 候補 5-10 件確保)
+- **案 3: outside_opening_hours reuse fallback** (assembly.py の opening_hours mismatch path で v6.2 と同じ reuse logic を追加、`_find_item_type_compatible_used_place` を流用して used 集合内で救済)
+- API 444 PASS (既存 8 base axes / lodging quota 増 / merge / theme / max_10 関連 test 全部更新)
+- **次のアクション (user verify 待ち)**: pnpm dev で再 submit → 大涌谷・芦ノ湖が pack に入るか / 422 解消するか確認 → kind_summary を log で確認
+- 詳細: lessons.md「Phase 3 polish 案 1+2+3 実装 — lodging 多様性 + opening_hours reuse fallback + system prompt 強化 で 422 根治試行」エントリ参照
+
+**🟡 Phase 3 polish 第 1 弾: iconic spot coverage 改善 (2026-04-28、案 1+2+3 で深掘り中)**: user 疑念「箱根プランで本当に箱根の有名どころが取れているのか」を Network タブで実態確認 → pack 17 件中 大涌谷 / 芦ノ湖 / ポーラ美術館 / 箱根海賊船 / ガラスの森 が**一切含まれていない**ことが確定 → 3 つの構造改善を 1 commit で実装:
 - **pageSize 10 → 20** (`places.py:search_by_text` default、Google Places API New 上限)
 - **`rankPreference: "RELEVANCE"` 明示** (将来 Google API デフォルト変更への防御)
 - **`_BASE_KEYWORD_SUFFIXES` に「名所」追加** (5 → 6 軸、`_MAX_KEYWORDS` 7 → 8)
