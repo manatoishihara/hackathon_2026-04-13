@@ -205,20 +205,21 @@ function formatPriceLevel(
   ) {
     return { text: formatJpy(costJpy), dim: false };
   }
-  // priceRange / verified cost_jpy が無い時の fallback: Google Places の
-  // price_level (1〜4) → ¥¥¥¥ 記号
-  if (typeof level === "number" && level >= 1 && level <= 4) {
-    return { text: "¥".repeat(level), dim: false };
-  }
-  // Phase 3 polish 案 D 第 4 段 (2026-04-28): price_level 無しでも、内部で
-  // estimated 値が cost_jpy に埋まっていれば「¥X,XXX (推定)」で表示する。
-  // 「価格帯=不明」と「plan には推定値が出てる」の乖離を解消する狙い。
+  // Phase 3 polish 第 9 段 Modal 配線 hotfix3 (2026-04-28、ITOH DINING ¥¥¥ 表示問題対応):
+  // estimated cost_jpy も「具体的な数値」なので price_level 記号より優先する。
+  // ¥¥¥ 記号 (推定 4 段階) より「￥4,500 (推定)」の方が user に有益。Google Places
+  // で priceRange field が返ってこない restaurant 等のケースで効く。
   if (
     typeof costJpy === "number" &&
     costJpy > 0 &&
     costConfidence === "estimated"
   ) {
     return { text: `${formatJpy(costJpy)} (推定)`, dim: false };
+  }
+  // priceRange / verified cost_jpy / estimated cost_jpy が全て無い時の最後の fallback:
+  // Google Places の price_level (1〜4) → ¥¥¥¥ 記号 (cost_jpy が null の特殊ケース)
+  if (typeof level === "number" && level >= 1 && level <= 4) {
+    return { text: "¥".repeat(level), dim: false };
   }
   return { text: UNKNOWN_VALUE_LABEL, dim: true };
 }

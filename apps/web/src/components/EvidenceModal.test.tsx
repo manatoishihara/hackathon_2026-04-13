@@ -265,6 +265,29 @@ describe("EvidenceModal", () => {
     expect(text).not.toMatch(/価格帯[\s]*¥$/);
   });
 
+  // Phase 3 polish 第 9 段 Modal 配線 hotfix3 (2026-04-28、ITOH DINING ¥¥¥ 問題対応):
+  // estimated cost_jpy も price_level 記号より優先する。Google Places で priceRange
+  // が返ってこない restaurant のケース (assembly が _PRICE_MAP[meal][price_level] で
+  // 推定値を埋めている)。¥¥¥ より「￥4,500 (推定)」の方が具体的で user に有益。
+  it("cost_confidence=estimated + price_level 両方ある場合は cost_jpy が ¥¥¥ より優先", () => {
+    const item = makeItem({
+      cost_jpy: 4500,
+      cost_confidence: "estimated",
+      evidence: {
+        // price_level=3 (¥¥¥) があるが、estimated cost_jpy が優先で 「￥4,500 (推定)」表示
+        price_level: 3,
+        sources: ["Google Places"],
+      },
+    });
+    render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+    const priceLabel = screen.getByText("価格帯");
+    const text = priceLabel.parentElement?.textContent ?? "";
+    expect(text).toContain("4,500");
+    expect(text).toContain("(推定)");
+    // ¥¥¥ ではなく数値 + (推定) の方が表示される
+    expect(text).not.toMatch(/価格帯[\s]*¥¥¥$/);
+  });
+
   it("複数 sources は ' / ' 区切りで連結", () => {
     const item = makeItem({
       evidence: {
