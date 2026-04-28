@@ -400,13 +400,38 @@ def assemble_plan(
                 place = alternate
                 place_id = place.place_id
             else:
-                # 旧設計: raise IneligiblePlaceForSlotError。
-                # 新設計 (v5): warn + accept、validator が後段で catch して retry へ。
-                logger.warning(
-                    "Place %r ineligible for slot %r (opening_hours mismatch on %s); "
-                    "no alternate, accepting (validator will catch and retry)",
-                    place_id, slot_meta["slot_id"], slot_date,
+                # Phase 3 polish 案 3 (2026-04-28): opening_hours 軸の reuse fallback。
+                # v6.2 で item_type 軸の reuse fallback を追加して `item_type_category_mismatch`
+                # を吸収できたが、`outside_opening_hours` 軸は同じ仕組みで救済されていなかった。
+                # 本番 Run で water 曜定休 等の date 依存 mismatch が candidate=1 まで縮退し、
+                # validator catch → 4 attempts 尽きて 422 連発。`_find_item_type_compatible_used_place`
+                # は item_type 適合 + opening_hours 適合 の両方を filter するので opening_hours
+                # 軸の救済にもそのまま使える (関数内で is_place_eligible_for_slot を呼んでいる)。
+                reused = _find_item_type_compatible_used_place(
+                    pack=pack,
+                    used_place_ids=used_place_ids,
+                    item_type=slot_meta["item_type"],
+                    slot_meta=slot_meta,
+                    slot_date=slot_date,
+                    prev_place_id=prev_place_id_for_swap,
                 )
+                if reused is not None:
+                    logger.warning(
+                        "Place %r ineligible for slot %r (opening_hours mismatch on %s); "
+                        "no fresh alternate, reusing already-used %r (category=%s) to keep slot filled",
+                        place_id, slot_meta["slot_id"], slot_date,
+                        reused.place_id, reused.category,
+                    )
+                    place = reused
+                    place_id = place.place_id
+                else:
+                    # 旧設計: raise IneligiblePlaceForSlotError。
+                    # 新設計 (v5): warn + accept、validator が後段で catch して retry へ。
+                    logger.warning(
+                        "Place %r ineligible for slot %r (opening_hours mismatch on %s); "
+                        "no alternate, accepting (validator will catch and retry)",
+                        place_id, slot_meta["slot_id"], slot_date,
+                    )
 
         # opening_hours に収まる範囲に時刻を調整（不適合は slot 時間帯に収められなければ skip せず強行、
         # validator で拾う。将来は代替 place 選定に回す）

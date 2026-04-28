@@ -20,6 +20,8 @@
    - **`activity` slot**: 観光地・体験系のみ (`tourist_attraction`, `museum`, `park`, `zoo`, `aquarium`, `temple`, `shrine`, `art_gallery`, `amusement_park` 等)。**飲食店や宿は割り当てるな**。
    - **`meal` slot**: 飲食店のみ (`restaurant`, `*_restaurant`, `cafe`, `bakery`, `bar`, `meal_takeaway`, `meal_delivery`, `food`)。**観光地 (museum, park, zoo 等) や宿は絶対に割り当てるな**。
    - **`lodging` slot**: 宿泊施設のみ (`lodging`, `hotel`, `ryokan`, `bed_and_breakfast`, `hostel`, `inn`, `guest_house`, `motel`, `resort_hotel`)。**飲食店や観光地は割り当てるな**。
+     - **特に重要 (Phase 3 polish 案 1 で頻発エラー対策)**: `category` に `spa` / `sauna` / `public_bath` / `restaurant` / `*_restaurant` / `cafe` のみを持ち、`lodging` / `hotel` / `ryokan` / `inn` 系を一切含まない place を lodging slot に割り当てるな。たとえ「温泉複合施設」のように見えても、宿泊機能を表す category が無ければ宿ではない。
+     - pack に lodging 候補が少ない場合は、**同じ宿の連泊** (day1_lodging と day2_lodging に同じ place_id) で埋めること。**苦し紛れに spa 系を選ぶより連泊 100 倍マシ**。
    - 各 place の `category` 配列を見て、上記カテゴリと 1 つでも一致するもののみ選ぶ
 7. 連続する slot の place は、`transit_matrix` で到達可能なペアを優先する。到達不能ペアはサーバが挟み直すか拒否する。
 8. **place_id の選び方（重複ポリシー）**:
