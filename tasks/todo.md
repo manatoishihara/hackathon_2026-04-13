@@ -7,6 +7,29 @@
 
 ## 🏁 進捗サマリ（2026-04-28 確定、demo ready: 2 泊 3 日 plan 完成、4 日 plan は demo スコープ外）
 
+**🟡 Phase 3 polish: iconic spot coverage 改善 (2026-04-28、working tree、本番 verify 待ち)**: user 疑念「箱根プランで本当に箱根の有名どころが取れているのか」を Network タブで実態確認 → pack 17 件中 大涌谷 / 芦ノ湖 / ポーラ美術館 / 箱根海賊船 / ガラスの森 が**一切含まれていない**ことが確定 → 3 つの構造改善を 1 commit で実装:
+- **pageSize 10 → 20** (`places.py:search_by_text` default、Google Places API New 上限)
+- **`rankPreference: "RELEVANCE"` 明示** (将来 Google API デフォルト変更への防御)
+- **`_BASE_KEYWORD_SUFFIXES` に「名所」追加** (5 → 6 軸、`_MAX_KEYWORDS` 7 → 8)
+- **post-rank sort by `user_ratings_total × rating`** (`_merge_anchors_and_search` で bucket quota 採用前に人気度 sort、ガイドブック級が中規模より優先)
+- API 444 PASS (新規 test 4 件追加: rankPreference / pageSize=20 default / popularity sort / missing rating fallback)
+- **次のアクション (user verify 待ち)**: pnpm dev で再 submit → DevTools Network → /api/evidence/places の Response body で pack 中身を見る → 大涌谷・芦ノ湖等が入るか / 箱根 422 自体が解消するか確認
+- 詳細: lessons.md「2026-04-28: Phase 3 polish 実装 — Places API search の iconic spot coverage 改善」エントリ参照
+
+**🔴 箱根 3 日 plan 422 + Places API locationBias 欠落 (2026-04-28、Phase 3 polish 実装で改善試行中、verify 後判断)**: ローカル `pnpm dev` で 箱根 3 日 plan を 3 回連続 submit → 全部 422、kind_summary `[item_type_category_mismatch, 1〜3]` 一色支配。**真因 (assembler log)**: 2026-04-29 (水) で opening_hours filter 後の meal eligible が candidate=1 まで縮退 → swap 連鎖で item_type 不適合多発 → v6.2 の reuse fallback は `outside_opening_hours` 軸では発火しない構造的欠落。**副次発見 (構造問題)**: `apps/api/src/evidence/places.py:81-86` の Places API text search payload に `locationBias` / `locationRestriction` / `rankPreference` 全部未使用 → 地理制約事実上ゼロ → 都内の「箱根料理店」混入リスク + 大涌谷・芦ノ湖・箱根神社等の iconic spot を確実に取れる保証なし。**選択肢 (推奨順、user 判断待ち)**:
+- **α. locationBias 追加** (~45 分、推奨): Geocoding API で region → lat/lng → 半径 15km の `locationBias.circle` を Places API payload に注入。都内混入排除 + transit_matrix coverage 改善 + iconic spot ranking 改善
+- **β. keyword 人気度バイアス** (Phase 3): `_BASE_KEYWORD_SUFFIXES` に「人気」「定番」追加 or region 別 keyword set
+- **γ. v6.3 outside_opening_hours reuse fallback** (~30 分): v6.2 と同じ思想を opening_hours 軸にも展開、tier3 枯渇時に used 集合内で eligible 探す
+- **即時回避**: 日付を木曜開始でずらして submit (コード変更ゼロ)
+- 詳細: lessons.md「2026-04-28: 箱根 3 日 plan 422 真因 — 水曜定休 × pack 内 meal candidate=1 縮退 + Places API の locationBias 完全欠落」エントリ参照
+
+**📋 エラー UX 改善タスク (2026-04-28、user リクエスト、未着手)**: プラン生成失敗時に (i) 失敗原因を明確に表示、(ii) 次の編集ヒントを user に提示、(iii) 失敗後の form 入力を完全リセットせず保持する。**設計案 (作業中断中)**:
+- Backend: `plan_routes.py` の `LlmGenerationError` 422 response に `issues_summary: dict[str, int]` (kind→count) を追加 (現在は `issues_count: int` のみ)、`issues_top_kind: str` も
+- Frontend `/plan/[id]/generating/page.tsx`: kind 別日本語メッセージ + ヒント辞書 (例: `item_type_category_mismatch` → 「希望ジャンルに合うスポットが少ない可能性。期間を 1 日延ばす or 別エリアで再生成を」)
+- Frontend `/plan/new/page.tsx`: URL `?retry=<failed_plan_id>` を読み、Plan + Participants を Supabase から fetch して RHF.reset() で defaultValues に注入
+- 実装目安: 3 時間 (backend 30 分 / generating page 1h / new page 1h / test 30 分)
+- 着手前に箱根 422 を解消する方が demo 提出に直結 (失敗が頻発する状態でエラー UX 改善しても根治にならない)
+
 **D 案: 現地集合・現地解散スコープに割り切り (2026-04-28、working tree、未 commit)**: 🟡 user 報告「出発地点を指定しても旅程は旅先から始まる、交通費が予算から弾かれている」を systematic-debugging で根本原因確定 → A/B/C/D 4 案検討 → user 判断で **D 案 (フロント入力撤去 + 「現地集合・現地解散」コンセプトに割り切り)** 確定 + 実装完了。
 - **変更**: `apps/web/src/app/plan/new/page.tsx` の「出発地」Input + Label 撤去 / zod schema を `z.string().min(1)` → `z.string()` (空文字許容) / `apps/web/src/lib/api.ts` で `form.departure_point?.trim() || "現地集合"` をフロントから送信 (DDL / Pydantic 無変更) / `docs/data-model.md` の departure_point フィールドコメント更新
 - **検証**: web test **165/165 PASS** (新規「accepts empty departure_point」1 件追加、既存 fixture 影響なし) / tsc clean / build PASS

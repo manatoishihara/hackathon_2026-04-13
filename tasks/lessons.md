@@ -27,6 +27,43 @@
 
 ## ログ
 
+## 2026-04-28: Phase 3 polish 実装 — Places API search の iconic spot coverage 改善 (pageSize 倍増 + 「名所」keyword 追加 + post-rank sort)
+- **背景**: user 報告「箱根プランで本当に箱根の有名どころが取れているのか疑問」→ Network タブで pack 17 件を実態確認 → **大涌谷 / 芦ノ湖 / ポーラ美術館 / 箱根海賊船 / ガラスの森が一切含まれていない**ことが確定。代わりに飛竜の滝 / 玉簾の瀧のような中規模 spot や、地元 meal が 8 件 (3 日 plan で 6 meal slot に対して過剰) で観光地枠を圧迫
+- **実装内容 (3 つを 1 commit)**:
+  - **pageSize 10 → 20**: `apps/api/src/evidence/places.py:search_by_text` の default を Google Places API New 上限まで拡張。母数倍増で relevance ranking 11-20 位の iconic spot を拾えるように
+  - **`rankPreference: "RELEVANCE"` 明示**: 将来 Google API のデフォルト変更への防御 (現状デフォルトと同じ)
+  - **`_BASE_KEYWORD_SUFFIXES` に「名所」追加**: 5 → 6 軸、`_MAX_KEYWORDS` 7 → 8。「箱根 名所」はガイドブック系語彙で人気度ranking がバイアスされやすい
+  - **post-rank sort by `user_ratings_total × rating`**: `_merge_anchors_and_search` 内で bucket quota 採用前に candidates を人気度 sort。tie-break は user_ratings_total。これでGoogle relevance ranking 任せの偏りを構造的に補正、ガイドブック級 iconic spot が中規模 spot より優先採用される
+- **検証**: API 444 PASS (既存 test を 6 axes / _MAX_KEYWORDS=8 対応に更新 + 新規 test 4 件追加: rankPreference / pageSize=20 default / popularity sort / missing rating fallback)
+- **本番効果検証 (working tree、user verify 待ち)**: pnpm dev で再 submit して pack 中身が変わるか / 大涌谷・芦ノ湖等が含まれるか / 422 自体が解消するか確認予定
+- **学び 1 (構造 vs 偶然性)**: Google Places API text search を default 設定で叩くと relevance ranking 偏重 + pageSize 制限で iconic spot 取りこぼしが構造的に発生する。**「pack 17 places あるから OK」と件数だけ見ると質を見落とす**、件数 + 質 (iconic coverage) の二軸で評価する必要
+- **学び 2 (post-rank sort の威力)**: Google の relevance ranking は地名 + suffix の組み合わせで意外な結果を出す (taiwanese_restaurant が「箱根 観光地」検索で上位に来る等)。**自前で `user_ratings_total × rating` で post-sort することで、人気観光地 (review 5000+ 件) が中規模 (200 件) より優先される**簡潔な解決策。LLM rules の「金額・時刻を計算させない」原則とは矛盾しない (検索結果の rank 決定論で並び替えるだけ)
+- **学び 3 (pack quality 検証ルートの確立)**: ブラウザ DevTools Network → /api/evidence/places の Response body で pack 中身を直接見るのが一番速い検証ルート。CI には組み込めないが手動 verify として強い。将来は dump log を `LOG_LEVEL=DEBUG` で吐ける仕組みもアリ
+- **次のアクション (user)**: pnpm dev で再 submit → pack 中身の Response body を確認 → iconic spot 含まれるなら箱根 422 も解消する可能性大、verify 後に commit 提案
+- **rule 昇格候補**: 「Places API は pageSize 上限 + post-rank sort + 多軸 keyword で iconic coverage を保証」を `external-api-rules.md` に昇格 (2 回目で判断、本件で 1 回目)
+
+## 2026-04-28: 箱根 3 日 plan 422 真因 — 水曜定休 × pack 内 meal candidate=1 縮退 + Places API の locationBias 完全欠落 (構造問題、demo blocker 候補)
+- **問題**: ローカル `pnpm dev` で 箱根 3 日 plan (2026-04-28 火 〜 2026-04-30 木) を 3 回連続 submit → **3 回とも `/api/plans/generate → 422 "LLM generation failed: 3-4 issues after 4 attempts"`**。kind_summary は全 4 attempts × 全 3 run で `[('item_type_category_mismatch', 1〜3)]` 一色支配
+- **真因 (assembler log で確定)**:
+  - 直接トリガ: `Place 'ChIJfVf8vD2iGWARHJOlRc4Qr_M' ineligible for slot 'day2_dinner' (opening_hours mismatch on 2026-04-29); no alternate, accepting (validator will catch and retry)` 連発
+  - **2026-04-29 (水) で opening_hours filter 後の meal eligible が candidate=1 まで縮退** → 同じ place を複数 slot に充当 → assembler が他 slot で swap 試行 → swap 先が item_type 不適合 (activity / lodging しか残らない) → validator が `item_type_category_mismatch` で reject → retry → LLM が同パターン → 4 attempts 尽きて 422
+  - v6.2 で追加した `_find_item_type_compatible_used_place` (used 集合 reuse) は `item_type` 軸で発火するが、**`outside_opening_hours` 軸では発火しない**ため、本ケースをカバーしない
+- **草津 3 日 plan は通って箱根は落ちる差**: 両方 total_places=17 だが (a) 草津は温泉/神社/寺で年中無休が多い vs 箱根は美術館/観光施設で **火・水定休** が多い、(b) 箱根 pack の lodging が 1 件のみ (rakuten 未設定 + Google Places 検索結果薄)、(c) 箱根 pack の transit edge coverage が薄く各 place が 4-6 reachable のみ
+- **副次発見 (構造問題、demo blocker 候補)**: Places API text search の検索範囲制限が事実上ゼロ。`apps/api/src/evidence/places.py:81-86` の payload は `textQuery / languageCode / regionCode / pageSize` のみ:
+  - **`locationBias` / `locationRestriction` 完全未使用** → 「箱根」を含む全国の店舗 (都内の箱根料理店 / 屋号に「箱根」が含まれるだけの店) が混入しうる。log で `taiwanese_restaurant` が複数混入してた説明がつく
+  - **`rankPreference` 未指定 (暗黙 RELEVANCE)** → Google の relevance ranking 任せ。「箱根 観光地」検索で大涌谷・芦ノ湖・箱根神社が上位に来る保証なし、log の 17 places が箱根の人気観光地をカバーしているかは pack 中身を直接 dump するまで不明
+  - **keyword が抽象** ("観光地" "温泉" "神社 寺" "食事処" "旅館 ホテル") → iconic spot を狙い撃ちしてない
+  - 結果として「箱根を満喫できる plan が作れているか」は構造的に保証されておらず、demo の質に直結
+- **demo 提出向けの解決選択肢 (推奨順)**:
+  - **α. locationBias 追加** (~45 分): `external/health.py:139` で既に Geocoding API を叩いてる実績、同じ仕組みで region → lat/lng → 半径 15km を `locationBias.circle` に注入。都内混入が消えて transit_matrix coverage も改善 (15km 内に places が集まる)。リスク: pack の質が変わって 422 retry 挙動も変わる、事前 verify 必要
+  - **β. keyword の人気度バイアス** (Phase 3 polish): `_BASE_KEYWORD_SUFFIXES` に「人気」「定番」「おすすめ」追加 or region 別 keyword set。LLM rules の「外部データのみ」原則は維持
+  - **γ. v6.3 reuse fallback for `outside_opening_hours`** (~30 分): v6.2 の item_type 軸 reuse と同じ思想を opening_hours 軸にも適用、`_find_eligible_alternate_for_slot` tier3 枯渇時に used 集合内で opening_hours eligible 探す。リスク: 「dinner と lunch が同じ店」になりうる、demo 質微妙
+  - **即時回避**: 日付を 木曜開始 にずらして submit (2026-05-01 金 〜 2026-05-03 日 等)、コード変更ゼロ
+- **学び 1 (構造的)**: Places API text search を「素直に textQuery だけで叩く」と地理制約ゼロで意外な結果が来る。地名で region を絞りたいときは **`locationBias` 必須**。Google Maps API ルール `external-api-rules.md` の 4 階層 checklist に「**Phase 5: 検索結果の地理制約 (locationBias / locationRestriction)**」を追加候補
+- **学び 2 (demo 質保証)**: 「pack に 17 places あるから OK」ではなく、**「pack の中身が region の iconic spot をカバーしているか」を別軸で検証**しないと demo の質を保証できない。pack dump スクリプトを CI に組み込むか、フロントで pack 表示 (debug mode) で見える化する仕組みが要る
+- **学び 3 (条件依存の偶然性)**: 草津で動いた 3 日 plan が箱根で落ちたのは「火・水・木」という曜日 × エリアの定休日分布の偶然。**特定 region + 特定 date で再現性のある fixture テストが必要** (Phase 1.3e の `verify_hallucination_rate.py` は箱根固定 fixture だが、曜日依存性は test していなかった)
+- **rule 昇格候補 (2 回目で判断)**: 「Places API は locationBias 必須」「pack 質保証の検証ルート」は次に同種ケースが出たら `.claude/rules/external-api-rules.md` に昇格
+
 ## 2026-04-28: `departure_point` が生成パイプライン全層で構造的に無視されていた — D 案 (現地集合・現地解散スコープに割り切り) で確定、将来 B 案で復活
 - **問題 (user 報告)**: 出発地点フォームに「東京駅」等を入力しても、生成された旅程は旅先 (草津 / 箱根) の day1_morning 観光地から開始する。出発地→旅先の長距離移動費が予算 (transit カテゴリ) に計上されない
 - **systematic-debugging Phase 1 で根本原因確定 — バグじゃなく設計の構造的欠落**:
