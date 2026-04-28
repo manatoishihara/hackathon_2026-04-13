@@ -10,6 +10,7 @@ from src.evidence.pack import (
     BudgetBreakdownJPY,
     BudgetConstraints,
     EvidencePack,
+    LodgingOption,
     OpeningHoursSlot,
     PlacePoint,
     QueryContext,
@@ -980,6 +981,119 @@ def test_assemble_plan_cost_for_unknown_price_level():
     meal = result.items[0]
     assert meal.cost_jpy == 2500
     assert meal.cost_confidence == "unknown"
+
+
+def test_assemble_plan_rakuten_lodging_uses_verified_actual_price():
+    """Phase 3 polish 案 D 第 6 段 (2026-04-28): 楽天 lodging (place_id が `rakuten_`
+    prefix) は pack.lodging_options から実価格を引いて cost_confidence="verified"
+    にする。`_PRICE_MAP` の estimated 値で上書きしない。
+    """
+    rakuten_place = PlacePoint(
+        place_id="rakuten_55555",
+        name="楽天実価格テスト旅館",
+        category=["lodging", "hotel", "ryokan"],
+        lat=35.2,
+        lng=139.0,
+        address="箱根",
+        opening_hours=[],
+        opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
+        price_level=2,  # _PRICE_MAP では (14000, "estimated") に対応
+        rating=4.3,
+        user_ratings_total=None,
+        relevance_tags=[],
+    )
+    pack = _make_pack(places=[rakuten_place], edges=[])
+    # pack.lodging_options に楽天実価格をセット
+    pack = pack.model_copy(
+        update={
+            "lodging_options": [
+                LodgingOption(
+                    place_id="rakuten_55555",
+                    name="楽天実価格テスト旅館",
+                    price_jpy_per_night=18500,  # 実価格 (price_level=2 の 14000 と異なる値)
+                    lat=35.2,
+                    lng=139.0,
+                    rating=4.3,
+                ),
+            ],
+        }
+    )
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_lodging",
+                place_id="rakuten_55555",
+                rationale="楽天 verified 価格",
+            ),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    assert len(result.items) == 1
+    lodging = result.items[0]
+    # _PRICE_MAP の (14000, "estimated") ではなく LodgingOption の実価格 + verified
+    assert lodging.cost_jpy == 18500
+    assert lodging.cost_confidence == "verified"
+
+
+def test_assemble_plan_google_lodging_keeps_price_map_estimated():
+    """Google Places (`ChIJ` prefix) の lodging は従来通り `_PRICE_MAP` 経由の estimated。
+
+    第 6 段 fix が `rakuten_` prefix のみを対象にしている回帰確認。
+    """
+    google_lodging = _place("ChIJABC123", price_level=2, category=["lodging", "hotel"])
+    pack = _make_pack(places=[google_lodging], edges=[])
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_lodging",
+                place_id="ChIJABC123",
+                rationale="Google lodging",
+            ),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    assert len(result.items) == 1
+    lodging = result.items[0]
+    # 従来通り _PRICE_MAP の price_level=2 lodging = (14000, "estimated")
+    assert lodging.cost_jpy == 14000
+    assert lodging.cost_confidence == "estimated"
+
+
+def test_assemble_plan_rakuten_lodging_falls_back_when_lodging_options_empty():
+    """楽天 place が pack.places にあるが pack.lodging_options が None / 空 (race
+    condition、deserialize 抜け落ち等の防御)。`_PRICE_MAP` 経由 fallback で動作継続。
+    """
+    rakuten_place = PlacePoint(
+        place_id="rakuten_99999",
+        name="orphan rakuten",
+        category=["lodging", "hotel"],
+        lat=35.2,
+        lng=139.0,
+        address="箱根",
+        opening_hours=[],
+        opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
+        price_level=3,  # _PRICE_MAP[lodging][3] = (22000, "estimated")
+        rating=None,
+        user_ratings_total=None,
+        relevance_tags=[],
+    )
+    pack = _make_pack(places=[rakuten_place], edges=[])
+    # pack.lodging_options を None のまま (default)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(
+                slot_id="day1_lodging",
+                place_id="rakuten_99999",
+                rationale="楽天 orphan fallback",
+            ),
+        ]
+    )
+    result = assemble_plan(plan_v2, pack)
+    assert len(result.items) == 1
+    lodging = result.items[0]
+    # fallback で _PRICE_MAP[lodging][3] = (22000, "estimated")
+    assert lodging.cost_jpy == 22000
+    assert lodging.cost_confidence == "estimated"
 
 
 # ==============================

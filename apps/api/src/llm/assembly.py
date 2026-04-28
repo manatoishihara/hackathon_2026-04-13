@@ -151,6 +151,31 @@ def _resolve_cost(item_type: str, price_level: int | None) -> tuple[int, str]:
     return mapping.get(price_level, mapping[None])
 
 
+def _resolve_cost_with_rakuten_override(
+    item_type: str,
+    place: PlacePoint,
+    pack: EvidencePack,
+) -> tuple[int, str]:
+    """cost 決定 logic に楽天 lodging の verified 経路を追加 (Phase 3 polish 案 D 第 6 段、2026-04-28)。
+
+    楽天 lodging (place_id が `rakuten_` prefix) は API で実価格を取得済なので、
+    `_PRICE_MAP` の estimated 値で上書きせず、`pack.lodging_options` から
+    `price_jpy_per_night` を直接引いて cost_confidence="verified" にする。
+
+    対象外 (Google Places の lodging / meal / activity / 楽天マッチしない place_id):
+        従来通り `_resolve_cost` で `_PRICE_MAP[item_type][price_level]` 経由。
+    """
+    if (
+        item_type == "lodging"
+        and place.place_id.startswith("rakuten_")
+        and pack.lodging_options
+    ):
+        for lo in pack.lodging_options:
+            if lo.place_id == place.place_id:
+                return (lo.price_jpy_per_night, "verified")
+    return _resolve_cost(item_type, place.price_level)
+
+
 # ==============================
 # エラー型
 # ==============================
@@ -538,7 +563,13 @@ def assemble_plan(
                             prev_place.place_id, place_id, exc,
                         )
 
-        cost_jpy, cost_conf = _resolve_cost(slot_meta["item_type"], place.price_level)
+        # Phase 3 polish 案 D 第 6 段 (2026-04-28): 楽天 lodging は API 取得済の実価格を
+        # 使い、cost_confidence="verified" にする。`_PRICE_MAP` 経由の estimated 値で
+        # 上書きすると inline Evidence Badge が「推定」表示になり、楽天で実価格を取って
+        # いる事実が見えなくなる問題への対応。
+        cost_jpy, cost_conf = _resolve_cost_with_rakuten_override(
+            slot_meta["item_type"], place, pack
+        )
         items.append(
             LlmPlanItem(
                 order_index=order_index,

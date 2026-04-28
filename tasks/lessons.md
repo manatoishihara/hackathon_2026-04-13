@@ -27,6 +27,41 @@
 
 ## ログ
 
+## 2026-04-28: Phase 3 polish 案 D 第 6 段 — 楽天 lodging に verified cost 経路を追加 (inline Evidence Badge を「推定」→「検証済」に)
+- **背景**: 第 3 段で楽天の評価 + 価格帯が Evidence Modal に表示されるようになったが、user が **inline Evidence Badge (Modal を開かずに timeline に出る小バッジ)** がまだ「推定」のままだと指摘
+- **真因**: `assembly.py:_resolve_cost` は `_PRICE_MAP[item_type][price_level]` を引くが、`_PRICE_MAP["lodging"]` の値はすべて `(jpy, "estimated")` or `(jpy, "unknown")` で、`"verified"` は存在しない
+  - 結果として楽天で実価格 (15,000 円) を取得していても、`_PRICE_MAP[lodging][2] = (14000, "estimated")` で上書きされて inline badge が「推定」表示になる
+- **修正実装 (`_resolve_cost_with_rakuten_override`)**: 楽天 lodging (place_id が `rakuten_` prefix) は `pack.lodging_options` から place_id 一致する LodgingOption の `price_jpy_per_night` を直接引いて `cost_confidence="verified"` にする
+  - Google Places の lodging / meal / activity / 楽天マッチしない place_id は従来通り `_resolve_cost` で `_PRICE_MAP` 経由 (Phase 2/3 の既存挙動を維持)
+  - `pack.lodging_options` が None / 空 (race condition、deserialize 抜け落ち等の防御) なら fallback で `_PRICE_MAP` 経由
+- **検証**: API test 458 PASS、新規 3 件 (`test_assemble_plan_rakuten_lodging_uses_verified_actual_price` / `test_assemble_plan_google_lodging_keeps_price_map_estimated` / `test_assemble_plan_rakuten_lodging_falls_back_when_lodging_options_empty`)
+- **学び 1 (cost_confidence と price_level の独立性)**: Evidence Modal の「価格帯」は `price_level` (1〜4) で表示、inline Badge の verified/estimated/unknown は `cost_confidence` で判定。**この 2 つは異なる field でユーザ体験的に同期して見えるべきだが、内部実装では独立に決まる**ので、片方だけ verified にしてもう片方が estimated のまま残る不整合が起きうる。今回は両方 verified にする path を追加して整合させた
+- **学び 2 (`_PRICE_MAP` の限界)**: `_PRICE_MAP` は LLM rules の「金額計算は LLM にさせない、決定論カタログで埋める」原則の実装だが、外部 API で実価格が取れるケース (楽天 / 楽天とは別の Booking.com 等) では決定論カタログが二重推定になる。**外部 API 経由で取れる実価格は `_PRICE_MAP` を bypass する経路を初期から想定**しておくべき (今回 fix で経路を追加)
+- **次のアクション (user verify)**: 再 submit で inline Evidence Badge が楽天宿で「✓ 検証済」表示になることを確認 → 安定性 OK なら commit + push
+
+## 2026-04-28: Phase 3 polish 案 D 第 3〜5 段 — 楽天評価/価格帯引き継ぎ + Evidence「不明 vs 推定」区別 + forced 注入の副作用 (Google Maps INVALID_REQUEST) 修正
+- **第 3 段 (楽天 lodging から評価 + 価格帯を引き継ぐ)**: forced 注入で楽天宿が plan に登場するようになったが、Evidence Modal で「評価 — 不明」「価格帯 — 不明」表示が出ていた問題を解消
+  - `apps/api/src/evidence/pack.py:LodgingOption` に `rating: float | None = None` フィールド追加
+  - `apps/api/src/evidence/lodging.py:_to_lodging_option` で `hotelRatingInfo.reviewAverage` 抽出 (0〜5 範囲外は安全側で None)
+  - `apps/api/src/evidence/builder.py:_lodging_to_place_point` で rating + price_level を引き継ぎ
+  - `_price_jpy_to_level` helper 新設: 1 泊単価 → Google Places 互換 price_level (1〜4) 変換
+    - level 1: < 8,000 円、level 2: 8k〜15k、level 3: 15k〜30k、level 4: 30k+
+  - test 追加 6 件 (rating 引き継ぎ / price_level 閾値 / rating None fallback / reviewAverage 抽出 / 不在時 None / 範囲外無視)
+- **第 4 段 (Evidence Modal で「不明」と「推定」を区別)**: user 指摘「Google Places でも price_level=不明 だが内部 cost_jpy に推定値が出ているのに、表示は『不明』のまま」の乖離を解消
+  - `apps/web/src/components/EvidenceModal.tsx:formatPriceLevel` に `cost_jpy` + `cost_confidence` 引数追加
+  - 表示 logic: price_level (1〜4) verified なら ¥¥¥¥ 記号 / price_level 無く cost_confidence=estimated なら「￥X,XXX (推定)」 / verified なら「￥X,XXX」(タグ無し) / どれも無ければ「— 不明」
+  - test 追加 2 件 (estimated / verified 表示)、既存 1 件更新 (両方無い時のみ不明)
+- **第 5 段 (forced 注入副作用の Google Maps INVALID_REQUEST 大量発生 fix)**: ローカル verify で **想定外の Console エラー** が大量発生
+  - 観測現象: `'rakuten_172961' is not a valid Place ID.` + `MapsRequestError: DIRECTIONS_ROUTE: INVALID_REQUEST` が 100+ 件
+  - 真因: 第 2 段 forced 注入で楽天 lodging を `pack.places` に入れたが、フロント `transit.ts` は **全 places のペア**で Google Maps DirectionsService を呼ぶ。楽天 place_id は Google が認識できず全部 INVALID_REQUEST
+  - 修正: `apps/web/src/lib/transit.ts:fetchTransitMatrix` で `rakuten_` prefix place を transit fetch から除外 (filter 1 行)
+  - LLM の slot 候補としては pack.places に残る (forced 注入の効果維持)、transit_matrix には乗らないが assembler の v6.2 lodging self-loop skip + transit skip path で吸収
+- **検証**: API test 455 PASS / Web test 167 PASS / tsc clean (既知 env 系 2 件 fail のみ、本変更無関係)
+- **学び 1 (forced 注入の副作用予測)**: Backend で「LLM の slot 候補に楽天宿を追加する」改修をしたとき、フロント Maps SDK が「全 pack.places ペアで transit fetch」する暗黙仕様を見落とした。**A 改修するとき B 層の暗黙依存をチェックする ad-hoc な checklist** が必要。今回は Console エラーで早期検知できたが、本番でユーザに見えない警告ログ系の副作用は気付きづらい
+- **学び 2 (識別子 prefix の扱い)**: `rakuten_<数字>` 形式は元々 Google Places ID と区別するために導入した命名だが、**フロント Maps SDK 側でこの prefix を認識する logic が必要**になった。識別子の発生源を変えるとき、その識別子を消費する側全層の確認が要る (LLM prompt / assembly / transit / 表示 の 4 層)
+- **学び 3 (deprecated 警告と現状動作の切り分け)**: 同 verify 中に `google.maps.DirectionsService is deprecated as of February 25th, 2026` 警告が出た。今後 12 ヶ月で `google.maps.routes.Route.computeRoutes` への移行推奨だが、現状は動作する。**deprecated 警告は「将来の対応」として todo に積み、demo 直前の対応からは切り分ける**判断
+- **次のアクション (user verify)**: 再 submit で (i) Console エラー消失、(ii) 楽天宿が lodging slot に登場、(iii) Evidence Modal で評価 + 価格帯が数値表示される (不明な場合は「不明」or「推定」明示) の 3 点確認 → 安定性 OK なら commit
+
 ## 2026-04-28: Phase 3 polish 案 D 第 2 段 — 楽天 lodging を pack.places に forced 注入する再設計を採用、merge 修復後に再実装
 - **背景**: ローカル verify (16:21:50) で 1 回成功 (attempt 4 で gpt-4.1-mini fallback) したが、log で **楽天 lodging place_id (`rakuten_<数字>` 形式) が一度も登場していない**ことが判明。assembler の swap log は Google Places の `ChIJz7WQw9meGWAR8_Ijv9AMs4Q` (hotel) や `ChIJU2N6VnSjGWARiat_MOyKCJM` (hotel) しか触れていない
 - **真因 (ceb6e75 構造)**: 楽天 API は 5 件 fetch 成功 (`rakuten lodging: 5 件取得`) しているが、`pack.lodging_options` フィールドにのみ入る。LLM プロンプトの slot 候補 (`pack.places`) には含まれないため、LLM は楽天宿を選びようがない
