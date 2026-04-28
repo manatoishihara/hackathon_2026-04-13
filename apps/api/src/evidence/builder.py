@@ -158,7 +158,10 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
     places = _merge_anchors_and_search(
         anchor_places, search_results, cap, total_days=temporal.total_days
     )
-    lodging_options = _fetch_lodging_safe(ctx, request, temporal, budget)
+    # places の重心座標を楽天宿泊検索の中心として使う（新 API は座標必須）
+    _center_lat = (sum(p.lat for p in places) / len(places)) if places else None
+    _center_lng = (sum(p.lng for p in places) / len(places)) if places else None
+    lodging_options = _fetch_lodging_safe(ctx, request, temporal, budget, lat=_center_lat, lng=_center_lng)
 
     return EvidencePack(
         query_context=ctx,
@@ -561,6 +564,8 @@ def _fetch_lodging_safe(
     request: "GeneratePlanRequest",
     temporal: TemporalConstraints,
     budget: BudgetConstraints,
+    lat: float | None = None,
+    lng: float | None = None,
 ) -> list[LodgingOption]:
     """楽天トラベル API で宿泊候補を取得する。失敗時は空リストを返す（fail-soft）。"""
     # 日帰り（1 泊なし）なら宿泊不要
@@ -577,6 +582,8 @@ def _fetch_lodging_safe(
             checkout_date=checkout,
             adult_num=adult_num,
             max_charge_per_night=max_charge,
+            lat=lat,
+            lng=lng,
         )
     except RakutenLodgingError as e:
         _logger.warning("rakuten lodging fetch skipped: %s", e)
