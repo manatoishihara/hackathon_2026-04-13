@@ -14,13 +14,8 @@ const MODE_OPTIONS: ReadonlyArray<{
   },
   {
     key: "anchor",
-    title: "アンカー",
+    title: "こだわり",
     description: "必ず行きたい場所を 1〜3 件決めて、その周りを組み立てます。",
-  },
-  {
-    key: "theme",
-    title: "テーマ",
-    description: "温泉・アート・グルメなど、こだわりのテーマで絞り込みます。",
   },
 ];
 
@@ -32,8 +27,8 @@ type Props = {
 };
 
 /**
- * Phase 2.1 出発モード切替。3 モード（auto / anchor / theme）の radio 群。
- * 選択された mode に応じて、page 側で AnchorPicker / ThemePicker を条件レンダリング
+ * Phase 2.1 出発モード切替。2 モード（auto / anchor）の radio 群。
+ * 選択された mode に応じて、page 側で AnchorPicker を条件レンダリング
  * する想定（本コンポーネントは mode 選択そのものだけを担当）。
  *
  * a11y: role="radiogroup" でグループ意味付けを SR に伝える（Codex Minor 4 対応）。
