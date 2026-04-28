@@ -39,6 +39,25 @@ def test_search_builds_request_correctly(mock_post):
     assert body["languageCode"] == "ja"
     assert body["regionCode"] == "jp"
     assert body["pageSize"] == 7
+    # Phase 3 polish (2026-04-28、iconic spot coverage 改善):
+    # rankPreference を明示しておく (RELEVANCE は現状の Google デフォルトと
+    # 同等だが、将来 Google API のデフォルト変更への防御として明示維持)。
+    assert body["rankPreference"] == "RELEVANCE"
+
+
+@patch("src.evidence.places.requests.post")
+def test_search_default_max_results_is_20(mock_post):
+    """Phase 3 polish (2026-04-28): max_results default を 10 → 20 に拡張済。
+
+    iconic spot (大涌谷・芦ノ湖等) が Google relevance ranking 11+ 位に来た
+    場合に取り逃さないため、Google Places API New 上限の 20 を default に。
+    """
+    mock_post.return_value = MagicMock(
+        ok=True, status_code=200, **{"json.return_value": {"places": []}}
+    )
+    search_by_text("箱根 観光地", api_key="fake-key")
+    body = mock_post.call_args[1]["json"]
+    assert body["pageSize"] == 20
 
 
 @patch("src.evidence.places.requests.post")

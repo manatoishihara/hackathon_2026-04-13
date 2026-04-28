@@ -221,11 +221,16 @@ _BASE_KEYWORD_SUFFIXES: tuple[str, ...] = (
     # lodging 候補を確保する必要がある。「旅館 ホテル」を keyword に追加して
     # 4 日 plan の 3 lodging slot (連泊許容で 1 unique でも可) を埋められるようにする。
     "旅館 ホテル",
+    # Phase 3 polish (2026-04-28、iconic spot coverage 改善):
+    # 「箱根 観光地」だけだと relevance ranking で取り逃す iconic spot
+    # (大涌谷・芦ノ湖・ポーラ美術館・ガラスの森) を「箱根 名所」で拾う狙い。
+    # ガイドブック系 keyword は人気度 ranking が強くバイアスされる傾向がある。
+    "名所",
 )
-# Phase 2 polish v6 (2026-04-28、5 base axes + theme + tag を許容):
-# 旧 5 から 7 に拡張、PARALLEL_WORKERS=5 だと search が 2 batch 直列になるが、
-# anchor fetch 並列との合算で許容範囲のレイテンシ。
-_MAX_KEYWORDS = 7
+# Phase 3 polish (2026-04-28、5 → 6 base axes):
+# 旧 5 から 6 に拡張、PARALLEL_WORKERS=5 で 2 batch 直列だが許容範囲のレイテンシ。
+# theme + tag で +1〜2 されると上限 8 だが _MAX_KEYWORDS=8 まで許容。
+_MAX_KEYWORDS = 8
 
 
 def _generate_keywords(ctx: QueryContext) -> list[str]:
@@ -495,6 +500,21 @@ def _merge_anchors_and_search(
                 continue
             candidates.append(p)
             seen_ids.add(p.place_id)
+
+    # Phase 3 polish (2026-04-28、iconic spot coverage 改善):
+    # 各 bucket の quota 採用前に「人気度 = user_ratings_total × rating」で sort。
+    # これによりガイドブック系 iconic spot (大涌谷の評価 5000+ 件 など) が、
+    # 中規模 spot (飛竜の滝の評価 200 件 など) より優先採用される。
+    # Google relevance ranking 任せでは「箱根 観光地」検索 top 10 に大涌谷が
+    # 入らない事象 (実証済) を構造的に解消する。
+    # Tie-break: rating のみ高い (件数少ない) 新店より、評価件数多い定番を優先。
+    candidates.sort(
+        key=lambda p: (
+            (p.user_ratings_total or 0) * (p.rating or 0.0),
+            p.user_ratings_total or 0,
+        ),
+        reverse=True,
+    )
 
     quota = _bucket_quota(total_days)
     accepted_by_bucket: dict[str, list[PlacePoint]] = {b: [] for b in _BUCKET_OUTPUT_ORDER}

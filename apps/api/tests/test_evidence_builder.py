@@ -113,11 +113,17 @@ _BASE_AXES = [
     "箱根 神社 寺",
     "箱根 食事処",
     "箱根 旅館 ホテル",  # Phase 2 polish v6 で追加 (lodging 候補確保)
+    "箱根 名所",  # Phase 3 polish (2026-04-28): iconic spot coverage 改善
 ]
 
 
-def test_generate_keywords_auto_no_tags_returns_5_base_axes():
-    """v6: 基本 5 軸 (観光地 / 温泉 / 神社寺 / 食事処 / 旅館ホテル) を必ず投入。"""
+def test_generate_keywords_auto_no_tags_returns_6_base_axes():
+    """Phase 3 polish (2026-04-28): 基本 6 軸 (観光地 / 温泉 / 神社寺 / 食事処 / 旅館ホテル / 名所) を必ず投入。
+
+    旧 v6 の 5 軸から「名所」追加で 6 軸に拡張。Google relevance ranking が
+    ガイドブック系語彙にバイアスされるので大涌谷・芦ノ湖等の iconic spot を
+    取り逃しにくくなる。
+    """
     ctx = _make_ctx(tags_per_participant=[[]])
     keywords = _generate_keywords(ctx)
     assert keywords == _BASE_AXES
@@ -126,17 +132,17 @@ def test_generate_keywords_auto_no_tags_returns_5_base_axes():
 def test_generate_keywords_auto_with_unique_tag_appends_one():
     ctx = _make_ctx(tags_per_participant=[["写真映え"]])
     keywords = _generate_keywords(ctx)
-    assert len(keywords) == 6
+    assert len(keywords) == 7
     assert "箱根 写真映え" in keywords
-    # 基本 5 軸が先頭にある
-    assert keywords[:5] == _BASE_AXES
+    # 基本 6 軸が先頭にある
+    assert keywords[:6] == _BASE_AXES
 
 
 def test_generate_keywords_auto_with_duplicate_tag_skips():
     ctx = _make_ctx(tags_per_participant=[["温泉"]])
     keywords = _generate_keywords(ctx)
-    # 「箱根 温泉」は基本 5 軸に既に含まれるので tag からは追加されない
-    assert len(keywords) == 5
+    # 「箱根 温泉」は基本 6 軸に既に含まれるので tag からは追加されない
+    assert len(keywords) == 6
     assert keywords.count("箱根 温泉") == 1
 
 
@@ -145,8 +151,8 @@ def test_generate_keywords_auto_caps_tag_at_one():
         tags_per_participant=[["温泉", "和食", "写真映え", "茶道", "着物"]]
     )
     keywords = _generate_keywords(ctx)
-    # 基本 5 軸 + tag 最大 1 個（"温泉" は重複 skip → "和食" が採用）
-    assert len(keywords) == 6
+    # 基本 6 軸 + tag 最大 1 個（"温泉" は重複 skip → "和食" が採用）
+    assert len(keywords) == 7
     assert "箱根 和食" in keywords
     assert "箱根 写真映え" not in keywords  # 1 個目で打ち切り
 
@@ -158,29 +164,29 @@ def test_generate_keywords_theme_mode_adds_theme_words_within_cap():
         tags_per_participant=[[]],
     )
     keywords = _generate_keywords(ctx)
-    # v6: 基本 5 軸 + theme 語彙 (cap _MAX_KEYWORDS=7 まで詰める)
-    assert len(keywords) == 7
-    assert keywords[:5] == _BASE_AXES
+    # Phase 3: 基本 6 軸 + theme 語彙 (cap _MAX_KEYWORDS=8 まで詰める)
+    assert len(keywords) == 8
+    assert keywords[:6] == _BASE_AXES
     # 残り 2 件が theme 語彙
     extra = [k for k in keywords if k not in set(_BASE_AXES)]
     assert len(extra) == 2
 
 
-def test_generate_keywords_anchor_mode_returns_base_5_axes():
+def test_generate_keywords_anchor_mode_returns_base_6_axes():
     ctx = _make_ctx(
         mode="anchor",
         payload={"anchor_place_ids": ["place_X"]},
         tags_per_participant=[[]],
     )
     keywords = _generate_keywords(ctx)
-    # anchor mode でも基本 5 軸（anchor は別経路で fetch）
+    # anchor mode でも基本 6 軸（anchor は別経路で fetch）
     assert keywords == _BASE_AXES
 
 
 def test_generate_keywords_theme_with_tag_keeps_theme_word():
     """Codex review 2 Major 2 反映: theme + tag 入力で theme 語彙が tag より先に入る。
 
-    v6: cap _MAX_KEYWORDS=7。基本 5 + theme 2 = 7 で枠埋まり、tag は入らない。
+    Phase 3: cap _MAX_KEYWORDS=8。基本 6 + theme 2 = 8 で枠埋まり、tag は入らない。
     theme bias 維持の意図 (Codex review 2 Major 2) は保たれる。
     """
     ctx = _make_ctx(
@@ -189,18 +195,18 @@ def test_generate_keywords_theme_with_tag_keeps_theme_word():
         tags_per_participant=[["写真映え"]],
     )
     keywords = _generate_keywords(ctx)
-    # 基本 5 軸 + theme 語彙 2 個 (合計 7、cap で打ち切り)。tag は枠不足で入らない
-    assert len(keywords) == 7
+    # 基本 6 軸 + theme 語彙 2 個 (合計 8、cap で打ち切り)。tag は枠不足で入らない
+    assert len(keywords) == 8
     assert "箱根 写真映え" not in keywords
-    # 基本 5 軸以外で theme bias が反映されている（onsen 系語彙）
+    # 基本 6 軸以外で theme bias が反映されている（onsen 系語彙）
     extra = [k for k in keywords if k not in set(_BASE_AXES)]
     # extra = theme 2 個 (tag は入らない、theme より優先順位低い)
     assert len(extra) == 2
 
 
-def test_generate_keywords_max_7_regardless_of_input():
-    """mode 別キーワード回帰: v6 で _MAX_KEYWORDS=7 (5 base + theme + tag) に拡張。
-    いかなる入力でも合計 7 を超えない。
+def test_generate_keywords_max_8_regardless_of_input():
+    """mode 別キーワード回帰: Phase 3 で _MAX_KEYWORDS=8 (6 base + theme + tag) に拡張。
+    いかなる入力でも合計 8 を超えない。
     """
     for mode, payload in [
         ("auto", None),
@@ -213,7 +219,7 @@ def test_generate_keywords_max_7_regardless_of_input():
             tags_per_participant=[["温泉", "和食", "写真"]],
         )
         keywords = _generate_keywords(ctx)
-        assert len(keywords) <= 7, f"{mode} mode produced {len(keywords)} keywords"
+        assert len(keywords) <= 8, f"{mode} mode produced {len(keywords)} keywords"
 
 
 # =================================================================
@@ -650,6 +656,94 @@ def test_merge_caps_at_max_places():
     assert len(out) == 15
 
 
+def test_merge_sorts_candidates_by_popularity_before_quota_assignment():
+    """Phase 3 polish (2026-04-28、iconic spot coverage 改善):
+
+    各 bucket の quota 採用前に candidates を `user_ratings_total × rating` で sort。
+    これによりガイドブック系 iconic spot (review 5000+ 件) が中規模 spot
+    (review 200 件) より優先採用される。
+
+    setup: 同 bucket attraction で 2 件、片方は超人気 (大涌谷 想定、
+    rating 4.5 × 5000 reviews)、もう片方は中規模 (飛竜の滝 想定、4.0 × 200 reviews)。
+    quota=1 のときに人気の方が採用されることを確認。
+    """
+    iconic = PlacePoint(
+        place_id="iconic_spot",
+        name="大涌谷 (iconic)",
+        category=["tourist_attraction"],
+        lat=35.0, lng=139.0,
+        address="箱根町",
+        opening_hours=[],
+        price_level=None,
+        rating=4.5,
+        user_ratings_total=5000,
+    )
+    medium = PlacePoint(
+        place_id="medium_spot",
+        name="飛竜の滝 (medium)",
+        category=["tourist_attraction"],
+        lat=36.0, lng=139.0,  # 距離ガード回避のため離す
+        address="箱根町",
+        opening_hours=[],
+        price_level=None,
+        rating=4.0,
+        user_ratings_total=200,
+    )
+    # search_results 順序として medium が先、iconic が後 (Google relevance ranking で
+    # iconic が下位に来るケースを模擬)。post-rank sort なしだと medium が先採用される。
+    # post-rank sort ありなら iconic が先採用される。
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[[medium, iconic]],
+        cap=1,
+        total_days=2,
+    )
+    assert len(out) == 1
+    assert out[0].place_id == "iconic_spot", (
+        "post-rank sort で人気度上位 (user_ratings_total × rating) が先に採用されるべき"
+    )
+
+
+def test_merge_sort_handles_missing_rating_or_count():
+    """Phase 3 polish: rating / user_ratings_total が None の place は最下位扱い。
+
+    Google Places API で評価データが取れない place (新規店舗等) は人気度 sort で
+    末尾に配置される。逆順 sort なので (None or 0) * (None or 0.0) = 0 で最下位。
+    """
+    rated = PlacePoint(
+        place_id="rated",
+        name="評価あり",
+        category=["tourist_attraction"],
+        lat=35.0, lng=139.0,
+        address="箱根町",
+        opening_hours=[],
+        price_level=None,
+        rating=3.5,
+        user_ratings_total=100,
+    )
+    unrated = PlacePoint(
+        place_id="unrated",
+        name="評価なし",
+        category=["tourist_attraction"],
+        lat=36.0, lng=139.0,
+        address="箱根町",
+        opening_hours=[],
+        price_level=None,
+        rating=None,
+        user_ratings_total=None,
+    )
+    out = _merge_anchors_and_search(
+        anchors=[],
+        search_results=[[unrated, rated]],
+        cap=1,
+        total_days=2,
+    )
+    assert len(out) == 1
+    assert out[0].place_id == "rated", (
+        "評価データありの place が None の place より優先されるべき"
+    )
+
+
 # ==============================
 # Dedupe + cap
 # ==============================
@@ -845,8 +939,8 @@ def test_generate_keywords_history_theme():
 def test_generate_keywords_auto_mode_no_theme_extension():
     """auto モードでは theme keyword は追加されない（regression check）。
 
-    Phase 2 polish v6: 基本 5 軸 (旅館 ホテル 追加) + tag「温泉」は重複 skip
-    = 合計 5 件。
+    Phase 3 polish (2026-04-28): 基本 6 軸 (観光地 / 温泉 / 神社 寺 / 食事処 / 旅館 ホテル / 名所)
+    + tag「温泉」は重複 skip = 合計 6 件。
     """
     ctx = QueryContext(
         region="箱根",
@@ -858,10 +952,11 @@ def test_generate_keywords_auto_mode_no_theme_extension():
         participants=[QueryContextParticipant(name="a", wishes="", tags=["温泉"])],
     )
     keywords = _generate_keywords(ctx)
-    # 基本 5 軸（"温泉" は重複 skip）= 5 件
-    assert len(keywords) == 5
-    assert "箱根 温泉" in keywords  # 基本 5 軸の 1 つとして含まれる
+    # 基本 6 軸（"温泉" は重複 skip）= 6 件
+    assert len(keywords) == 6
+    assert "箱根 温泉" in keywords  # 基本 6 軸の 1 つとして含まれる
     assert "箱根 旅館 ホテル" in keywords  # v6 追加分
+    assert "箱根 名所" in keywords  # Phase 3 polish 追加分
 
 
 @patch("src.evidence.builder.fetch_place_details")

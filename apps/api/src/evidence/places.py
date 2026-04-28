@@ -66,13 +66,22 @@ def search_by_text(
     *,
     language: str = "ja",
     region_code: str = "jp",
-    max_results: int = 10,
+    max_results: int = 20,
     api_key: str | None = None,
 ) -> list[PlacePoint]:
     """テキスト検索を実行し、PlacePoint のリストを返す。
 
     見つからない場合は空リストを返す（例外ではない）。HTTP エラーや環境変数不在は
     PlacesError として上げる。
+
+    Phase 3 polish (2026-04-28、iconic spot coverage 改善):
+    - `max_results` default を 10 → 20 (Places API New 上限) に拡張。母数倍増で
+      ガイドブック系 iconic spot (大涌谷・芦ノ湖等) が pack に届く確率を上げる。
+      箱根 3 日 plan で「彫刻の森・箱根神社 は入るが大涌谷・芦ノ湖は ranking 11+
+      で取り逃す」事象を解消。詳細: tasks/lessons.md「Places API locationBias
+      完全欠落」エントリ。
+    - `rankPreference: "RELEVANCE"` 明示 (将来 Google API のデフォルト変更へ
+      の防御、現状デフォルトと同じ)。
     """
     key = api_key or os.environ.get("GOOGLE_MAPS_API_KEY")
     if not key:
@@ -83,6 +92,7 @@ def search_by_text(
         "languageCode": language,
         "regionCode": region_code,
         "pageSize": max_results,
+        "rankPreference": "RELEVANCE",
     }
 
     try:
