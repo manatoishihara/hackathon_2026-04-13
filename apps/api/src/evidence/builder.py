@@ -203,8 +203,9 @@ def _lodging_to_place_point(lodging: LodgingOption) -> PlacePoint:
     全曜日 unknown 扱いで `is_place_eligible_for_slot` を通す (lodging は 24 時間営業
     仮定、validator も unknown_days はスキップ対象)。
 
-    rating / user_ratings_total は LodgingOption に無いので None (post-rank sort で
-    末尾に配置されるが、anchor 同等扱いで forced 注入されるので問題なし)。
+    Phase 3 polish 案 D 第 3 段 (2026-04-28、Evidence Modal「~ 不明」消し):
+    - rating: 楽天 hotelRatingInfo.reviewAverage を引き継ぐ (0.0〜5.0)
+    - price_level: hotelMinCharge を 1〜4 段階の Google Places 互換 price_level に変換
     """
     return PlacePoint(
         place_id=lodging.place_id,  # "rakuten_<数字>" 形式
@@ -215,11 +216,33 @@ def _lodging_to_place_point(lodging: LodgingOption) -> PlacePoint:
         address="",
         opening_hours=[],
         opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
-        price_level=None,
-        rating=None,
+        price_level=_price_jpy_to_level(lodging.price_jpy_per_night),
+        rating=lodging.rating,
         user_ratings_total=None,
         relevance_tags=[],
     )
+
+
+def _price_jpy_to_level(price_jpy: int) -> int:
+    """1 泊あたりの円単価を Google Places 互換 `price_level` (1〜4) に変換する。
+
+    Phase 3 polish 案 D 第 3 段: 楽天 LodgingOption.price_jpy_per_night を Evidence
+    Modal の「価格帯」表示に流すため、Google Places の price_level (1=安い〜4=高い)
+    と同じスケールに alignment。閾値は宿泊料金の実態 (箱根 / 京都 / 草津 等の温泉地)
+    を考慮して以下に設定:
+
+    - level 1: < 8,000 円 (ビジホ・ゲストハウス相当)
+    - level 2: 8,000 〜 15,000 円 (中位旅館・温泉宿の標準)
+    - level 3: 15,000 〜 30,000 円 (上位旅館)
+    - level 4: 30,000 円 以上 (高級旅館・リゾート)
+    """
+    if price_jpy < 8_000:
+        return 1
+    if price_jpy < 15_000:
+        return 2
+    if price_jpy < 30_000:
+        return 3
+    return 4
 
 
 def _extract_anchor_ids(request: GeneratePlanRequest) -> list[str]:

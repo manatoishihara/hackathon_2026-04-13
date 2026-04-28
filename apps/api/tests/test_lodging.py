@@ -139,3 +139,98 @@ class TestFetchLodgingOptions:
 
         assert len(result) == 1
         assert result[0].name == "箱根温泉旅館 テスト館"
+
+    def test_extracts_review_average_when_present(self, monkeypatch):
+        """Phase 3 polish 案 D 第 3 段 (2026-04-28): hotelRatingInfo.reviewAverage が
+        あれば LodgingOption.rating として引き継がれる。"""
+        monkeypatch.setenv("RAKUTEN_APPLICATION_ID", "test_app_id")
+        monkeypatch.setenv("RAKUTEN_ACCESS_KEY", "test_access_key")
+
+        # reviewAverage を含む mock
+        mock_response = {
+            "hotels": [
+                {
+                    "hotel": [
+                        {
+                            "hotelBasicInfo": {
+                                "hotelNo": 555,
+                                "hotelName": "評価あり旅館",
+                                "latitude": 35.5,
+                                "longitude": 139.5,
+                                "hotelMinCharge": 18000,
+                            }
+                        },
+                        {
+                            "hotelRatingInfo": {
+                                "serviceAverage": 4.5,
+                                "reviewAverage": 4.2,  # Phase 3 polish で追加抽出
+                            }
+                        },
+                    ]
+                }
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = mock_response
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("src.evidence.lodging.requests.get", return_value=mock_resp):
+            result = fetch_lodging_options(
+                "箱根", "2026-06-01", "2026-06-02", 2, 30000, lat=35.5, lng=139.5,
+            )
+
+        assert len(result) == 1
+        assert result[0].rating == 4.2
+
+    def test_rating_none_when_review_average_missing(self, monkeypatch):
+        """hotelRatingInfo.reviewAverage が無いエントリは rating=None。"""
+        monkeypatch.setenv("RAKUTEN_APPLICATION_ID", "test_app_id")
+        monkeypatch.setenv("RAKUTEN_ACCESS_KEY", "test_access_key")
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = _MOCK_RESPONSE  # reviewAverage 含まない (serviceAverage のみ)
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("src.evidence.lodging.requests.get", return_value=mock_resp):
+            result = fetch_lodging_options(
+                "箱根", "2026-06-01", "2026-06-02", 2, 20000, lat=35.23, lng=139.10,
+            )
+
+        assert len(result) == 1
+        assert result[0].rating is None  # 評価情報無しは None で保持
+
+    def test_rating_clamped_to_valid_range(self, monkeypatch):
+        """API レスポンスが想定外の範囲外の値を返した場合、None で安全側に倒す。"""
+        monkeypatch.setenv("RAKUTEN_APPLICATION_ID", "test_app_id")
+        monkeypatch.setenv("RAKUTEN_ACCESS_KEY", "test_access_key")
+
+        # 6.0 (5 超) や 文字列 など無効値 → None に
+        mock_response = {
+            "hotels": [
+                {
+                    "hotel": [
+                        {
+                            "hotelBasicInfo": {
+                                "hotelNo": 777,
+                                "hotelName": "範囲外評価宿",
+                                "latitude": 35.5,
+                                "longitude": 139.5,
+                                "hotelMinCharge": 10000,
+                            }
+                        },
+                        {"hotelRatingInfo": {"reviewAverage": 7.5}},  # 範囲外
+                    ]
+                }
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = mock_response
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("src.evidence.lodging.requests.get", return_value=mock_resp):
+            result = fetch_lodging_options(
+                "箱根", "2026-06-01", "2026-06-02", 2, 20000, lat=35.5, lng=139.5,
+            )
+
+        assert len(result) == 1
+        assert result[0].rating is None  # 0〜5 範囲外は無視

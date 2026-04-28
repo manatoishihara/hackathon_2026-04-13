@@ -160,6 +160,18 @@ def _to_lodging_option(hotel_entry: dict) -> LodgingOption | None:
         url = info.get("hotelInformationUrl") or info.get("planListUrl")
         hotel_id = str(info.get("hotelNo", ""))
 
+        # Phase 3 polish 案 D 第 3 段 (2026-04-28): hotelRatingInfo.reviewAverage を抽出
+        # して Evidence Modal の「評価」表示を「~ 不明」から数値に。0.0〜5.0 の範囲、
+        # 取れなかった場合 None。formatVersion=1 では hotel_entry["hotel"][1] 等の別 entry
+        # に hotelRatingInfo として配置される。
+        review_average: float | None = None
+        for item in hotel_list:
+            if "hotelRatingInfo" in item:
+                ra = item["hotelRatingInfo"].get("reviewAverage")
+                if isinstance(ra, (int, float)) and 0 <= ra <= 5:
+                    review_average = float(ra)
+                break
+
         if not name or price is None:
             return None
 
@@ -172,6 +184,7 @@ def _to_lodging_option(hotel_entry: dict) -> LodgingOption | None:
             lat=float(hotel_lat) if hotel_lat is not None else None,
             lng=float(hotel_lng) if hotel_lng is not None else None,
             url=url,
+            rating=review_average,
         )
     except (KeyError, IndexError, TypeError, ValueError) as e:
         logger.warning("rakuten hotel entry parse error: %s — %s", e, hotel_entry)
