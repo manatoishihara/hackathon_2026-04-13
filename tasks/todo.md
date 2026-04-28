@@ -5,7 +5,65 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中）
+## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中、Phase 3 polish 案 D 第 9 段 6 タスク実装完了 working tree)
+
+---
+
+## 🟢 Phase 3 polish 案 D 第 9 段 (2026-04-28、6 タスク sub-agent 実装完了 working tree、user commit 待ち)
+
+`tasks/plans/2026-04-28-cost-and-evidence-fixes.md` の計画書に基づき、6 タスクを sub-agent dispatch で実装完了。working tree 編集のみ、user 手動 commit 待ち。
+
+### 実装結果
+| Task | 内容 | 新規 test | 全体 PASS |
+|---|---|---|---|
+| A1 | Places API priceRange 取得 + PlacePoint.price_range_jpy 拡張 | 4 | API 465 |
+| A2 | assembly cost 解決 3 段優先順位 (verified > estimated × 2) + `_PRICE_MAP[None]` "estimated" 化 | 3 + 既存 1 件 rename | API 467 |
+| A3 | 楽天 SimpleHotelSearch → VacantHotelSearch 移行 (実価格 per-person) | 4 + 既存 10 件 mock 書き直し | API 472 |
+| B1 | 楽天 url を `external_url` で 4 点同期 carry → Modal「楽天で見る」ボタン | 8 (backend 4 + frontend 2 + parity 2) | API 476 / Web 169 |
+| B2 | lodging Modal で「終日 (チェックイン 15:00〜)」「評価情報なし (レビュー数不足)」自然化 | 3 | Web 172 |
+| C1 | 楽天 lodging 直前の `transit_to_next` を haversine + 車速 40km/h で合成 | 4 | API 480 |
+
+合計 **新規 36 件 + 既存更新 11 件**、tsc clean、build PASS、secret preflight **0 hit**。
+
+### user 要望と実装の対応
+| user 要望 | 対応 Task |
+|---|---|
+| 移動時間/手段が書いてない時がある (画像のような状態) | C1: dinner→lodging 間に「車で移動 (推定)・X分」帯を haversine 合成で復活 |
+| 楽天宿の Evidence Modal で「営業時間 不明 / 評価 不明」 | B2: lodging で「終日 (チェックイン..)」「評価情報なし (レビュー数不足)」自然化 |
+| 楽天根拠の時に楽天ページに飛びたい | B1: `external_url` 4 点同期 + Modal ボタン |
+| 宿泊代がほとんど入ってない | A3: VacantHotelSearch 移行で実価格 per-person を verified 取得 |
+| 価格帯 card↔modal 不整合 | A2: `_PRICE_MAP[None]` を `"estimated"` 化 + 3 段優先順位 |
+| Google Places 食費が取れない | A1+A2: `priceRange` field 取得 + priority 1 で midpoint verified |
+
+### 変更ファイル一覧 (17 ファイル)
+
+Backend (12):
+- `apps/api/src/evidence/places.py`
+- `apps/api/src/evidence/pack.py`
+- `apps/api/src/evidence/builder.py`
+- `apps/api/src/evidence/lodging.py`
+- `apps/api/src/llm/assembly.py`
+- `apps/api/src/routes/plan_routes.py`
+- `apps/api/src/schemas/__init__.py`
+- `apps/api/tests/test_evidence_places.py`
+- `apps/api/tests/test_llm_assembly.py`
+- `apps/api/tests/test_lodging.py`
+- `apps/api/tests/test_routes_plans.py`
+- `apps/api/tests/test_schema_parity.py`
+
+Frontend (2):
+- `apps/web/src/components/EvidenceModal.tsx`
+- `apps/web/src/components/EvidenceModal.test.tsx`
+
+Shared / docs (3):
+- `packages/shared-types/src/index.ts`
+- `docs/data-model.md`
+- `tasks/plans/2026-04-28-cost-and-evidence-fixes.md` (untracked、新規計画書)
+
+### 次のアクション (user 手動)
+6 commit に分けて develop に積む (各 task の commit 案は計画書 Step 末尾に記載済)。secret 0 hit 確認済。push → Vercel + Render auto deploy → 本番 verify。
+
+---
 
 ---
 
@@ -37,6 +95,99 @@
 - ランディングページのヒーロー文言調整
 - 「もう一度生成」ボタンの動線確認
 - 楽天宿の url を Plan view から外部リンクで開けるようにする (現状 evidence.sources にしか入ってない)
+
+---
+
+**🔴 2026-04-28 セッション末: プラン閲覧画面の 3 件診断 (working tree 編集なし、次セッション着手候補)**:
+
+user 報告 3 件の根本原因を切り分け済。実装は未着手、次セッション 1 ブランチ (例 `fix/plan-evidence-polish`) でまとめて対応推奨:
+
+1. **移動時間/手段が書いてない時がある**:
+   - 真因: `apps/api/src/routes/plan_routes.py:295` で `transit_to_next: None` 固定 (コメント「Phase 2.4 で実装予定」のまま)
+   - LLM は `item_type="transit"` の独立 item を出すが、フロント PlanItem.tsx は activity/meal/lodging だけ render する想定のため、間の transit が UI 上で抜け落ちる
+   - **最短修正候補**: `_serialize_plan_item` で隣接 non-transit item の間に transit item を吸収して `transit_to_next` を埋める (assembly 後段の post-process)。または PlanTimeline で transit item を「→ 駅で電車 25 分 ¥320」のような細い帯として render する UI 寄り fix の選択肢
+
+2. **楽天宿の Evidence Modal で「営業時間 不明 / 評価 不明」**:
+   - 営業時間: `_lodging_to_place_point` で `opening_hours=[]` 固定 → `_format_opening_hours_summary` が None → 「不明」表示。**lodging は 24h 営業前提**だから、UI 側で `item_type === "lodging"` のとき「終日 (チェックイン {check_in_earliest}〜)」のような lodging 専用表記に分岐するのが筋
+   - 評価: `lodging.py:167-173` で `reviewAverage` を抽出してるが、レビュー数 0 の宿は API レスポンスに該当 field 無し → None → 「不明」。API 側の制限なのでそのまま受容するか、レビュー数 0 を明示する文言にするかの選択
+
+3. **楽天根拠の時に楽天ページに飛べるようにしたい (user 要望)**:
+   - 真因: `LodgingOption.url` は `pack.py:167` で持っているが、`_lodging_to_place_point` が PlacePoint に carry しない (PlacePoint に url field 無し)
+   - **最短経路 (4 点同期)**:
+     - (a) `apps/api/src/evidence/pack.py` の `PlacePoint` に `external_url: str | None = None` 追加
+     - (b) `builder.py` の `_lodging_to_place_point` で `external_url=lodging.url` を渡す
+     - (c) `plan_routes.py` の `_serialize_plan_item` で sources に楽天があるとき `evidence["external_url"] = place.external_url` を流す
+     - (d) `apps/web/src/components/EvidenceModal.tsx` で `evidence.external_url` があれば「楽天で見る」ボタンを Google Maps リンクの隣に追加
+   - shared-types 側 `Evidence` 型にも `external_url?: string` 追加が必要 (3 点同期: docs/data-model.md / shared-types / Pydantic)
+
+**次セッションの推奨進行順**: 影響範囲狭い順に 2 (UI 分岐のみ) → 1 (assembly 後段) → 3 (3 点同期 + 4 ファイル編集)。1 ブランチ 3 commit 構成 or 別ブランチ並行どちらでも可
+
+---
+
+**🔴 セッション末追記 (2026-04-28、user スクショ + VacantHotelSearch ガイド共有)**:
+
+セッション後半で user がスクショ + 追加情報を提示。発見事項を以下にまとめる:
+
+**追加発見 (1) 移動時間欠落の真因 = 楽天 lodging への transit fetch 除外副作用**:
+- `apps/web/src/lib/transit.ts:500` の `rakuten_` prefix filter (Phase 3 polish 案 D 第 5 段、INVALID_REQUEST 回避目的) で、楽天 lodging への transit edge が transit_matrix に入らない → LLM が transit item を生成不能 → スクショの dinner→lodging 間で「車で移動・X分」帯が抜ける
+- **修正案**: フロント transit fetch 除外は維持、サーバ assembly 側で楽天 lodging への transit を haversine 距離 + 速度仮定 (km / 40 * 60 分、車固定) で合成して `transit_to_next` フォールバック生成。verified 精度は落ちるが欠落よりマシ
+
+**追加発見 (2) 価格帯の card↔modal 不整合 = `_PRICE_MAP[None]` の confidence semantics**:
+- スクショで card は「Google Places ✓ ¥1,500」と verified 風表示なのに、根拠バッヂ click → modal で「価格帯 不明」になる構造バグ
+- 真因: `apps/api/src/llm/assembly.py:130,137,144` の `_PRICE_MAP[item_type][None] = (jpy, "unknown")` で confidence="unknown" を返している。フロント inline EvidenceBadge は v6.1 fix で「unknown + sources 非空 → verified 表示」、modal `formatPriceLevel` は `"estimated" | "verified"` のみ fallback 発火 → 同じ unknown を 2 箇所で別解釈
+- **修正案 (A)、推奨**: backend `_PRICE_MAP[None]` の confidence を `"unknown"` → `"estimated"` に変更 (5 行程度)。意味的に正しい (heuristic だが値はある)。副作用は inline badge が「✓ green」→「推定 yellow」に変わる = verified を verified だけに使う方向で素直
+- **修正案 (B)、保守的**: frontend `formatPriceLevel` で `"unknown"` + `cost_jpy > 0` も「¥1,500 (概算)」表示。inline badge は ✓ 維持、modal 不整合だけ消える
+
+**追加発見 (3) Google Places API は入場料 field を持たない**:
+- `price_level` (1〜4) のみ、admission fee は非公開
+- 解決策候補: (a) `gpt-4o` web search tool で取得 (scope 外)、(b) demo region 限定で 30 件程度の curated YAML fixture (推奨、最速)、(c) `editorial_summary` を LLM 抽出させる (中庸)
+
+**追加発見 (4) 楽天 VacantHotelSearch 移行ガイド (user 提供、実装方針確定)**:
+- 現状の SimpleHotelSearch は `hotelMinCharge` = 「目安最安値」で日付/人数/空室考慮無し → 実価格と乖離
+- VacantHotelSearch は実価格 (`total` ÷ adultNum で 1 人 1 泊) が取れる
+- **必須変更**: endpoint を `Travel/VacantHotelSearch/20170426` に変更、params に `checkinDate` (YYYYMMDD) / `checkoutDate` / `adultNum` 追加、レスポンスは `roomInfo[].dailyCharge.total` 配列を sum して adultNum で割る
+- **トレードオフ**: 「指定日に空室あり」の宿のみ返るので 0 件率が現状より上がる → 第 8 段の楽天 only 方針 × 0 件で Google Places lodging fallback 経路に流れる頻度が増える可能性
+- ガイド本文 (Python 実装サンプル含む) は user メッセージにあり、次セッションで `apps/api/src/evidence/lodging.py` を書き直す
+
+**次セッションの推奨進行順 (demo 残時間優先)**:
+1. **最優先**: VacantHotelSearch 移行 (追加発見 4) — lodging cost 完全 verified 化、demo 訴求力大
+2. **次点**: `_PRICE_MAP[None]` confidence 修正案 (A) (追加発見 2) — 5 行で card↔modal 整合
+3. **次点**: 楽天 lodging への transit_to_next 合成 (追加発見 1) — haversine fallback で UI 欠落解消
+4. **時間あれば**: 入場料 fixture (追加発見 3 案 b) — 箱根/京都/草津 demo region 30 件
+5. **後回し**: 上で書いた 3 件診断 (transit_to_next 配線 / 楽天 url リンク / lodging Evidence Modal 24h 表記)
+
+1〜4 は 1 ブランチ (例 `fix/lodging-and-cost-verified`) で commit を分けて積む方針が効率的
+
+---
+
+**🔴 セッション末追記 (2026-04-28、追加発見 5: Google Maps 食費表記が取れない真因 = `priceRange` field 未取得)**:
+
+user 質問「Google Maps に食費の表記がある飲食店が多いのに取ってこれないのはなぜ？」に対する技術調査結果:
+
+- **真因**: `apps/api/src/evidence/places.py:21-33` の `_FIELD_MASK` / `_DETAILS_FIELD_MASK` に `priceRange` field が含まれていない。Places API (New) は `priceLevel` (1〜4 enum) と別に `priceRange` (実価格範囲、Money 型 startPrice/endPrice) field を持っており、多くの飲食店で実価格 (¥1,000〜¥2,000 等) が取れる
+- WebFetch で公式 docs 確認済: FieldMask path = `priceRange`、構造 = `{ startPrice: { currencyCode: "JPY", units: "1000", nanos: 0 }, endPrice: ... }`、JPY 対応
+
+**実装計画 (user 要望「普通に取れる価格はちゃんと取る、推定したところは推定と書く」を満たす設計)**:
+
+1. **`places.py`**: `_FIELD_MASK` / `_DETAILS_FIELD_MASK` に `priceRange` (search 用は `places.priceRange`) 追加。`_to_place_point` で `priceRange.startPrice.units` / `endPrice.units` を int 化、`currencyCode == "JPY"` のみ採用
+2. **`pack.py` `PlacePoint`**: `price_range_jpy: tuple[int, int] | None = None` 追加
+3. **`assembly.py` cost 解決を 3 段階優先順位に**:
+   - priority 1: `place.price_range_jpy` 取れている → midpoint 採用、confidence="verified"
+   - priority 2: `place.price_level` 取れている → `_PRICE_MAP[level]`、confidence="estimated"
+   - priority 3: 両方 None → `_PRICE_MAP[None]`、confidence="estimated" (現行 "unknown" から修正、追加発見 2 と統合)
+4. **3 点同期**: `docs/data-model.md` / `packages/shared-types/src/index.ts` `Evidence` 型 / Pydantic schema に `price_range_jpy` (modal で範囲表示する場合のみ必要、midpoint だけで済ますなら省略可)
+5. **EvidenceModal**: priceRange 取れていれば「¥1,000〜¥2,000」(verified 緑)、price_level のみなら「¥」「¥¥」記号 + estimated (黄)、両方無しなら「¥1,500 (推定)」(黄)
+
+**コスト懸念**: `priceRange` は Places API (New) **Pro tier** SKU に属する可能性があり、現状 Basic tier から課金が上がる可能性あり。demo scale (< 1000 calls) では誤差レベルだが、本番 scale 出すなら要確認
+
+**user 提案の進行順 (応答待機中、2026-04-28 セッション末)**:
+
+1. priceRange 取得 (本追加発見 5、~30 分)
+2. `_PRICE_MAP[None]` confidence semantics 修正 (追加発見 2、5 行、~5 分、上記 step 1 と統合)
+3. VacantHotelSearch 移行 (追加発見 4、~30 分)
+4. (時間あれば) 楽天 lodging への transit_to_next 合成 (追加発見 1)
+
+1 ブランチ (例 `fix/cost-properly-fetched`) で commit を分けて積む方針。user に「この順で進めて良い？」確認待ち
 
 **触らないでいい (実装済 + verify 済)**:
 - D 案 (出発地点撤去 + 現地集合・現地解散スコープ) ← merge 済
