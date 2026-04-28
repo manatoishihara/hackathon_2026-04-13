@@ -308,13 +308,38 @@ def assemble_plan(
                 place = alternate
                 place_id = place.place_id
             else:
-                # alternate も item_type 不適合 (or なし) → warn + accept、validator が
-                # item_type_category_mismatch を catch して retry guidance に流す
-                logger.warning(
-                    "LLM picked item_type-mismatched place %r (category=%s) for slot %r (item_type=%s); "
-                    "no compatible alternate, accepting (validator will catch)",
-                    place_id, place.category, slot_meta["slot_id"], slot_meta["item_type"],
+                # Phase 2 polish v6.2 (2026-04-28、本番で alternate 候補不足 → tier3 filtered
+                # out で accept されて validator の item_type_category_mismatch 連発が支配
+                # issue となった対策):
+                # alternate が item_type 適合な未使用 place で見つからないとき、
+                # **used 集合内** で item_type compatible な place を探して **再使用** する。
+                # lodging 連泊と同じく meal/activity も「枯渇時は重複許容で item_type 守る」
+                # 設計。validator は重複自体を issue とせず通すので 422 を防げる。
+                reused = _find_item_type_compatible_used_place(
+                    pack=pack,
+                    used_place_ids=used_place_ids,
+                    item_type=slot_meta["item_type"],
+                    slot_meta=slot_meta,
+                    slot_date=slot_date,
+                    prev_place_id=prev_place_id_for_swap,
                 )
+                if reused is not None:
+                    logger.warning(
+                        "LLM picked item_type-mismatched place %r (category=%s) for slot %r (item_type=%s); "
+                        "no fresh alternate, reusing already-used %r (category=%s) to keep item_type integrity",
+                        place_id, place.category, slot_meta["slot_id"], slot_meta["item_type"],
+                        reused.place_id, reused.category,
+                    )
+                    place = reused
+                    place_id = place.place_id
+                else:
+                    # 完全に詰む (used 集合にも item_type compatible なし) → warn + accept、
+                    # validator catch で retry guidance に流す
+                    logger.warning(
+                        "LLM picked item_type-mismatched place %r (category=%s) for slot %r (item_type=%s); "
+                        "no compatible alternate or reusable, accepting (validator will catch)",
+                        place_id, place.category, slot_meta["slot_id"], slot_meta["item_type"],
+                    )
 
         # Phase 2 polish v5 (2026-04-28、user 「重複は best-effort、エラー回避優先」):
         # lodging slot は連泊許容のため重複検出から除外。meal/activity slot は重複検出
@@ -778,6 +803,52 @@ def _is_item_type_compatible(item_type: str, place_categories: list[str]) -> boo
     if item_type == "lodging":
         return _categories_indicate_lodging(place_categories)
     return True  # activity slot は category 制約なし (validator も activity はチェックしない)
+
+
+def _find_item_type_compatible_used_place(
+    *,
+    pack: EvidencePack,
+    used_place_ids: set[str],
+    item_type: str,
+    slot_meta: dict,
+    slot_date: date,
+    prev_place_id: str | None = None,
+) -> PlacePoint | None:
+    """item_type pre-check で fresh alternate 候補が枯渇したとき、used_place_ids 集合内で
+    item_type compatible な place を再使用するための fallback (Phase 2 polish v6.2)。
+
+    本番 Run 13e+13f で `item_type_category_mismatch` が支配 issue となり、原因は pack の
+    meal candidate 不足 + 重複防止で 4-6 meal slot 埋めるには candidate 足りない構造。
+    解: 「meal 枯渇時は同じ restaurant を再使用してでも item_type は守る」設計。
+
+    優先順位:
+      1. used 集合内 + item_type compatible + slot eligibility OK
+      2. rating 最高、tie は place_id 辞書順
+      3. 見つからなければ None (caller は warn + accept で validator catch に流す)
+
+    **reachability は filter しない**: 同 place 連続 (self-loop) は後段 transit logic で
+    skip される、edge 不在は同じく transit skip path に流れる。reuse は item_type 守る
+    ための fallback で reachability は別の問題として後段が handle する。
+    """
+    if not used_place_ids:
+        return None
+    candidates: list[PlacePoint] = []
+    for p in pack.places:
+        if p.place_id not in used_place_ids:
+            continue
+        if not _is_item_type_compatible(item_type, p.category):
+            continue
+        if not is_place_eligible_for_slot(
+            p,
+            slot_start_hhmm=slot_meta["start_hhmm"],
+            slot_end_hhmm=slot_meta["end_hhmm"],
+            date_=slot_date,
+        ):
+            continue
+        candidates.append(p)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda p: (-(p.rating or 0.0), p.place_id))
 
 
 def _find_eligible_alternate_for_slot(

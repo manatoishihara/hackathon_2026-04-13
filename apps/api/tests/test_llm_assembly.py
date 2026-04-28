@@ -1854,3 +1854,75 @@ def test_assemble_plan_transit_duration_zero_uses_minimum_one_minute():
         f"duration_min=0 でも transit_end ({transit_end}) > transit_start ({transit_start}) "
         f"であるべき (最小 1 分補正)"
     )
+
+
+# ==============================
+# Phase 2 polish v6.2: item_type pre-check fallback で used 集合から reuse
+# ==============================
+
+
+def test_assemble_plan_item_type_reuses_used_meal_when_candidates_exhausted(caplog):
+    """v6.2: meal slot で alternate 候補が枯渇したとき、used 集合内 meal place を再使用する。
+
+    本番 Run 13f で `item_type_category_mismatch` 多発の対策。pack の meal candidate が
+    薄いと 4-6 meal slot を埋めるには candidate 不足 → tier3 filtered out → accept で
+    item_type 不適合 place を採用 → validator が item_type_category_mismatch 連発。
+
+    fix: alternate なし時に used 集合の中で meal-compatible を reuse、validator は重複自体を
+    issue にしないので 422 を防げる。
+    """
+    import logging
+
+    p_attr = _place("P_attr", category=["tourist_attraction"])
+    p_park = _place("P_park", category=["park"])  # LLM が誤 meal 割当
+    p_restaurant = _place("P_restaurant", category=["restaurant"])  # 唯一の meal
+    edges = [
+        _edge("P_attr", "P_restaurant"), _edge("P_restaurant", "P_attr"),
+        _edge("P_attr", "P_park"), _edge("P_park", "P_attr"),
+        _edge("P_restaurant", "P_park"), _edge("P_park", "P_restaurant"),
+    ]
+    pack = _make_pack(places=[p_attr, p_park, p_restaurant], edges=edges, total_days=1)
+    plan_v2 = LlmGeneratedPlanV2(
+        slots=[
+            LlmSlotAssignment(slot_id="day1_morning", place_id="P_attr", rationale="day1 朝の観光地巡り"),
+            LlmSlotAssignment(slot_id="day1_lunch", place_id="P_restaurant", rationale="day1 ランチ食事処"),
+            LlmSlotAssignment(slot_id="day1_dinner", place_id="P_park", rationale="LLM 誤割当 dinner park"),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="src.llm.assembly"):
+        result = assemble_plan(plan_v2, pack)
+    place_items = [it for it in result.items if it.place_id is not None]
+    # day1_dinner は item_type pre-check で park → P_restaurant に reuse される
+    dinner_items = [it for it in place_items if it.item_type == "meal"]
+    # lunch + dinner で 2 件、両方 P_restaurant (重複 OK で item_type 守る)
+    assert len(dinner_items) == 2
+    assert all(it.place_id == "P_restaurant" for it in dinner_items)
+    assert any(
+        "reusing already-used" in rec.getMessage() and "item_type integrity" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+def test_find_item_type_compatible_used_place_skips_when_no_compatible_in_used():
+    """used 集合に item_type compatible がない場合は None を返す (caller は accept fallback)。"""
+    from src.llm.assembly import _find_item_type_compatible_used_place
+
+    p_attr = _place("P_attr", category=["tourist_attraction"])
+    p_park = _place("P_park", category=["park"])
+    pack = _make_pack(places=[p_attr, p_park], edges=[], total_days=1)
+    used = {"P_attr", "P_park"}
+    slot_meta = {
+        "slot_id": "day1_lunch",
+        "start_hhmm": "12:00",
+        "end_hhmm": "14:00",
+        "item_type": "meal",
+    }
+    result = _find_item_type_compatible_used_place(
+        pack=pack,
+        used_place_ids=used,
+        item_type="meal",
+        slot_meta=slot_meta,
+        slot_date=date(2026, 6, 1),
+        prev_place_id=None,
+    )
+    assert result is None  # used に meal-compatible なし
