@@ -27,6 +27,31 @@
 
 ## ログ
 
+## 2026-04-28: Phase 3 polish 案 D 第 2 段 — 楽天 lodging を pack.places に forced 注入する再設計を採用、merge 修復後に再実装
+- **背景**: ローカル verify (16:21:50) で 1 回成功 (attempt 4 で gpt-4.1-mini fallback) したが、log で **楽天 lodging place_id (`rakuten_<数字>` 形式) が一度も登場していない**ことが判明。assembler の swap log は Google Places の `ChIJz7WQw9meGWAR8_Ijv9AMs4Q` (hotel) や `ChIJU2N6VnSjGWARiat_MOyKCJM` (hotel) しか触れていない
+- **真因 (ceb6e75 構造)**: 楽天 API は 5 件 fetch 成功 (`rakuten lodging: 5 件取得`) しているが、`pack.lodging_options` フィールドにのみ入る。LLM プロンプトの slot 候補 (`pack.places`) には含まれないため、LLM は楽天宿を選びようがない
+- **9e8643b merge 修復経緯**: ローカル `develop` の HEAD `9e8643b` が conflict marker (`<<<<<<<` / `=======` / `>>>>>>>`) を **未解決のまま commit** された壊れた merge commit になっていた (lodging.py / test_lodging.py / builder.py / test_evidence_builder.py / lessons.md / todo.md の 6 ファイルに合計 50+ markers)。修復方針:
+  - `lodging.py` / `test_lodging.py`: ceb6e75 (docs/rakuten-travel-api.md と整合した新 spec 準拠版) 採用
+  - `builder.py`: c47ea3e (Phase 3 polish 案 1+2+3 全部入り) を base に、ceb6e75 の楽天関連修正 (places 重心を lat/lng として `_fetch_lodging_safe` に渡す方針、Geocoding 呼び出し削減) を再適用
+  - `test_evidence_builder.py`: c47ea3e の 8 base axes / lodging quota +1 / popularity sort を維持
+  - `lessons.md` / `todo.md`: ceb6e75 採用
+  - 新 commit `be29b15 fix(merge): 9e8643b の merge conflict marker 残存を解消...` で develop 修復完了
+- **forced 注入再実装 (本セッション末、2026-04-28)**:
+  - `_lodging_to_place_point(LodgingOption) -> PlacePoint`: category 固定 `["lodging", "hotel", "ryokan"]`、`opening_hours_unknown_days = [0..6]` 全曜日 unknown 扱いで eligibility 判定 skip (lodging は 24h 営業仮定)
+  - `build_evidence_pack` の merge を 2 段階化: (a) 先行 merge で interim_places を計算 → 重心座標で楽天 fetch → (b) 楽天結果が 1+ 件あれば forced_places として再 merge、0 件なら interim を採用 (再 merge スキップ)
+  - rakuten_lodging_places は anchor 同等扱いで area filter / quota / 距離ガード bypass
+  - test 追加 4 件: `test_rakuten_lodging_injected_into_pack_places` / `test_rakuten_lodging_empty_does_not_break_pack` / `test_lodging_to_place_point_conversion` / `test_lodging_to_place_point_handles_missing_coords`
+  - 既存 test (`test_build_evidence_pack_assembles_structure` / `test_all_searches_failing_still_returns_pack`) に `_fetch_lodging_safe` mock を追加して hermetic 化
+- **検証**: API test 450 PASS (既知 env 系 2 件のみ fail、本変更無関係)
+- **学び 1 (merge 修復の正しい手順)**: conflict marker 込みで commit された merge commit は、各ファイル単位で「どの commit を base にするか」を判断する必要がある。今回は変更履歴 (どっちの ancestor か) を見て、**Phase 3 polish 全部入りの c47ea3e** vs **楽天 spec 準拠の ceb6e75** を ファイル別に選別した。本来 `git mergetool` を使えばインタラクティブに解決できるが、CLI 環境では `git show <commit>:<path> > <path>` で直接書き戻すのが pragmatic
+- **学び 2 (data 層と prompt 層の分離による盲点、再録)**: pack に「lodging_options」と「places」の 2 系統があり、LLM prompt は片方しか見ていなかった。**「データを取得した = 機能が動いた」とは限らない**、prompt-level で LLM が選択肢として認識できているかまで保証しないと使えない。今回 forced 注入で構造的解消
+- **学び 3 (anchor mechanism の汎用性、再録)**: `_merge_anchors_and_search` で anchor places を「filter / quota / 距離ガード bypass」する設計は、Phase 2.1 の anchor mode 用に作られたが、楽天 lodging のような「user 明示意思ではないが構造的に優先したい候補」にも自然に流用できた。merge を 2 段階化 (interim → 楽天 fetch → forced 注入で再 merge) して座標確定と forced 注入を共存させた工夫もこの設計の柔軟さに依存
+- **学び 4 (verify 観察の精度)**: ログで `rakuten lodging: 5 件取得` を見て「楽天動いた」と判断したが、これは **fetch 段階の成功**で、**plan に表示される段階の成功ではない**。ログの assembler swap 行で `rakuten_<数字>` place_id が登場するかまで確認する verify ルートが必要だった
+- **次のアクション (user verify)**:
+  - 5〜10 回連続 submit で安定性確認、各 plan の lodging slot に楽天宿 (`rakuten_<数字>` 形式 or 「ホテル」「旅館」名) が登場するか確認
+  - 安定性 OK なら commit + push → Vercel/Render auto deploy
+  - 本番 env (Render / Vercel) に `RAKUTEN_APPLICATION_ID` (UUID) + `RAKUTEN_ACCESS_KEY` (`pk_...`) + `RAKUTEN_AFFILIATE_ID` + `SITE_BASE_URL` 投入
+
 ## 2026-04-28: 楽天トラベル API が 2026-02-09 に新 API へ移行、エンドポイント + accessKey が必須化
 - 問題: `https://app.rakuten.co.jp/services/api/Travel/SimpleHotelSearch/20170426` が `wrong_parameter` を返す。Application ID（UUID形式）を入れても疎通しない
 - 原因: 2026年2月9日に旧 Travel API が完全停止。新 API への移行で以下が変わった:
