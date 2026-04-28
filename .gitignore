@@ -15,6 +15,7 @@ dist/
 build/
 .turbo/
 *.tsbuildinfo
+next-env.d.ts
 
 # === Logs ===
 *.log
@@ -44,3 +45,4 @@ htmlcov/
 /test-results/
 /playwright-report/
 /playwright/.cache/
+/.playwright-mcp/
