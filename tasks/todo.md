@@ -7,7 +7,15 @@
 
 ## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中）
 
-**🟡 Phase 3 polish 案 D 第 6 段 (2026-04-28、楽天 lodging に verified cost 経路、working tree 未 commit)**: 第 3 段で Evidence Modal の価格帯は ¥¥ 表示できたが、user が inline Evidence Badge が「推定」のままと指摘。`_PRICE_MAP[lodging][N] = (jpy, "estimated")` で実価格 (15,000 円) が上書きされる構造的問題を `_resolve_cost_with_rakuten_override` で解消:
+**🟡 Phase 3 polish 案 D 第 8 段 (2026-04-28、楽天 only 方針への切替、working tree 未 commit)**: 第 2-7 段の forced 注入後 verify で 2 連続 422、kind_summary 全 attempts `item_type_category_mismatch` 支配。真因 = Google Places の複合カテゴリ hotel (例: hotel + restaurant + spa + wedding_venue) が LLM の meal/lodging 判断を混乱させる構造問題。user 提案で「楽天 only」方針へ切替:
+- `apps/api/src/evidence/builder.py:build_evidence_pack`: 楽天 lodging が 1 件以上取れたら search_results から Google Places の lodging を `_classify_bucket(p) == "lodging"` filter で完全排除、bucket を楽天で占有
+- 楽天 0 件 (env 未設定 / API 障害 / 検索範囲外) は fallback で Google Places lodging を残す (demo blocker 回避)
+- attraction / meal / other は Google Places で従来通り
+- API test **461 PASS**、新規 3 件 (`test_rakuten_only_when_present_excludes_google_lodging` / `test_rakuten_zero_keeps_google_lodging_as_fallback` / `test_rakuten_only_keeps_attraction_meal_other_buckets`)
+- **次のアクション (user verify)**: 再 submit で (i) lodging slot に楽天宿のみ登場、(ii) meal slot に hotel 誤選が起きない、(iii) 422 解消、の 3 点確認
+- 詳細: lessons.md「2026-04-28: Phase 3 polish 案 D 第 8 段 — 楽天 lodging only 方針への切替」エントリ参照
+
+**🟡 Phase 3 polish 案 D 第 6 段 (2026-04-28、楽天 lodging に verified cost 経路、commit `937ea09` で develop merge 済)**: 第 3 段で Evidence Modal の価格帯は ¥¥ 表示できたが、user が inline Evidence Badge が「推定」のままと指摘。`_PRICE_MAP[lodging][N] = (jpy, "estimated")` で実価格 (15,000 円) が上書きされる構造的問題を `_resolve_cost_with_rakuten_override` で解消:
 - `apps/api/src/llm/assembly.py`: 楽天 lodging (place_id `rakuten_` prefix) は `pack.lodging_options.price_jpy_per_night` を実価格として使用、`cost_confidence="verified"` に設定。Google Places / 楽天マッチしない / lodging_options 空などは `_PRICE_MAP` 経由 fallback
 - `apps/api/tests/test_llm_assembly.py`: 新規 3 件 (verified path / Google estimated 維持 / fallback)
 - API test **458 PASS**

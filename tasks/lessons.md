@@ -27,6 +27,22 @@
 
 ## ログ
 
+## 2026-04-28: Phase 3 polish 案 D 第 8 段 — 楽天 lodging only 方針への切替で Google Places の複合カテゴリ hotel 起因の 422 を構造的に解消
+- **背景**: 第 2-7 段の forced 注入後の verify で 2 連続 422、kind_summary 全 attempts `item_type_category_mismatch` 支配。log 解析で:
+  - LLM が複合 hotel `ChIJU2N6Vn... category=['hotel', 'banquet_hall', 'wedding_venue', 'public_bath', 'chinese_restaurant', 'spa', 'french_restaurant', 'japanese_restaurant', 'lodging', 'restaurant', ...]` を **meal slot に誤選**
+  - swap で楽天宿に置換されるが、楽天宿の category=`["lodging", "hotel", "ryokan"]` は meal 不互換で reuse fallback も効かず → validator catch
+  - 加えて `from_place_id=rakuten_<数字> reachable=0` = 楽天 place 経由の transit edge が transit_matrix に無く (フロント transit fetch の rakuten_ skip)、楽天宿が前 slot のとき構造が壊れがち
+- **真因**: Google Places の lodging は **複合カテゴリ** (温泉旅館 + restaurant + spa + wedding_venue 等) で LLM が「これは hotel か restaurant か」迷う元凶。楽天 forced 注入と並存させると、両者が悪い形で干渉して 422 量産
+- **第 8 段 fix (user 提案、楽天 only 方針)**:
+  - `apps/api/src/evidence/builder.py:build_evidence_pack`: 楽天 lodging が 1 件以上取れたら、`search_results` から Google Places の lodging (`_classify_bucket(p) == "lodging"`) を **完全排除**して bucket を楽天で占有
+  - 楽天 0 件 (env 未設定 / API 障害 / 検索範囲外) は fallback で `_interim_places` (Google Places lodging 含む) を採用、demo blocker 回避
+  - attraction / meal / other は Google Places で従来通り
+- **検証**: API test 461 PASS、新規 3 件 (`test_rakuten_only_when_present_excludes_google_lodging` / `test_rakuten_zero_keeps_google_lodging_as_fallback` / `test_rakuten_only_keeps_attraction_meal_other_buckets`)
+- **学び 1 (デフォルト混在の罠)**: 「楽天 + Google を両方 pack に入れる」は一見「データソースが豊富で良いプラン」と思えるが、実際は **異なる category 体系の混在 = LLM の判断混乱の元凶**。同一 bucket 内で category 体系を統一する方が LLM の slot 選択は安定する
+- **学び 2 (demo 訴求点の集約)**: 「楽天 only」方針は demo 説明として明確。「Google Places で観光地 + 楽天トラベルで実価格 + 実評価」と単純な役割分担で訴求できる。曖昧な「両方混ぜて使ってます」より強い
+- **学び 3 (forced 注入の段階的後退)**: 第 2 段 (forced 全注入) → 第 7 段 (rating 上位 N 件制限) → 第 8 段 (楽天 only + Google lodging 排除) と 3 段階で方針が変わった。最初から **「楽天が取れる region では楽天 only」** の bold な判断ができてれば回り道が減ったかも。ただし段階的に副作用を見つけて学ぶプロセスは demo 直前の意思決定として正しい
+- **次のアクション (user verify)**: 再 submit で (i) lodging slot に楽天宿のみ登場、(ii) meal slot に hotel 誤選が起きない、(iii) 422 が解消される、の 3 点確認 → 安定性 OK なら commit + push
+
 ## 2026-04-28: Phase 3 polish 案 D 第 6 段 — 楽天 lodging に verified cost 経路を追加 (inline Evidence Badge を「推定」→「検証済」に)
 - **背景**: 第 3 段で楽天の評価 + 価格帯が Evidence Modal に表示されるようになったが、user が **inline Evidence Badge (Modal を開かずに timeline に出る小バッジ)** がまだ「推定」のままだと指摘
 - **真因**: `assembly.py:_resolve_cost` は `_PRICE_MAP[item_type][price_level]` を引くが、`_PRICE_MAP["lodging"]` の値はすべて `(jpy, "estimated")` or `(jpy, "unknown")` で、`"verified"` は存在しない
