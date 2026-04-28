@@ -58,7 +58,11 @@ const baseFormFields = {
   region: z.string().min(1, "行き先エリアを入力してください"),
   start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD 形式で入力"),
   end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD 形式で入力"),
-  departure_point: z.string().min(1, "出発地を入力してください"),
+  // D 案 (2026-04-28): demo スコープは「現地集合・現地解散」プランに割り切るため、
+  // 出発地点入力は UI から削除した。フィールド自体は API contract 互換のため残し、
+  // フロントの submit 時に内部で「現地集合」デフォルトを補う（apps/web/src/lib/api.ts）。
+  // 将来 B 案（Geocoding + 長距離 transit）実装時に min(1) を復活させる。
+  departure_point: z.string(),
   budget_per_person_jpy: z
     .number()
     .int()

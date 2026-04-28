@@ -27,6 +27,51 @@
 
 ## ログ
 
+## 2026-04-28: `departure_point` が生成パイプライン全層で構造的に無視されていた — D 案 (現地集合・現地解散スコープに割り切り) で確定、将来 B 案で復活
+- **問題 (user 報告)**: 出発地点フォームに「東京駅」等を入力しても、生成された旅程は旅先 (草津 / 箱根) の day1_morning 観光地から開始する。出発地→旅先の長距離移動費が予算 (transit カテゴリ) に計上されない
+- **systematic-debugging Phase 1 で根本原因確定 — バグじゃなく設計の構造的欠落**:
+  - 入力経路: form → DB `plans.departure_point` → `pack.query_context.departure_point` まで文字列としては流れる
+  - **しかし生成パイプライン 7 層全てで参照されない**:
+    - `evidence/builder.py:_generate_keywords` は `ctx.region` のみ使用、departure_point は keyword 検索しない → pack.places に出発地が入らない
+    - フロント `transit.ts` は MAX_DISTANCE_KM=15 で 15km 以内ペアのみ Maps SDK fetch → 東京 (departure) → 草津 (region) は ~200km で全ペア out
+    - `assembly.py:generate_slot_catalog` の day1 は `morning(09:00)` から start、「出発」「day1_arrive」slot 無し (**最終日の lodging だけ symmetric に skip** という暗黙の「現地で泊まって帰る」非対称設計)
+    - LLM `prompts/v2.0.0/system.md` は departure_point ルール 0 行 (rule 1〜9 全部 places/slot/category の話)
+    - `assembly.py:assemble_plan` は pack.places から全 slot を埋めるだけ
+    - `plan_routes.py:_serialize_plan_item` は LLM 出力の item をそのまま変換、出発→最初の place の transit を prepend する処理 0 行
+- **歴史的経緯 (なぜそうなったか)**: Phase 1.3 で「日本国内 transit は Google Routes/Directions サーバ API で取れない、フロント Maps JS SDK の DirectionsService だけが Jorudan 提携の transit を返す、それも近距離 15km 以内のみ運用」と割り切ったとき、出発地点を別レイヤで扱うフォロータスクが生えなかった (`apps/api/src/evidence/routes.py:1-17` に明文化済の制約)
+- **検討した 3 案 (A/B/C) と user 判断**:
+  - A. フロント表示層 prepend: 実装 2〜3 時間、共有 URL で消える、運賃精度低い
+  - B. Backend で pack.places + slot_catalog に組み込む: 4〜6 時間、3 点同期 + 422 retry チューニング再発リスク
+  - C. 「※ 旅先到着後のプランを生成」hint だけ追記
+  - **重要な気づき (user 提案)**: 既存 slot_catalog が「最終日 lodging skip = 帰宅前提」非対称になっているところ、**出発側も「現地到着済み」前提にすれば対称** = 「現地集合・現地解散プラン」というコンセプトが defensible (後付け正当化ではなく、コードが既にそうなっている)
+- **D 案で確定 (実装完了、2026-04-28、commit 提案待ち)**:
+  - フォーム `apps/web/src/app/plan/new/page.tsx` の「出発地」 Input + Label 撤去
+  - zod schema `departure_point: z.string().min(1, ...)` → `z.string()` (空文字許容)
+  - api.ts で `form.departure_point?.trim() || "現地集合"` をフロントから送信、Pydantic / DDL 無変更
+  - UI 上の追加注記は user 判断で **付けない** (入力欄の不存在自体で意図は伝わるため、過度な説明はノイズ)
+  - `docs/data-model.md` の `departure_point` フィールドコメントに D 案経緯記載
+  - **3 点同期トリガーせず**: schema は変えない、フロントの fallback で吸収。将来 B 案実装時に min(1) を復活させる
+  - 検証: web test 165/165 PASS (新規 1 件「accepts empty departure_point」追加、既存 fixture は影響なし) / tsc clean / build PASS
+- **将来 B 案ロードマップ (demo 提出後の polish)**: 出発地点 Geocoding (Google Geocoding API は project enabled 済) → 合成 place_id ではなく本物の place_id を pack.places 先頭に注入 → フロント Maps SDK の MAX_DISTANCE_KM=15 を「出発→最近接 place の 1 edge だけ無制限」例外で拡張 → slot_catalog 先頭に day1_arrive (item_type=transit) 固定 slot 挿入 → system.md に「day1_arrive は assembler 自動生成」明示 → fare 欠損時は距離 × 単価決定論カタログ (`_PRICE_MAP[transit_long_distance]`、新幹線 ~16円/km / 在来線特急 ~25円/km) で補完。実装目安 4〜6 時間、422 retry チューニングを伴う
+- **学び 1 (構造的)**: 「フォーム入力欄の存在 = 機能の実装」とは限らない。Phase 1 で割り切った設計判断 (long-distance transit は別レイヤ) のフォロータスクが生えていないと、ユーザ体験上は「入力が無視される」見え方になる。**設計の割り切りをするときは「未実装の連鎖タスク」を todo に必ず残す**
+- **学び 2 (時間資源配分)**: hackathon demo 直前は backend に手を入れる選択肢 (B) はリスク高。**MVP/demo 提出フェーズでは「正しさより安定」を優先し、UI 撤去 (D) で逃げる判断が defensible**。D 案は単なる「諦め」ではなく、既存設計の対称性を完成させる positive な reframing (片側だけ非対称な暗黙設計を symmetric に揃える)
+- **学び 3 (非対称設計の発見)**: 既存 `assembly.py:generate_slot_catalog` の「最終日 lodging skip」だけ非対称だった暗黙設計が、出発地点の構造的欠落の真因。**コードレベルの対称性 (出発・帰宅で同じ skip ルール) を維持する判断は、UX レベルでも defensible なコンセプト (現地集合・現地解散) に直結する**
+- **rule 昇格候補 (2 回目で判断)**: 「設計判断のフォロータスク化」と「コード対称性 = UX defensibility」は次に同種ケースが出たら `.claude/rules/` に昇格
+
+## 2026-04-28: Demo 確定 — 2 泊 3 日 plan が完成、4 日 plan は demo スコープ外として保留
+- **状況**: v6.2 deploy 後、本番 Run 13g (草津 4 日 / お任せ) で 422 再発、kind_summary=[item_type_category_mismatch=2, **budget_exceeded=4 (毎 attempt)**, outside_opening_hours=1]
+- **真因 (4 日 plan の budget_exceeded)**: 草津 pack の meal candidate 3-4 件しかないため、6 食 (lunch+dinner × 3 日) を埋めるには同 restaurant を 5-6 回重複利用必要 → 食費累積で `meal budget = 80000×0.3 = 24,000 円` を超過 → validator catch
+- **3 日 plan は完璧に動作**: Evidence Modal で出典/営業時間/評価表示、Map マーカー表示、dinner/lodging 含む全 slot 埋まる、`/api/plans/generate → 200`
+- **user 判断**: 「2 泊 3 日なら根拠やマップ・出力数ともにうまくいったからこれで行こう」→ **demo target を 3 日 plan に確定、4 日 plan は demo スコープ外**
+- **学び (重要、Phase 2 polish 7 段階の総括)**:
+  - 「重複完全禁止」を hard constraint で入れた v1 の判断が後続全部の対症療法を生んだ。**Constraint の設計時に「本番 candidate 数で satisfiable か」を事前評価する**ルール候補 (`.claude/rules/llm-rules.md` 昇格)
+  - **constraint を緩和するときは段階的でなく「constraint 自体を再設計」する判断もアリ**。重複防止を「lodging 完全許容 / meal/activity best-effort」と type-aware に分けた v5 設計判断は正解
+  - **demo スコープを早めに切る**判断が時間制約下では重要。完璧を追わずに 3 日 plan で確定したのは正しい時間資源配分
+- **後続候補 (demo 後)**:
+  - v6.3 generator で `budget_exceeded` を soft issue 分類、retry 流さず plan 採用
+  - cost 計算で重複 place は累積しない logic
+  - Pack 構築時に meal candidate を強化検索
+
 ## 2026-04-28: Phase 2 polish v6.2 設計 — Run 13f log で item_type_category_mismatch 多発の真因 (meal candidate 不足) 確定、used 集合 reuse fallback で解消
 - **Run 13f (v6.1 deploy 後、JST 04:21 草津 3 日 / 30,000 円) で 422 再発**:
   - attempt 1〜4 全部 `item_type_category_mismatch` を含む (各 1〜2 件)、計 5 issues / 4 attempts で 422
