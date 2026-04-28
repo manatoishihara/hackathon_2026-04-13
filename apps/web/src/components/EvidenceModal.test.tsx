@@ -49,7 +49,9 @@ describe("EvidenceModal", () => {
     // 5 fields
     expect(screen.getByText("09:00–17:00")).toBeInTheDocument();
     expect(screen.getByText(/4\.5/)).toBeInTheDocument();
-    expect(screen.getByText(/¥¥/)).toBeInTheDocument(); // price_level=2 → ¥¥
+    // makeItem default: cost_jpy=1500, cost_confidence="verified" → ￥1,500 表示
+    // (Phase 3 polish 第 9 段 hotfix2: verified cost_jpy が price_level より優先)
+    expect(screen.getByText(/1,500/)).toBeInTheDocument();
     expect(screen.getByText("Google Places")).toBeInTheDocument();
     expect(screen.getByText("2026-04-26 10:32")).toBeInTheDocument();
   });
@@ -173,8 +175,12 @@ describe("EvidenceModal", () => {
     expect(sourcesLabel.parentElement?.textContent).toContain("— 不明");
   });
 
-  it("price_level=4 なら ¥¥¥¥（4 枚）", () => {
+  it("price_level=4 + cost_confidence!=verified なら ¥¥¥¥（4 枚）", () => {
+    // hotfix2: cost_confidence="verified" だと cost_jpy が優先されるので、
+    // price_level 記号 fallback を test するには verified 以外で setup する。
     const item = makeItem({
+      cost_jpy: null,
+      cost_confidence: "unknown",
       evidence: {
         opening_hours: "09:00–17:00",
         rating: 4.5,
@@ -219,8 +225,12 @@ describe("EvidenceModal", () => {
     expect(text).not.toContain("〜");
   });
 
-  it("price_range_jpy 不在で price_level あれば ¥¥¥ 記号 fallback", () => {
+  it("price_range_jpy 不在 + cost_confidence!=verified で price_level あれば ¥¥¥ 記号 fallback", () => {
+    // hotfix2: verified cost_jpy があると ¥¥¥ より cost_jpy 数値が優先されるので、
+    // price_level 記号 fallback を test するには verified 以外で setup する。
     const item = makeItem({
+      cost_jpy: null,
+      cost_confidence: "unknown",
       evidence: {
         price_level: 2,
         sources: ["Google Places"],
@@ -231,6 +241,28 @@ describe("EvidenceModal", () => {
     const text = priceLabel.parentElement?.textContent ?? "";
     expect(text).toContain("¥¥");
     expect(text).not.toContain("〜");
+  });
+
+  // Phase 3 polish 第 9 段 Modal 配線 hotfix2 (2026-04-28、楽天宿 ¥ 表示問題対応):
+  // cost_confidence="verified" + cost_jpy が取れていれば、price_level 記号より
+  // 優先して「￥X,XXX」実数値表示する。楽天 lodging の典型ケース。
+  it("cost_confidence=verified + price_level 両方ある場合は cost_jpy 数値が優先される", () => {
+    const item = makeItem({
+      cost_jpy: 12000,
+      cost_confidence: "verified",
+      evidence: {
+        // price_level=1 (¥) があるが、verified cost_jpy が優先で 「￥12,000」表示
+        price_level: 1,
+        sources: ["楽天トラベル"],
+      },
+    });
+    render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+    const priceLabel = screen.getByText("価格帯");
+    const text = priceLabel.parentElement?.textContent ?? "";
+    expect(text).toContain("12,000");
+    expect(text).not.toContain("(推定)"); // verified なので推定タグなし
+    // 単独の "¥" 記号 (price_level=1 表示) ではないことを確認
+    expect(text).not.toMatch(/価格帯[\s]*¥$/);
   });
 
   it("複数 sources は ' / ' 区切りで連結", () => {

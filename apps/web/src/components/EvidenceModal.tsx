@@ -193,7 +193,20 @@ function formatPriceLevel(
       dim: false,
     };
   }
-  // priceRange が無い時の fallback: Google Places の price_level (1〜4) → ¥¥¥¥ 記号
+  // Phase 3 polish 第 9 段 Modal 配線 hotfix2 (2026-04-28、楽天宿 ¥ 表示問題対応):
+  // cost_confidence="verified" な cost_jpy は外部 API (楽天等) の実取得値で、
+  // price_level の ¥¥¥ 記号 (推定 4 段階) より具体的・確定情報。priceRange の次に
+  // 優先する。例: 楽天 lodging で price_jpy=12,000 が verified なら「￥12,000」表示
+  // (price_level=2 の ¥¥ 記号より有益)。
+  if (
+    typeof costJpy === "number" &&
+    costJpy > 0 &&
+    costConfidence === "verified"
+  ) {
+    return { text: formatJpy(costJpy), dim: false };
+  }
+  // priceRange / verified cost_jpy が無い時の fallback: Google Places の
+  // price_level (1〜4) → ¥¥¥¥ 記号
   if (typeof level === "number" && level >= 1 && level <= 4) {
     return { text: "¥".repeat(level), dim: false };
   }
@@ -203,10 +216,9 @@ function formatPriceLevel(
   if (
     typeof costJpy === "number" &&
     costJpy > 0 &&
-    (costConfidence === "estimated" || costConfidence === "verified")
+    costConfidence === "estimated"
   ) {
-    const tag = costConfidence === "verified" ? "" : " (推定)";
-    return { text: `${formatJpy(costJpy)}${tag}`, dim: false };
+    return { text: `${formatJpy(costJpy)} (推定)`, dim: false };
   }
   return { text: UNKNOWN_VALUE_LABEL, dim: true };
 }
