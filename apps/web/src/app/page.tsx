@@ -1,4 +1,4 @@
-import { Calendar, MapTrifold } from "@phosphor-icons/react/dist/ssr";
+import { Clock, MapTrifold, UsersThree } from "@phosphor-icons/react/dist/ssr";
 import {
   FeatureSection,
   type Feature,
@@ -9,18 +9,27 @@ import { HeroSection } from "@/components/landing/HeroSection";
 const features: Feature[] = [
   {
     number: "01",
-    label: "EVIDENCE-BASED PLACES",
-    title: "実在するスポット だけを提案する",
+    label: "PLANNING TOGETHER",
+    title: "全員の希望を、1 つのプランに編む",
     description:
-      "Google PlacesのAPIを使って実際にある店や観光地のみを提案します。",
-    icon: <MapTrifold size={88} weight="duotone" />,
+      "2〜5 人ぶんの希望を一度に入力でき、AI が全員の希望文を読み合わせて、誰か一人に偏らない配分を目指します。",
+    icon: <UsersThree size={88} weight="duotone" />,
   },
   {
     number: "02",
-    label: "TIME-AWARE PLAN",
-    title: "時間的に成立する 旅程を組む",
-    description: "Google MapsのAPIを使って移動時間を計算しています。",
-    icon: <Calendar size={88} weight="duotone" />,
+    label: "EVIDENCE-BACKED PLACES",
+    title: "実在の場所だけを使う",
+    description:
+      "提案されるスポットは Google Places で実在を確認したものだけ。各アイテムの営業時間・評価・出典をバッヂから 1 件ずつ確認できます。",
+    icon: <MapTrifold size={88} weight="duotone" />,
+  },
+  {
+    number: "03",
+    label: "MEASURED ROUTING",
+    title: "移動時間を実測して、時刻を組み立てる",
+    description:
+      "Google Maps で実際の経路と所要時間を取得し、それを含めて時刻を並べます。距離に応じて徒歩・電車・車を切り替えます。",
+    icon: <Clock size={88} weight="duotone" />,
   },
 ];
 

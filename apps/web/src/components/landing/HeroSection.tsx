@@ -14,7 +14,7 @@ export function HeroSection() {
         transition={{ duration: 0.7, delay: 0.1, ease: easing }}
         className="mb-10 text-xs font-medium tracking-[0.28em] text-[color:var(--color-text-secondary)]"
       >
-        A JOURNAL FOR THE JOURNEY
+        PLAN TOGETHER, IN ONE ROOM
       </motion.p>
 
       <motion.h1
@@ -32,15 +32,15 @@ export function HeroSection() {
         transition={{ duration: 0.9, delay: 0.55, ease: easing }}
         className="mt-12 max-w-md text-base leading-[1.95] text-[color:var(--color-text-primary)]"
       >
-        みんなで 1 画面を囲んで、
+        みんなで1画面を囲んで、
         <span className="relative mx-1 inline-block">
-          <span className="relative z-10">その場で合意する</span>
+          <span className="relative z-10">AIと一緒に</span>
           <span
             aria-hidden
             className="absolute inset-x-0 bottom-0.5 z-0 h-2 bg-[color:var(--color-accent)] opacity-40"
           />
         </span>
-        旅行計画。
+        理想の旅行を計画する。
       </motion.p>
 
       <motion.div
