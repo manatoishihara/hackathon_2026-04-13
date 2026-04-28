@@ -27,6 +27,30 @@
 
 ## ログ
 
+## 2026-04-28: 楽天トラベル VacantHotelSearch — chargeFlag と total の使い分け
+- **発見（実 API レスポンスで判明）**: `dailyCharge` に `chargeFlag` フィールドがあり、`rakutenCharge` の意味が変わる
+  - `chargeFlag=0`: `rakutenCharge` = 大人1名あたりの料金（2名なら ×2 が必要）
+  - `chargeFlag=1`: `rakutenCharge` = 1室あたりの料金
+  - `total` は **chargeFlag に関わらず常に「1室あたりの合計料金」**（実例: rakutenCharge=13200 × 2名 = total=26400）
+- **修正**: 当初 `rakutenCharge` をそのまま `price_jpy_per_night` に使っていたが、`total` を使うように変更
+- **1人あたりの料金計算**: `total ÷ adultNum`（例: 26,400 ÷ 2 = 13,200円/人）
+- **ルール**: VacantHotelSearch の料金取得には必ず `total` を使う。`rakutenCharge` は `chargeFlag` 次第で per-person にも per-room にもなるため混乱の原因
+- **参照**: `docs/rakuten-vacant-hotel-pricing.md` に chargeFlag 解説 + Python 実装例 + 複数泊の計算方法をまとめた
+
+## 2026-04-28: 楽天トラベル VacantHotelSearch で1泊の実際の料金を取得する実装
+- **背景**: SimpleHotelSearch の `hotelMinCharge` は「目安の最安値」で日付・人数指定なし。実際の空室確認と 1泊料金を取得するには VacantHotelSearch を使う必要があった
+- **実装方針（優先 + フォールバック）**:
+  - VacantHotelSearch を優先呼び出し（`checkinDate`, `checkoutDate`, `adultNum`, `maxCharge` で絞り込み）
+  - 0 件 or HTTP エラーの場合のみ SimpleHotelSearch にフォールバック
+  - VacantHotelSearch の料金は `roomInfo[].dailyCharge.stayDate[].total`（1室あたり合計）を採用
+- **チェックイン日フォーマット**: VacantHotelSearch は `checkinDate=20260601` (YYYYMMDD) 形式。入力は `"2026-06-01"` なので `.replace("-", "")` で変換
+- **SimpleHotelSearch との住み分け**:
+  - VacantHotelSearch は日程の空室がある宿のみ返す（正確な情報）
+  - SimpleHotelSearch は日程無関係に施設情報を返す（候補が 0 件になりにくい）
+  - 優先パスが空のときだけフォールバックすることで「実価格 > 参考価格」の順序を守る
+- **ルール**: 楽天トラベルの `hotelMinCharge` は参考価格であり確定価格ではない。日程・人数指定の実価格が必要なら VacantHotelSearch を使う
+- **テスト**: 15 件 PASS (VacantHotelSearch 優先パス 5 件 / フォールバックパス 10 件)
+
 ## 2026-04-28: Phase 3 polish 案 D 第 8 段 — 楽天 lodging only 方針への切替で Google Places の複合カテゴリ hotel 起因の 422 を構造的に解消
 - **背景**: 第 2-7 段の forced 注入後の verify で 2 連続 422、kind_summary 全 attempts `item_type_category_mismatch` 支配。log 解析で:
   - LLM が複合 hotel `ChIJU2N6Vn... category=['hotel', 'banquet_hall', 'wedding_venue', 'public_bath', 'chinese_restaurant', 'spa', 'french_restaurant', 'japanese_restaurant', 'lodging', 'restaurant', ...]` を **meal slot に誤選**
