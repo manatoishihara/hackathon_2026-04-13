@@ -91,8 +91,10 @@ describe("EvidenceModal", () => {
     expect(ratingLabel.parentElement?.textContent).toContain("— 不明");
   });
 
-  it("price_level が undefined なら価格帯行が「— 不明」", () => {
+  it("price_level / cost_jpy 両方無いなら価格帯行が「— 不明」", () => {
     const item = makeItem({
+      cost_jpy: null,
+      cost_confidence: "unknown",
       evidence: {
         opening_hours: "09:00–17:00",
         rating: 4.5,
@@ -103,6 +105,43 @@ describe("EvidenceModal", () => {
     render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
     const priceLabel = screen.getByText("価格帯");
     expect(priceLabel.parentElement?.textContent).toContain("— 不明");
+  });
+
+  it("price_level 無しでも cost_jpy が estimated なら「￥X,XXX (推定)」表示 (Phase 3 polish 案 D 第 4 段)", () => {
+    const item = makeItem({
+      cost_jpy: 15000,
+      cost_confidence: "estimated",
+      evidence: {
+        opening_hours: "09:00–17:00",
+        rating: 4.5,
+        verified_at: "2026-04-26T01:32:00Z",
+        sources: ["楽天トラベル"],
+      },
+    });
+    render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+    const priceLabel = screen.getByText("価格帯");
+    const text = priceLabel.parentElement?.textContent ?? "";
+    // formatJpy は Intl.NumberFormat ja-JP で全角 ￥ 記号
+    expect(text).toContain("15,000");
+    expect(text).toContain("(推定)");
+  });
+
+  it("price_level 無しで cost_confidence=verified なら「￥X,XXX」(タグ無し) で表示", () => {
+    const item = makeItem({
+      cost_jpy: 8000,
+      cost_confidence: "verified",
+      evidence: {
+        opening_hours: "09:00–17:00",
+        rating: 4.5,
+        verified_at: "2026-04-26T01:32:00Z",
+        sources: ["楽天トラベル"],
+      },
+    });
+    render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+    const priceLabel = screen.getByText("価格帯");
+    const text = priceLabel.parentElement?.textContent ?? "";
+    expect(text).toContain("8,000");
+    expect(text).not.toContain("(推定)");
   });
 
   it("verified_at が undefined なら検証日時行が「— 不明」", () => {

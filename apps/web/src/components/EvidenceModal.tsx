@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { formatVerifiedAt, UNKNOWN_VALUE_LABEL } from "@/lib/format";
+import { formatJpy, formatVerifiedAt, UNKNOWN_VALUE_LABEL } from "@/lib/format";
 
 type Props = {
   item: PlanItem;
@@ -30,7 +30,14 @@ export function EvidenceModal({ item, open, onOpenChange }: Props) {
   const evidence = item.evidence;
 
   const rating = formatRating(evidence.rating);
-  const priceLevel = formatPriceLevel(evidence.price_level);
+  // Phase 3 polish 案 D 第 4 段 (2026-04-28): price_level が無くても cost_jpy が
+  // estimated として埋まっていれば「¥X,XXX (推定)」で表示する。価格帯=不明のまま
+  // plan には cost が出てる乖離を解消する。
+  const priceLevel = formatPriceLevel(
+    evidence.price_level,
+    item.cost_jpy ?? null,
+    item.cost_confidence,
+  );
   const sources = formatSources(evidence.sources);
   const verifiedAt = formatVerifiedAt(evidence.verified_at);
   // codex review 2 回目 Minor: 空文字 / 空白のみも「不在」扱い
@@ -132,11 +139,27 @@ function formatRating(rating: number | undefined): { text: string; dim: boolean 
   return { text: `★ ${rating.toFixed(1)} / 5.0`, dim: false };
 }
 
-function formatPriceLevel(level: number | undefined): { text: string; dim: boolean } {
-  if (typeof level !== "number" || level < 1 || level > 4) {
-    return { text: UNKNOWN_VALUE_LABEL, dim: true };
+function formatPriceLevel(
+  level: number | undefined,
+  costJpy: number | null,
+  costConfidence: "verified" | "estimated" | "unknown",
+): { text: string; dim: boolean } {
+  // Google Places の price_level が verified に取れている場合: ¥¥¥¥ 記号で表示
+  if (typeof level === "number" && level >= 1 && level <= 4) {
+    return { text: "¥".repeat(level), dim: false };
   }
-  return { text: "¥".repeat(level), dim: false };
+  // Phase 3 polish 案 D 第 4 段 (2026-04-28): price_level 無しでも、内部で
+  // estimated 値が cost_jpy に埋まっていれば「¥X,XXX (推定)」で表示する。
+  // 「価格帯=不明」と「plan には推定値が出てる」の乖離を解消する狙い。
+  if (
+    typeof costJpy === "number" &&
+    costJpy > 0 &&
+    (costConfidence === "estimated" || costConfidence === "verified")
+  ) {
+    const tag = costConfidence === "verified" ? "" : " (推定)";
+    return { text: `${formatJpy(costJpy)}${tag}`, dim: false };
+  }
+  return { text: UNKNOWN_VALUE_LABEL, dim: true };
 }
 
 function formatSources(sources: readonly string[] | undefined): {
