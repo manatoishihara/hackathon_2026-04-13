@@ -1,0 +1,10 @@
+{
+  "name": "api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": ".venv/bin/python -m flask --app src.app:create_app run --debug --port 5000",
+    "test": ".venv/bin/python -m pytest",
+    "lint": "echo 'no linter yet' && exit 0"
+  }
+}

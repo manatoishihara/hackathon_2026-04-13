@@ -46,3 +46,6 @@ htmlcov/
 /playwright-report/
 /playwright/.cache/
 /.playwright-mcp/
+
+# === Claude Code ===
+.claude/scheduled_tasks.lock

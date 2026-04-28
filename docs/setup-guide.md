@@ -38,11 +38,17 @@ cd ../..
    - Places API (New)
    - Routes API
    - Geocoding API
-3. 認証情報 > API キーを作成
-4. API キーに制限をかける（HTTP referrer制限、使用する API のみに限定）
-5. **無料枠を使い切らないよう** 使用量アラートを設定
+   - **Maps JavaScript API**（フロントで DirectionsService を使って日本 transit を取るため必須、Phase 1.3 以降）
+3. 認証情報 > API キーを **2 つ**作成:
+   - **サーバーキー** (`GOOGLE_MAPS_API_KEY`): API 制限＝Places / Routes / Geocoding、本番運用では Application restriction = IP addresses（Render の outbound IP）
+   - **ブラウザキー** (`NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY`): API 制限＝Maps JavaScript API、本番運用では Application restriction = HTTP referrers（`https://<your-vercel>.vercel.app/*` と `http://localhost:3000/*`）
+   - ⚠️ **1 つのキーで referrer と IP の両方を絞ることはできない**（Google の仕様）。本番では必ず 2 つに分離
+4. 各キーに割り当て（Quotas）で日次上限を設定（Places 1000/day, Routes 500/day, Geocoding 500/day, Maps JS 10000 loads/day 程度が目安）
+5. **予算とアラート** で月 $10 の通知を設定
 
-月の無料枠（ハッカソン時点）: Places/Routes/Geocoding ともに 5,000〜10,000 リクエスト/月。
+月の無料枠（ハッカソン時点）: Places/Routes/Geocoding ともに 5,000〜10,000 リクエスト/月、Maps JS は 月 28,500 loads。
+
+⚠️ **JP transit の制約**: Google の Directions / Routes サーバー API は日本国内の公共交通データを返さない。電車便名・発車時刻・運賃はフロントの Maps JS SDK DirectionsService 経由で取得する（`tasks/lessons.md` 参照）。
 
 ### 2.3 Mapbox トークン
 
@@ -64,6 +70,9 @@ cd ../..
 
 1. https://webservice.rakuten.co.jp/ でアプリ登録
 2. `applicationId` と `affiliateId` をコピー
+   - **`applicationId` は 19-20 桁の数字**（例: `1024711987305213057`）。webservice.rakuten.co.jp のダッシュボードに「アプリ ID」フィールドがあり、そこに表示されている値をそのまま使う
+   - UUID 形式（`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）は **「アプリケーションキー」など別フィールドの値で、楽天トラベル API では使えない**。投入すると `evidence/lodging.py` が log 上 fail-soft で skip され、Evidence Pack に lodging 情報が一切載らないので注意
+   - `affiliateId` は `xxxxxxxx.xxxxxxxx.xxxxxxxx.xxxxxxxx` のようなドット区切り。空文字でも API は動くが、収益化したい場合は設定する
 3. 承認に時間がかかる場合があるので Phase 1 着手時に申請しておく
 
 ## 3. 環境変数設定
@@ -77,6 +86,19 @@ cp .env.example .env.local
 
 `docs/data-model.md` の「PostgreSQL DDL」セクションをまるごと Supabase SQL Editor に貼り付けて Run。
 テーブルとポリシーが作成されたことを確認。
+
+### 4.1 Phase 1.3d 追加マイグレーション（必須）
+
+以下の順で `supabase/migrations/` 配下の SQL を **Supabase ダッシュボードの SQL Editor で手動適用**する:
+
+1. **Extensions で `pg_cron` を有効化**（Database > Extensions タブ）
+   → DB-3 の cron ジョブが動作するための前提
+2. `supabase/migrations/20260424_04_plan_generation_rpcs.sql`
+   → `acquire_plan_generation_lock` / `mark_plan_failed` / `finalize_plan` の 3 RPC + enum を作成
+3. （Branch D 完成後）`supabase/migrations/20260424_03_cleanup_cron.sql`
+   → 期限切れ / stuck / abandoned のクリーンアップ cron を登録
+
+各ファイルは冪等（DO ブロック / CREATE OR REPLACE）なので複数回実行しても安全。
 
 ## 5. Claude Code の初期設定
 
@@ -122,18 +144,40 @@ pnpm dev
 
 1. https://vercel.com/ で新規プロジェクト作成、GitHub リポジトリを接続
 2. Root Directory に `apps/web` を指定
-3. Environment Variables に `.env.local` の `NEXT_PUBLIC_*` 系と `NEXT_PUBLIC_API_BASE_URL`（Render の URL）を設定
+3. Environment Variables に以下を設定:
+   - `NEXT_PUBLIC_API_BASE_URL` — Render の URL（例: `https://routeful-api.onrender.com`）
+   - `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` — HTTP referrer 制限を `https://<your-vercel>.vercel.app/*` と `http://localhost:3000/*` に
+   - `NEXT_PUBLIC_MAPBOX_TOKEN`
 4. Deploy
 
 ### 7.2 Render（バック）
 
-1. https://render.com/ で新規 Web Service 作成、GitHub リポジトリを接続
-2. Root Directory: `apps/api`
-3. Runtime: Python 3
-4. Build Command: `pip install -r requirements.txt`
-5. Start Command: `gunicorn 'src.app:create_app()' --bind 0.0.0.0:$PORT`
-6. Environment Variables に `.env.local` の非 `NEXT_PUBLIC_*` 系を設定
-7. Deploy
+**推奨: `render.yaml` Blueprint を使う**（リポジトリ root に配置済み）。
+
+1. https://render.com/ で「New > Blueprint」→ GitHub リポジトリ接続
+2. `render.yaml` が自動認識され、`routeful-api` サービスが作成される
+3. Dashboard で env 値を入力（`render.yaml` の `sync: false` 項目）:
+   - `OPENAI_API_KEY` / `GOOGLE_MAPS_API_KEY`（サーバキー、Render の outbound IP で referrer 制限不要に設定）
+   - `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`
+   - `CORS_ALLOWED_ORIGINS` — Vercel 本番ドメインを CSV 指定（例: `https://routeful.vercel.app,https://routeful-git-main-xxx.vercel.app`）
+   - （任意）`PROMPT_VERSION` — code default が v2.0.0、legacy v1 を試したい時のみセット
+   - **（任意、Phase 2 polish）`RAKUTEN_APPLICATION_ID` / `RAKUTEN_AFFILIATE_ID`** — 楽天トラベル API 連携で宿情報を Evidence Pack に載せる。両方未設定なら fail-soft で skip される。発行手順:
+     1. https://webservice.rakuten.co.jp/ で新規登録（無料）→ アプリ ID 発行
+     2. https://affiliate.rakuten.co.jp/ で Affiliate ID 発行（同じアカウント、無料）
+     3. 上 2 つの値を Render Dashboard → Environment に投入 → 自動 redeploy
+4. **HTTP Request Timeout を 180 秒に引き上げる**（Settings → HTTP Timeout、`render.yaml` では指定不可な Service-level 設定）
+   → LLM 生成は最悪 ~150 秒（per-call 35s × 4 attempts + overhead）。Render の Free plan は 100 秒上限のため、Starter plan へ移行が必要な場合あり
+5. Deploy
+
+**手動セットアップする場合（Blueprint を使わない）**: Root Directory `apps/api` / Runtime Python 3.12 / Build `pip install -r requirements.txt` / Start `gunicorn 'src.app:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180`
+
+### 7.3 環境変数（追加）
+
+Phase 1.10 で以下の変数が利用可能:
+
+- `CORS_ALLOWED_ORIGINS`（**本番では必須**）: Flask が CORS の `Access-Control-Allow-Origin` をエコーバックする allowlist。CSV 指定。未設定だとローカル開発用 `http://localhost:3000` のみ許可される
+- `PROMPT_VERSION`（optional、code default `v2.0.0`）: LLM プロンプトの切替。Phase 1.3e で実証された LCaMO 構造化版（hallucination 0% / success 100%）が default。`v1.0.0` は legacy
 
 ## トラブルシュート
 

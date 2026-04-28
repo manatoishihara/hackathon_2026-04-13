@@ -1,5 +1,7 @@
 # Team Roles & Interface Spec
 
+**運用の入口**: 各メンバー（の Claude Code）は作業前にまず @tasks/todo.md の「進捗サマリ」節で現状と担当を確認し、担当別のハンドオフ資料（@tasks/handoff-db.md / @tasks/handoff-frontend.md）を読んでから実装に入る。
+
 ## 役割分担
 
 ### Manato（全体統括 + AI/LLM 担当）
@@ -48,15 +50,20 @@ Pydantic スキーマ（`apps/api/src/schemas/`）はこれと一対一対応。
 ### 2. API エンドポイント
 
 ```
-POST   /api/sessions                     セッション作成
-POST   /api/plans/generate               プラン生成（Evidence Pack 構築 → LLM）
-GET    /api/plans/:id                    プラン取得
-PATCH  /api/plans/:id/items/:item_id     アイテム編集
-POST   /api/plans/:id/items/:item_id/regenerate  部分再生成 (Phase 2)
-POST   /api/plans/:id/items/reorder      並び替え (Phase 2)
-POST   /api/plans/:id/share              共有トークン発行
-GET    /api/plans/shared/:token          共有閲覧（編集不可）
+POST   /api/sessions                     セッション作成                                      [TBD]
+POST   /api/evidence/places              Evidence Pack の places のみ + evidence_pack_id 発行 [✅ Phase 1.3a]
+POST   /api/plans/generate               evidence_pack_id + transit_matrix → LLM 生成         [✅ Phase 1.3c/d]
+GET    /api/plans/:id                    プラン取得（anon + RLS 経由）                          [フロント直 Supabase]
+PATCH  /api/plans/:id/items/:item_id     アイテム編集                                        [Phase 2]
+POST   /api/plans/:id/items/:item_id/regenerate  部分再生成                                 [Phase 2]
+POST   /api/plans/:id/items/reorder      並び替え                                            [Phase 2]
+POST   /api/plans/:id/share              共有トークン発行                                    [Phase 1.9 / DB-4、型 3 点同期済み]
+GET    /api/plans/shared/:token          共有閲覧（編集不可、Flask + service_role）          [Phase 1.9 / DB-5、型 3 点同期済み]
 ```
+
+※ `/api/plans/generate` が 2 段階になっている理由は `tasks/lessons.md` と
+  `docs/evidence-pack.md` 参照。日本国内の transit 情報が Google のサーバー API
+  から取れないため、フロント Maps JS SDK で transit を取得して送り返す構造。
 
 リクエスト/レスポンスの詳細型は `docs/data-model.md` の「API リクエスト/レスポンス」セクション参照。
 
@@ -69,7 +76,7 @@ GET    /api/plans/shared/:token          共有閲覧（編集不可）
 
 - `main`: 本番デプロイ対象、直接 push 禁止
 - `develop`: 開発の統合ブランチ
-- `feat/phase-X-Y-description`: 各タスクのブランチ
+- `feat/<短い説明>` / `fix/<説明>` / `chore/<説明>` / `refactor/<説明>`: 各タスクのブランチ（kebab-case、Phase 番号は入れない。例: `feat/monorepo-init`, `feat/evidence-pack-builder`）
 - PR → コードレビュー（必要なら Codex レビューを依頼）→ develop へマージ
 
 ## コミュニケーション

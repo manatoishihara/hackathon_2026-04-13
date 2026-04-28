@@ -1,0 +1,177 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Routeful Design Tokens — .claude/rules/frontend-design.md を正典とする。
+ *
+ * 方針: "blue hour" 和モダン（対面 2〜5 人で 1 画面を囲む想定）。
+ * ディープネイビーの知性・コーラルの旅情・和紙クリームの落ち着きで、
+ * AI 感のある派手さを排し「合意の場」としての静けさを出す。
+ */
+@theme {
+  /* Colors（Routeful ブランド） */
+  --color-primary: #042c53;        /* Deep Navy - 主役 CTA、見出し */
+  --color-accent: #f0997b;         /* Coral - アクセント、旅情 */
+  --color-secondary: #2c5f5d;      /* Deep Teal - 補助（旧 primary から降格、Evidence verified 近傍用途） */
+  --color-background: #f5efe6;     /* 和紙クリーム */
+  --color-surface: #ffffff;        /* カード背景 */
+  --color-text-primary: #042c53;   /* Deep Navy */
+  --color-text-secondary: #3c5b8f; /* Blue Gray */
+  --color-text-tertiary: #7a8aa8;  /* Lighter Blue Gray */
+  --color-border: rgba(4, 44, 83, 0.12);
+
+  /* Evidence バッジ専用（機能色、ブランドと独立で維持） */
+  --color-evidence-verified: #3a7d44;
+  --color-evidence-estimated: #e8a951;
+  --color-evidence-unknown: #c54b4b;
+
+  /* Danger */
+  --color-danger: #c54b4b;
+
+  /* Spacing (8px grid) */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 24px;
+  --spacing-6: 32px;
+  --spacing-7: 48px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Typography — next/font が注入する CSS 変数を優先、fallback はシステムフォント */
+  --font-heading: var(--font-noto-serif-jp), "Hiragino Mincho ProN", "Noto Serif JP", serif;
+  --font-body: var(--font-noto-sans-jp), "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  --font-mono: "DM Sans", "JetBrains Mono", monospace;
+
+  /* Letter spacing（英字ラベル用） */
+  --tracking-label: 0.18em;
+  --tracking-wide: 0.08em;
+}
+
+/*
+ * shadcn/ui 向けの @theme inline マッピング。
+ */
+@theme inline {
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+/*
+ * Routeful Design Tokens を shadcn の CSS 変数にマッピング。
+ */
+:root {
+  --background: #f5efe6;                         /* 和紙クリーム */
+  --foreground: #042c53;                         /* Deep Navy */
+  --card: #ffffff;                               /* surface */
+  --card-foreground: #042c53;
+  --popover: #ffffff;
+  --popover-foreground: #042c53;
+  --primary: #042c53;                            /* Deep Navy - 主役 */
+  --primary-foreground: #f5efe6;                 /* 主役上のテキスト = クリーム */
+  --secondary: #f0997b;                          /* Coral - アクセント */
+  --secondary-foreground: #4a1b0c;               /* コーラルの暗色 */
+  --muted: #ece5d8;                              /* 背景より少し沈んだトーン */
+  --muted-foreground: #3c5b8f;                   /* Blue Gray */
+  --accent: #ece5d8;
+  --accent-foreground: #042c53;
+  --destructive: #c54b4b;                        /* danger */
+  --border: rgba(4, 44, 83, 0.12);
+  --input: rgba(4, 44, 83, 0.12);
+  --ring: #042c53;                               /* focus ring は primary */
+  --chart-1: #042c53;
+  --chart-2: #f0997b;
+  --chart-3: #3a7d44;                            /* Evidence verified 近傍 */
+  --chart-4: #e8a951;
+  --chart-5: #7a8aa8;
+  --radius: 0.5rem;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #042c53;
+  --sidebar-primary: #042c53;
+  --sidebar-primary-foreground: #f5efe6;
+  --sidebar-accent: #ece5d8;
+  --sidebar-accent-foreground: #042c53;
+  --sidebar-border: rgba(4, 44, 83, 0.12);
+  --sidebar-ring: #042c53;
+}
+
+/*
+ * ダークモード（Phase 1 では未使用、将来のトークン定義のみ）。
+ */
+.dark {
+  --background: #0a1829;
+  --foreground: #f5efe6;
+  --card: #122640;
+  --card-foreground: #f5efe6;
+  --popover: #122640;
+  --popover-foreground: #f5efe6;
+  --primary: #f5efe6;
+  --primary-foreground: #042c53;
+  --secondary: #f0997b;
+  --secondary-foreground: #4a1b0c;
+  --muted: #1d3354;
+  --muted-foreground: #a6b2c8;
+  --accent: #1d3354;
+  --accent-foreground: #f5efe6;
+  --destructive: #d97575;
+  --border: rgba(245, 239, 230, 0.14);
+  --input: rgba(245, 239, 230, 0.14);
+  --ring: #f0997b;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    background: var(--color-background);
+    color: var(--color-text-primary);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+}

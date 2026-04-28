@@ -92,24 +92,50 @@ type TemporalConstraints = {
 
 ## Pack 構築フロー
 
+Evidence Pack は **サーバーとフロントの 2 段構築**になる。日本の transit 情報は
+Google の Directions / Routes サーバー API から取れないため、ブラウザの Maps JS
+SDK DirectionsService で取得して API に戻す（`tasks/lessons.md` 参照）。
+
 ```
-1. QueryContext から候補キーワードを生成（LLM でも決定論でも可）
+[サーバー] POST /api/evidence/places
+1. QueryContext から候補キーワードを生成（Phase 1.2 は決定論、Phase 1.3+ で LLM 化検討）
    例: "箱根 温泉" "箱根 和食" "箱根 観光"
-
 2. 各キーワードで Places API text search（並列、各 top 10）
-3. 重複を place_id で dedupe
-4. 各 place について Place Details を取得（営業時間、評価）
-5. 参加者の wishes_text と tags に対する関連度をスコアリングし、relevance_tags 付与
+3. 重複を place_id で dedupe、`max_places_for(total_days)` で cap (Phase 2 polish v4 で
+   total_days 依存化: 1〜2 日 = 15、3 日 = 17、4 日 = 22、5 日 = 27)。`apps/api/src/evidence/builder.py` の同関数が正典
+4. （Phase 1.2 スキップ）各 place について Place Details を取得、参加者希望とのマッチを
+   relevance_tags 付与 — Phase 1.3 で実装
+5. 予算と時間の制約を展開
+6. base_pack（transit_matrix は空）と evidence_pack_id（TTL 15 分程度）を返す
 
-6. place ペアのうち「直線距離 10km 以内」のみ Routes API で transit を取得（並列）
-   → これが transit_matrix
+[フロント] ブラウザ上で Maps JS SDK DirectionsService
+7. places のうち「直線距離 15km 以内」のペアで transit を取得
+   - 最大ペア数: 40（places 15 件なら理論上 105 ペアだが、距離 15km フィルタで実用域に絞る）
+   - 並列呼び出し: 最大 5（DirectionsService のクォータ破裂防止）
+   - 各呼び出しタイムアウト: 2 秒（全体を 15 秒以内に収める、SDK ロード含む）
+   - 各定数は `apps/web/src/lib/transit.ts` の `DEFAULT_MAX_PAIRS` / `DEFAULT_DISTANCE_KM` /
+     `DEFAULT_GLOBAL_DEADLINE_MS` が正典。Phase 2 polish v3 (2026-04-27) で
+     20 / 10km / 10s から 40 / 15km / 15s に倍増（草津 4 日 plan で coverage 不足 → 422 連発のため）
+   → TransitEdge[] を組み立てる
+   → 各 TransitEdge は有向（A→B と B→A は別レコード）、from/to_place_id は places に含まれる ID
 
-7. 宿泊候補がある場合、楽天トラベルAPIで検索（Phase 2）
-
-8. budget_breakdown を金額に展開
-
-9. 全部束ねて EvidencePack として LLM へ
+[サーバー] POST /api/plans/generate
+8. evidence_pack_id + transit_matrix を受信
+9. **Transit Validator**（Phase 1.3 で実装、現状は未実装）:
+   - Pydantic Field 制約: 値域 / 文字長 / HH:mm / 件数上限（pack.py で既に防衛）
+   - place_id が Evidence Pack.places に含まれること
+   - 有向エッジの重複排除
+10. サーバー短期キャッシュから取り出した Evidence Pack と validate 済み transit_matrix を
+    マージして最終 Evidence Pack を再構成
+    （クライアント送信データは validate 済み値のみを使う、生データは LLM に渡さない）
+11. 宿泊候補がある場合、楽天トラベルAPIで検索（Phase 2）
+12. 最終 Evidence Pack を LLM プロンプトに注入
 ```
+
+**⚠️ Phase 1.2 の状態**: Transit Validator はまだ実装されておらず、`/api/evidence/places`
+と `/api/plans/generate` のエンドポイント自体もまだ存在しない。`build_evidence_pack()` は
+`transit_matrix=[]` を返すので、現時点では攻撃面は表に出ていない。Phase 1.3 でこれらを
+同時に実装する。
 
 ## LLM プロンプト設計
 
@@ -217,8 +243,10 @@ LLM 出力を受け取ったら、以下を全て通すまで reject：
 ## コスト・トークン管理
 
 - Places を全フィールド渡すと 1 place あたり 500 token 超。必要フィールドだけ抽出
-- transit_matrix は全ペアではなく近接ペアのみ（距離 10km 以内）
-- Evidence Pack 全体で 10,000 token 以内を目安（超えたら上位スコアで絞る）
+- transit_matrix は全ペアではなく近接ペアのみ（距離 15km 以内、Phase 2 polish v3 で 10km から拡張）
+- Evidence Pack 全体の token 目安は total_days 依存。1〜2 日 plan は ~10k tokens、4 日
+  plan は ~20k tokens (places 22 件、Phase 2 polish v4 で拡張)。`prompt.py` の
+  `_TOKEN_WARNING_THRESHOLD = 12_000` は警告閾値で、超えても fail-soft で続行する
 
 ## バージョニング
 

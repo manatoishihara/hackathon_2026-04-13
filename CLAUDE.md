@@ -15,6 +15,8 @@ Next.js 15 / TypeScript / Tailwind v4 / shadcn/ui / Flask / Supabase (DB+匿名A
 
 ## Do NOT（compaction後も絶対に守れ）
 - `git commit` / `git add` / `git merge` / `git push` を絶対に自分で実行するな。コミット・マージ・プッシュは必ずユーザが手動で行う。Claude はコミットメッセージ案と対象ファイル一覧を提示するだけ
+- **commit 提案を user に出す前に、必ず secret pattern grep を実施し、結果（0 hit / N hit）を提示せよ**。1 件でも hit したら add コマンドを絶対に出さず、redact を先に提案する。検出 pattern の最低限は `AIzaSy[A-Za-z0-9_-]{30,}` / `sk-[A-Za-z0-9]{20,}` / `eyJ[A-Za-z0-9_]{8,}\.eyJ[A-Za-z0-9_]{8,}` / `service_role`。詳細は @.claude/rules/external-api-rules.md「commit 提案前の secret プリフライト」節
+- **debug log / docs (lessons.md / todo.md / plans/) に API key / token / secret の生文字列を書くな**。env 変数名（`NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY` 等）か prefix 4 chars 以内（`AIza...`）で参照する。8+8 chars の省略形も禁止
 - Codexレビューを勝手に起動するな。ユーザが「Codexに見せて」等と明示的に依頼した時のみ実行
 - LLMに外部データを渡さず推論させるな。必ずEvidence Pack経由
 - 架空の場所・架空の時刻を出力するな。Places API / Routes APIで検証せよ
@@ -24,13 +26,14 @@ Next.js 15 / TypeScript / Tailwind v4 / shadcn/ui / Flask / Supabase (DB+匿名A
 - 性格診断やMBTI風の分類をプロダクトに復活させるな（旧版からの退化）
 
 ## ワークフロー
-計画 → `feat/phase-X-Y-*` ブランチで実装 → テスト → コミット提案 → （ユーザが手動でコミット）→ develop へマージ（これもユーザが手動）
+計画 → feature ブランチで実装 → テスト → コミット提案 → （ユーザが手動でコミット）→ develop へマージ（これもユーザが手動）
 
 コミット提案時は必ず以下の形式でユーザに渡す:
-1. 提案コミットメッセージ（複数コミットに分けるべきなら分割案も添える）
-2. 対象ファイル一覧（`git add` するパス）
+1. **secret プリフライト結果**（`git diff -- <files> | rg <patterns>` の hit 件数）。0 hit でなければ commit 提案を停止
+2. 提案コミットメッセージ（複数コミットに分けるべきなら分割案も添える）
+3. 対象ファイル一覧（`git add` するパス）
 
-ブランチ戦略: `main`（本番、直接 push しない）/ `develop`（開発統合先）/ `feat/phase-X-Y-description`（タスク用、develop から生やす）。詳細は @docs/team-roles.md。
+ブランチ戦略: `main`（本番、直接 push しない）/ `develop`（開発統合先）/ `feat/<短い説明>` `fix/<説明>` `chore/<説明>`（タスク用、develop から生やす、kebab-case、Phase 番号は入れない）。詳細は @docs/team-roles.md。
 
 Codexレビューはデフォルトで実施しない。ユーザから依頼された時のみ `/codex-review` を走らせる。
 ただし、大きめの設計判断や不安がある実装に当たったときは「Codexに見てもらいますか？」と提案してよい（実行判断はユーザ）。
@@ -45,6 +48,16 @@ AI感のあるデフォルトデザインより、プロダクトらしい仕上
 Flask API実装時: @.claude/rules/api-rules.md
 LLM呼び出し実装時: @.claude/rules/llm-rules.md
 テスト作成時: @.claude/rules/testing.md
+データモデル変更時: @.claude/rules/data-model-sync.md
+外部 API（Google Cloud / Maps / OpenAI / Supabase 等）SDK 導入時: @.claude/rules/external-api-rules.md
+
+## 分業資料（自分の担当を先に特定してから読む）
+作業開始時はまず @tasks/todo.md の「進捗サマリ」節で **今どのフェーズにいるか / 自分の担当（Manato / メンバー B / メンバー C）** を確認し、該当するハンドオフ資料を読んでから実装に入る:
+- DB / バックエンド（メンバー B）: @tasks/handoff-db.md
+- フロント デザイン（メンバー C）: @tasks/handoff-frontend.md
+- Manato（統括 / LLM / 検証）: @tasks/todo.md 先頭の「次にやるべきタスク」
+
+役割定義とブランチ戦略は @docs/team-roles.md 参照。
 
 ## ドキュメント記述ルール
 todo.md の各タスクはTDD形式（テスト→Red→Green→Refactor→検証）で書け。

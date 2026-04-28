@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: ライブ外部 API を叩くテスト。デフォルト実行では除外する。明示的に実行するには `pytest -m integration` を指定。",
+]

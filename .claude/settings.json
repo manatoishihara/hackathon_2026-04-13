@@ -18,8 +18,6 @@
       "Bash(git diff *)",
       "Bash(git log *)",
       "Bash(git show *)",
-      "Bash(git add *)",
-      "Bash(git commit *)",
       "Bash(git branch *)",
       "Bash(git checkout *)",
       "Bash(ls *)",
@@ -40,7 +38,20 @@
       "Write(.claude/**)"
     ],
     "deny": [
+      "Bash(git add *)",
+      "Bash(git add)",
+      "Bash(git commit *)",
+      "Bash(git commit)",
+      "Bash(git merge *)",
+      "Bash(git merge)",
+      "Bash(git push *)",
+      "Bash(git push)",
       "Bash(git push --force *)",
+      "Bash(git rebase *)",
+      "Bash(git rebase)",
+      "Bash(git reset --hard *)",
+      "Bash(git checkout -- *)",
+      "Bash(git restore *)",
       "Bash(rm -rf *)",
       "Bash(rm -f *)",
       "Read(.env*)",
@@ -55,11 +66,47 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash(git commit*)",
+        "matcher": "Edit(packages/shared-types/**)",
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "このコミットの変更は Codex によるレビューを経ていますか？ 5行以内の自明な変更であれば yes で通して構いません。それ以外でレビュー未実施なら no と回答し、Codex MCP でレビューを実行してから再度コミットを試みてください。"
+            "prompt": "型 3 点同期対象ファイル（shared-types）を編集しようとしています。@.claude/rules/data-model-sync.md の変更フローを守っていますか？ 1) docs/data-model.md → 2) packages/shared-types → 3) apps/api/src/schemas → 4) tests/test_schema_parity.py の順に **同一 PR で** 更新する必要があります。自分の担当外（メンバー B / C の Claude なら Manato に相談）なら一度止めてください。"
+          }
+        ]
+      },
+      {
+        "matcher": "Write(packages/shared-types/**)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "型 3 点同期対象ファイル（shared-types）を新規書き込みしようとしています。@.claude/rules/data-model-sync.md の変更フローを守り、docs/data-model.md → shared-types → apps/api/src/schemas → test_schema_parity.py を同じ PR で揃えてください。担当外なら Manato に相談。"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit(apps/api/src/schemas/**)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "型 3 点同期対象ファイル（Pydantic schemas）を編集しようとしています。@.claude/rules/data-model-sync.md の変更フローを守っていますか？ docs/data-model.md → packages/shared-types → apps/api/src/schemas → tests/test_schema_parity.py の順に **同一 PR で** 揃える必要があります。担当外なら Manato に相談。"
+          }
+        ]
+      },
+      {
+        "matcher": "Write(apps/api/src/schemas/**)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "型 3 点同期対象ファイル（Pydantic schemas）を新規書き込みしようとしています。@.claude/rules/data-model-sync.md を守り、3 点 + test_schema_parity.py を同一 PR で更新してください。担当外なら Manato に相談。"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit(docs/data-model.md)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "データモデル正典 docs/data-model.md を編集しようとしています。@.claude/rules/data-model-sync.md の変更フロー通り、packages/shared-types と apps/api/src/schemas と tests/test_schema_parity.py も **同じ PR で** 更新してください。担当外なら Manato に相談。"
           }
         ]
       }
@@ -71,6 +118,16 @@
           {
             "type": "prompt",
             "prompt": "書き込んだコンポーネントが .claude/rules/frontend-design.md のアンチパターン（Interフォント、Lucideのみ、青→紫グラデーション、shadcn/uiデフォルト、全要素均一、情報の盛り込みすぎ、Empty State未実装）に違反していないか確認してください。違反があれば即修正してください。"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "セッション終了前チェック (soft reminder): 本セッションの成果と発見を tasks/todo.md の「進捗サマリ」および該当 Phase 節に **working tree レベルで** 反映しましたか？ 失敗・学びがあれば tasks/lessons.md に **working tree レベルで** 記録しましたか？ 反映済 or 不要なら 1 行で OK と返してください。\n\n**重要 (デッドロック回避)**: 「反映」の判定基準は **working tree 上の編集が存在すること** であり、git commit/push の完了は要求しません。CLAUDE.md Do NOT 第 1 項により Claude は user の明示的指示なしに git add/commit/merge/push を実行しません。permanent 化 (add/commit/push) は user 手動が前提のため、working tree 修正済なら本 hook の条件は充足とみなしてください。\n\n本 hook は blocking 用途ではなく soft reminder 用途です。`git status --short` で `M tasks/lessons.md` 等が見えても、それは Claude が working tree 反映を完了して user の commit 判断を待っている正常状態であり、未充足ではありません。"
           }
         ]
       }

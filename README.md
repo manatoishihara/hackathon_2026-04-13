@@ -8,7 +8,7 @@
 ## 新規性の3軸
 
 1. **Evidence-based 生成** — Google Places API で実在確認、営業時間・距離を構造化データとして LLM に注入。根拠バッジで出力の確度を可視化
-2. **交通の正確性** — Google Routes API (transit) で電車の便名・発車時刻・運賃まで表示。「行けないプラン」を終わらせる
+2. **交通の正確性** — フロント Maps JS SDK の DirectionsService で電車の便名・発車時刻・運賃を取得し、サーバー検証後に LLM へ注入。サーバー Routes API は DRIVE 補助用（日本の transit は Routes/Directions サーバー API に無いため、consumer 版と同じデータ源を使う）。「行けないプラン」を終わらせる
 3. **複数人の希望合成** — 2〜5人の希望と予算配分制約を構造化して LLM に渡し、合意可能な妥協点を探らせる
 
 ## 思想的背景
@@ -17,7 +17,7 @@
 
 | LCaMO | Routeful |
 | --- | --- |
-| GA が数値パラメータを探索 | Places API / Routes API が時間・距離・運賃を担う |
+| GA が数値パラメータを探索 | Places API で実在確認、Maps JS SDK で transit 時刻・運賃、Routes API DRIVE で所要時間補助 |
 | LLM が「武器らしさ」を意味評価 | LLM が「その人たちらしい旅か」を意味評価し文章化 |
 | フィードバックで更新 | 手動編集・部分再提案でプランを作り込む |
 
