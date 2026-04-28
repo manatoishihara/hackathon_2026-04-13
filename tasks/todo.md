@@ -5,7 +5,15 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中）
+## 🏁 進捗サマリ（2026-04-28 更新、v6.2 で meal candidate 不足の根本対策、demo ready 想定）
+
+**Phase 2 polish v6.2 (2026-04-28、本番 Run 13f で 422 再発の真因対策、working tree、未 commit)**: 🟡 v6.1 deploy 後の本番 Run 13f で `item_type_category_mismatch` × 5 が 4 attempts 全部出現、422 連発。Render Live tail から **真因 = pack の meal candidate 不足** (草津 17 places 中 meal 系 3-4 件、lunch+dinner 6 slot に対して足りない) を確定。
+- **v6.2 fix**: `_find_item_type_compatible_used_place` helper 追加、item_type pre-check の枯渇時に **used 集合内** で item_type compatible な place を **再使用** する fallback (lodging 連泊許容と同じ思想を meal/activity にも適用)
+- API 441 PASS / Web 164 PASS / tsc clean / secret 0 hit
+- **次のアクション**: branch + commit + push → 本番再 verify
+- 詳細: lessons.md「2026-04-28: Phase 2 polish v6.2 設計」エントリ参照
+
+**Phase 2 polish v6 (2026-04-28、本番 deploy 完了): 4 日 plan 生成成功実証**: 🟢 commits `c7c2983 / 586ae86 / 95c3fcd`、`707a4e3` で develop merge + push 済。
 
 **Phase 2 polish v6 (2026-04-28、本番 deploy 完了): 4 日 plan 生成成功実証**: 🟢 commits `c7c2983 / 586ae86 / 95c3fcd`、`707a4e3` で develop merge + push 済。
 - 主要変更:

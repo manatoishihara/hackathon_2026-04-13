@@ -27,6 +27,27 @@
 
 ## ログ
 
+## 2026-04-28: Phase 2 polish v6.2 設計 — Run 13f log で item_type_category_mismatch 多発の真因 (meal candidate 不足) 確定、used 集合 reuse fallback で解消
+- **Run 13f (v6.1 deploy 後、JST 04:21 草津 3 日 / 30,000 円) で 422 再発**:
+  - attempt 1〜4 全部 `item_type_category_mismatch` を含む (各 1〜2 件)、計 5 issues / 4 attempts で 422
+  - log 詳細から原因特定:
+    ```
+    day2_lunch ChIJhY2RO4 (meal place) → tier3 filtered out (candidates=3) → accept duplicate
+    day2_dinner ChIJP8pdnv → tier3 filtered out → accept (opening hours 4/29 火曜定休も連発)
+    day3_lunch ChIJP8pdnv → tier3 filtered out → accept duplicate
+    day3_dinner ChIJu7dnyl → tier3 filtered out (candidates=1) → accept duplicate
+    ```
+  - **真因**: pack 17 places のうち **meal-compatible (restaurant/cafe/bakery 等) は 3-4 件しかない**。3 日 plan で lunch+dinner = 6 meal slot を埋めるには candidates 不足。重複防止 swap で meal-compatible が枯渇 → tier3 filter で 0 件 → original の item_type 不適合 place を accept → validator catch
+- **v6.2 設計 (root cause fix)**: 「枯渇時は同じ restaurant を再使用してでも item_type は守る」。lodging 連泊許容と同じ思想を meal/activity にも適用
+  - 新 helper `_find_item_type_compatible_used_place`: **used 集合内** で item_type compatible な place を探して再使用
+  - item_type pre-check の accept 経路に reuse 試行を挿入: alternate なし → reuse 試行 → なし時のみ最終 accept (validator catch)
+  - reachability filter は外す: self-loop は後段 transit skip 処理、edge 不在も skip path で吸収
+- **検証**: API 441 PASS / Web 164 PASS / tsc clean / secret 0 hit
+- **学び 1 (重要、設計判断のフレームワーク)**: 「**重複防止 hard constraint**」を入れると、結局 candidate 不足エリアで詰む構造的問題 (Phase 2 polish v1 で導入 → v5 で重複 best-effort 化 → v6 で item_type 守る → v6.2 で枯渇時 reuse、と段階的に緩和)。**「constraint を hard で入れる前に、本番 candidate 数で satisfiable か事前評価する」**ルール候補
+- **学び 2**: Codex review 4 サイクル (各 v3〜v6) で設計段階の Major を catch しても、**「pack の絶対量」のような外部要因依存の問題は catch できない**。本番 deploy 後の Run 観測で初めて見える種類の bug がある (例: 4 attempts × kind_summary log 経由で枯渇判明)
+- **学び 3**: validator は assembler の warn+accept を retry guidance に流すが、**candidate 不足では LLM がいくら retry しても解消しない**。assembler 側で「枯渇時は重複許容」の fallback を用意するのが最終解 (v6.2)
+- **次のステップ (user 作業)**: v6.2 commit + push → 本番再 verify → demo ready
+
 ## 2026-04-28: Phase 2 polish v6 + v6.1 実装、4 日 plan 生成成功実証、3 件 hotfix で UX 完成度上げ
 - **v6 (commit `c7c2983 / 586ae86 / 95c3fcd`、`707a4e3` で develop merge + push 済)**:
   - assembler **item_type pre-check** (LLM が meal slot に park 等を選んだら事前 swap、validator catch 待たず高速 path)。`_find_eligible_alternate_for_slot` の tier1/2/3 全部で `_is_item_type_compatible` filter 適用 (Codex review 1 Major 1)
