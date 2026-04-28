@@ -158,10 +158,12 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
     places = _merge_anchors_and_search(
         anchor_places, search_results, cap, total_days=temporal.total_days
     )
-    # places の重心座標を楽天宿泊検索の中心として使う（新 API は座標必須）
+    # places の重心座標を楽天宿泊検索の中心として使う (新 API は座標必須、docs/rakuten-travel-api.md)
     _center_lat = (sum(p.lat for p in places) / len(places)) if places else None
     _center_lng = (sum(p.lng for p in places) / len(places)) if places else None
-    lodging_options = _fetch_lodging_safe(ctx, request, temporal, budget, lat=_center_lat, lng=_center_lng)
+    lodging_options = _fetch_lodging_safe(
+        ctx, request, temporal, budget, lat=_center_lat, lng=_center_lng,
+    )
 
     return EvidencePack(
         query_context=ctx,
@@ -645,30 +647,18 @@ def _fetch_lodging_safe(
 ) -> list[LodgingOption]:
     """楽天トラベル API で宿泊候補を取得する。失敗時は空リストを返す (fail-soft)。
 
-    Phase 3 polish 案 D (2026-04-28、API spec 準拠書き換え):
-    旧コードは region (str) を keyword として渡していたが、楽天 SimpleHotelSearch
-    は keyword 検索を提供しないので、本コードでは Geocoding API で region → lat/lng
-    に変換 → 半径 3km 圏内検索に切り替えた。SimpleHotelSearch は施設情報のみ返すので
-    checkinDate/checkoutDate/adultNum/maxCharge は API spec に存在せず削除済。
+    Phase 3 polish 案 D (2026-04-28、API spec 準拠書き換え + 重心座標方式採用):
+    docs/rakuten-travel-api.md の方針に従い、Google Places の重心座標を楽天 API の
+    中心点として使う (Geocoding API 呼び出しを省略してレイテンシ削減)。
+    SimpleHotelSearch は施設情報のみ返すので、API 仕様上 checkinDate/checkoutDate/
+    adultNum/maxCharge は使われないが、log 用 + client 側 maxCharge filter として
+    引数は維持する。
     """
-    from .geocoding import GeocodingError, geocode_region
-
     # 日帰り (1 泊なし) なら宿泊不要
     if temporal.total_days <= 1:
         return []
 
-    # region → lat/lng に変換 (失敗時は lodging skip)
     try:
-<<<<<<< HEAD
-        coords = geocode_region(ctx.region)
-    except GeocodingError as e:
-        _logger.warning("rakuten lodging fetch skipped (geocoding failed): %s", e)
-        return []
-    if coords is None:
-        _logger.info(
-            "rakuten lodging fetch skipped: geocoding returned no result for region=%r",
-            ctx.region,
-=======
         checkin = request.start_date.isoformat()
         checkout = request.end_date.isoformat()
         adult_num = max(1, len(request.participants))
@@ -681,13 +671,7 @@ def _fetch_lodging_safe(
             max_charge_per_night=max_charge,
             lat=lat,
             lng=lng,
->>>>>>> ceb6e75acce3b8a26f8b2b9ec473a1d540a81072
         )
-        return []
-
-    lat, lng = coords
-    try:
-        return fetch_lodging_options(lat=lat, lng=lng)
     except RakutenLodgingError as e:
         _logger.warning("rakuten lodging fetch skipped: %s", e)
         return []
