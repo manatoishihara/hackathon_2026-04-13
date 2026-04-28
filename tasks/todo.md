@@ -11,6 +11,13 @@
 
 ## 🟡 Phase 3 polish 第 9 段 + Modal 価格帯 hotfix2 (verified cost_jpy 優先順位) (2026-04-28、現状)
 
+**🟡 Modal 価格帯 hotfix3 (2026-04-28、ITOH DINING ¥¥¥ 表示問題対応、ブランチ `fix/evidence-modal-verified-cost-priority`、working tree 未 commit)**:
+- 症状: Google Places で priceRange が返ってこない restaurant (ITOH DINING by NOBU 等) で、Modal が「価格帯 ¥¥¥」(price_level=3 記号) 表示。内部で推定済の cost_jpy=4,500 (estimated) が捨てられていた
+- 真因: hotfix2 で verified cost_jpy は price_level より上に昇格したが、**estimated cost_jpy は price_level の後** にあり ¥¥¥ で stop されて到達しなかった
+- 修正: estimated cost_jpy も price_level 記号より上に昇格 (5 段階優先順位を再々定義)
+- 検証: Web test 29/29 PASS (新規 1 件)、tsc clean
+- 詳細: lessons.md「Modal 価格帯 hotfix3 — estimated cost_jpy も ¥¥¥ 記号より優先」エントリ参照
+
 **🟡 Modal 価格帯 hotfix2 (2026-04-28、楽天宿 ¥ 表示問題対応、ブランチ `fix/evidence-modal-verified-cost-priority`、working tree 未 commit)**:
 - 症状: 楽天宿 Modal で「価格帯 ¥」(price_level=1 単独記号) 表示、実取得済の楽天価格が捨てられていた (user 報告「宿はまだお金回収できてないぞ」)
 - 真因: `formatPriceLevel` の優先順位が「priceRange → price_level 記号 → cost_jpy」で、verified cost_jpy が price_level 記号 (推定) に劣後していた

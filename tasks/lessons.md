@@ -27,6 +27,18 @@
 
 ## ログ
 
+## 2026-04-28: Modal 価格帯 hotfix3 — estimated cost_jpy も ¥¥¥ 記号より優先 (ITOH DINING パターン解消)
+- 問題: hotfix2 後の verify で、ITOH DINING by NOBU (Google Places restaurant) の Modal が「価格帯 ¥¥¥」(price_level=3 記号) 表示。Google API が `priceRange` field を返してこないケースで、内部 _PRICE_MAP で推定済 cost_jpy=4,500 (estimated) が捨てられていた
+- 真因: hotfix2 で「verified cost_jpy > price_level 記号」の昇格は済んだが、**estimated cost_jpy は price_level 記号の後** にあり、price_level の ¥¥¥ で stop されて到達しなかった。estimated でも具体的な数値 (推定タグ付き) なので price_level 記号より上に来るべき
+- 解決 (hotfix3): 優先順位を再々定義
+  1. priceRange (Google Places New 最具体)
+  2. verified cost_jpy (外部 API 実価格、楽天等)
+  3. **estimated cost_jpy** (内部 _PRICE_MAP 推定、「￥4,500 (推定)」) ← 新規昇格
+  4. price_level 1〜4 → ¥¥¥¥ 記号 (cost_jpy 完全 null の最後の砦)
+  5. 不明
+- ルール (hotfix2 + hotfix3 統合): **「具体度」(数値 > 記号) を「確度」(verified > estimated > unknown) より優先**するのが UX として正しい。記号 4 段階は「金額のヒント」程度で、推定タグ付き数値の方が「いくらか分かる」情報として有益
+- → hotfix2 + hotfix3 の 2 連続で同種の優先順位ミスを修正。**3 回目に同種が来たら `.claude/rules/frontend-design.md` の「価格帯の表示優先順位ルール」として正式昇格**
+
 ## 2026-04-28: Modal 価格帯の優先順位ミス — verified cost_jpy が price_level 記号 (推定 4 段階) に劣後していた
 - 問題: priceRange 配線 hotfix 後の verify で、楽天宿 (箱根小涌園 美山楓林) の Modal が「価格帯 ¥」(price_level=1 の単独 ¥ 記号) になり、楽天で実取得済の価格 (例: 12,000 円) が **捨てられていた**。user が「宿はまだお金回収できてないぞ」と指摘
 - 真因: `formatPriceLevel` の優先順位が「priceRange → price_level 記号 → cost_jpy」の順。楽天 lodging は両方持っている (`price_level=1` from `_price_jpy_to_level(価格<8000)` + `cost_confidence="verified"` + `cost_jpy=実価格`) ため、**先に price_level 記号が選ばれて実価格が捨てられる**構造。cost_confidence の「verified vs estimated」区別を表示順位に反映していなかった
