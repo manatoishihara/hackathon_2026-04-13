@@ -27,6 +27,7 @@
 
 ## ログ
 
+<<<<<<< HEAD
 ## 2026-04-28: Phase 3 polish 案 1+2+3 verify 結果 — 1/3 成功 (前回 0/3) で改善確認、ただし public_bath only place の pack 混入と楽天 applicationId UUID 形式問題が残課題
 - **verify 結果 (本番 dev で 3 回 submit)**:
   - Run 1 (14:53:18): **200 OK** ← 案 3 (`outside_opening_hours` reuse fallback) が attempt 3 で発動して救済成功 (`reusing already-used 'ChIJAdpH56ajGWARpFe4ALTyfas' to keep item_type integrity`)
@@ -181,6 +182,28 @@
 - **学び 2**: Codex review 4 サイクル (各 v3〜v6) で設計段階の Major を catch しても、**「pack の絶対量」のような外部要因依存の問題は catch できない**。本番 deploy 後の Run 観測で初めて見える種類の bug がある (例: 4 attempts × kind_summary log 経由で枯渇判明)
 - **学び 3**: validator は assembler の warn+accept を retry guidance に流すが、**candidate 不足では LLM がいくら retry しても解消しない**。assembler 側で「枯渇時は重複許容」の fallback を用意するのが最終解 (v6.2)
 - **次のステップ (user 作業)**: v6.2 commit + push → 本番再 verify → demo ready
+=======
+## 2026-04-28: 楽天トラベル API が 2026-02-09 に新 API へ移行、エンドポイント + accessKey が必須化
+- 問題: `https://app.rakuten.co.jp/services/api/Travel/SimpleHotelSearch/20170426` が `wrong_parameter` を返す。Application ID（UUID形式）を入れても疎通しない
+- 原因: 2026年2月9日に旧 Travel API が完全停止。新 API への移行で以下が変わった:
+  - **ドメイン変更**: `app.rakuten.co.jp/services/` → `openapi.rakuten.co.jp/engine/`
+  - **accessKey が新たに必須**: 旧 API にはなかったパラメータ。Application ID だけでは認証不可
+  - **Application ID の形式変更**: 旧は数字のみ → 新は UUID 形式（`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）
+- 対応: `apps/api/src/evidence/lodging.py` を修正
+  - `_ENDPOINT` を `openapi.rakuten.co.jp/engine/...` に変更
+  - `RAKUTEN_ACCESS_KEY` 環境変数を追加、params に `accessKey` を注入
+- 新しい環境変数: `RAKUTEN_APPLICATION_ID`（UUID）/ `RAKUTEN_ACCESS_KEY`（pk_... 形式）/ `RAKUTEN_AFFILIATE_ID`（任意）
+- ルール: **楽天 API を使う前に必ず公式 API テストフォーム（webservice.rakuten.co.jp）で最新エンドポイントと必須パラメータを確認せよ。2026年は旧→新移行年のため仕様が大きく変わっている**
+
+## 2026-04-28: 楽天トラベル API 登録時の ID 体系と Render 環境変数設定
+- 状況: 楽天ウェブサービスのアプリ登録フォームで「許可されたIPアドレス」欄に URL を入力してエラー。また Access_Key / Affiliate_ID / Application_ID の 3 つが発行されどれを使うか不明だった
+- 原因・判明事項:
+  - IP欄は URL（`https://...`）不可、IPアドレスのみ受け付ける。Render Free は固定 outbound IP なし → `0.0.0.0/0` で登録を回避する
+  - 楽天 Travel API（SimpleHotelSearch）が使うのは **Application_ID のみ**（`applicationId` パラメータ）。Access_Key は旅行 API では不要、Affiliate_ID は任意
+  - コードの環境変数名: `RAKUTEN_APPLICATION_ID`（必須）/ `RAKUTEN_AFFILIATE_ID`（任意）
+- 疎通確認: ブラウザで `https://app.rakuten.co.jp/services/api/Travel/SimpleHotelSearch/20170426?applicationId=<ID>&format=json&keyword=箱根&checkinDate=YYYY-MM-DD&checkoutDate=YYYY-MM-DD&adultNum=2&hits=3` を開いて hotels 配列が返れば OK
+- ルール: **楽天 API 登録時は「許可されたIPアドレス」を IP 形式で入力。Render Free は固定 IP 非対応のため `0.0.0.0/0` を使う**
+>>>>>>> ceb6e75acce3b8a26f8b2b9ec473a1d540a81072
 
 ## 2026-04-28: Phase 2 polish v6 + v6.1 実装、4 日 plan 生成成功実証、3 件 hotfix で UX 完成度上げ
 - **v6 (commit `c7c2983 / 586ae86 / 95c3fcd`、`707a4e3` で develop merge + push 済)**:
@@ -233,6 +256,22 @@
 - **次のステップ (継続調査)**:
   - user が curl で直接 rakuten API を叩いて 400 の真因を確認 (`curl https://app.rakuten.co.jp/services/api/Travel/SimpleHotelSearch/...`)
   - 原因確定後、適切な fix (maxCharge 計算修正 / checkin 日付 validate / etc)
+
+## 2026-04-28: 楽天新 API の REQUEST_CONTEXT_BODY_HTTP_REFERRER_MISSING — Referer ヘッダーが必須かつ登録 URL と完全一致が必要
+- 問題: `lodging.py` に `headers={"Referer": site_url}` を追加しても `REQUEST_CONTEXT_BODY_HTTP_REFERRER_MISSING` (403) が解消しない。localhost / hackathon vercel URL / routeful vercel URL / webservice.rakuten.co.jp など全 URL を試したが全て 403
+- 原因: 楽天新 API (`openapi.rakuten.co.jp`) は HTTP Referer ヘッダーを必須とし、かつその値が**楽天 developer console に登録したアプリの「アプリ URL」フィールドと完全一致**する必要がある。エラー名 "MISSING" は誤解を招くが実態は「Referer が登録 URL に不一致」
+- 現状: user が developer console に登録した「アプリ URL」が不明。どの URL を登録したか確認が必要
+- ルール: **楽天新 API を使う際は developer console（webservice.rakuten.co.jp/app/list）でアプリ詳細を開き「アプリ URL」フィールドの値を `SITE_BASE_URL` 環境変数に設定すること。完全一致（trailing slash 含む）が必須**
+- 対応状況: `lodging.py` に Referer ヘッダーを送る実装済み（`os.environ.get("SITE_BASE_URL", "https://hackathon-2026-04-13.vercel.app/")`）。user が登録 URL を確認・`SITE_BASE_URL` を Render env に設定すれば解消見込み
+- 診断スクリプト: `apps/api/scripts/test_rakuten_live.py` を作成（.env から自動読み込み、箱根・東京の実検索テスト）
+
+## 2026-04-28: フロント Error 分類 + API ヘルスチェック UX 改善（本セッション実装済み、未 commit）
+- 実装内容:
+  - `apps/web/src/app/plan/new/page.tsx`: `classifyError()` を HTTP ステータス別に詳細分岐（422/429/401/403/404/502-504/500/TypeError/AbortError）、`{ message, detail? }` の 2 段返却、エラー UI を太字メッセージ＋詳細行の 2 行表示に
+  - `apps/web/src/app/plan/[id]/generating/page.tsx`: `ApiError` import 追加、catch ブロックで同等ステータス別分岐
+  - API ヘルスチェック 3 状態（`null`=確認中 / `false`=失敗 / `true`=OK）を分離、確認中はスピナーバナー表示、失敗時のみエラーバナー表示、ボタンテキストは常に「プランを生成」（smoke test 互換）
+- 動機: ページ読み込み直後に「サーバーに接続できません」と出ていた UX 問題と、422 エラーが英語のまま表示される問題を同時解消
+- 注意: これらの変更は git diff に出ていないため前セッションで commit 済みの可能性あり。git log で確認を推奨
   - **Evidence 「不明」表示問題** は別タスクとして切り出し (pack→plan_item の serialization で opening_hours/rating/sources を埋める)
   - **4 日プラン 422 の残存** は v5 で解消できないなら別軸 fix (Pack 構築時に営業日 filter / search keyword 拡張 / outside_opening_hours の retry guidance 強化)
 

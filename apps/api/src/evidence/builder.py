@@ -158,7 +158,10 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
     places = _merge_anchors_and_search(
         anchor_places, search_results, cap, total_days=temporal.total_days
     )
-    lodging_options = _fetch_lodging_safe(ctx, request, temporal, budget)
+    # places の重心座標を楽天宿泊検索の中心として使う（新 API は座標必須）
+    _center_lat = (sum(p.lat for p in places) / len(places)) if places else None
+    _center_lng = (sum(p.lng for p in places) / len(places)) if places else None
+    lodging_options = _fetch_lodging_safe(ctx, request, temporal, budget, lat=_center_lat, lng=_center_lng)
 
     return EvidencePack(
         query_context=ctx,
@@ -637,6 +640,8 @@ def _fetch_lodging_safe(
     request: "GeneratePlanRequest",
     temporal: TemporalConstraints,
     budget: BudgetConstraints,
+    lat: float | None = None,
+    lng: float | None = None,
 ) -> list[LodgingOption]:
     """楽天トラベル API で宿泊候補を取得する。失敗時は空リストを返す (fail-soft)。
 
@@ -654,6 +659,7 @@ def _fetch_lodging_safe(
 
     # region → lat/lng に変換 (失敗時は lodging skip)
     try:
+<<<<<<< HEAD
         coords = geocode_region(ctx.region)
     except GeocodingError as e:
         _logger.warning("rakuten lodging fetch skipped (geocoding failed): %s", e)
@@ -662,6 +668,20 @@ def _fetch_lodging_safe(
         _logger.info(
             "rakuten lodging fetch skipped: geocoding returned no result for region=%r",
             ctx.region,
+=======
+        checkin = request.start_date.isoformat()
+        checkout = request.end_date.isoformat()
+        adult_num = max(1, len(request.participants))
+        max_charge = budget.breakdown_jpy.lodging
+        return fetch_lodging_options(
+            region=ctx.region,
+            checkin_date=checkin,
+            checkout_date=checkout,
+            adult_num=adult_num,
+            max_charge_per_night=max_charge,
+            lat=lat,
+            lng=lng,
+>>>>>>> ceb6e75acce3b8a26f8b2b9ec473a1d540a81072
         )
         return []
 
