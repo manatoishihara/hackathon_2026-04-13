@@ -5,7 +5,40 @@
 
 ---
 
-## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中、Phase 3 polish 案 D 第 9 段 6 タスク実装完了 working tree)
+## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中、Phase 3 polish 案 D 第 9 段 6 タスク実装完了 working tree、ランディング 3 軸再設計 working tree)
+
+---
+
+## 🟡 ランディング文言 3 軸再設計 + 実装事実ベース化 (2026-04-28、ブランチ `feat/landing-copy-rewrite`、working tree 未 commit)
+
+**背景**: 競合 (AVA Travel / NAVITIME Travel AI / Funliday / ChatGPT 等) の現状調査結果、Routeful の本質的差別化は (i) 「みんなで囲む」前提 UX、(ii) 実在の場所だけを使う構造、(iii) 移動時間を実測して時刻を組み立てる、の 3 軸に整理できることが判明。旧ランディングは Feature が 2 個で、軸 (i) を Hero でしか触れず、Feature 説明が「Google Places API を使って…」と実装手段を語っていた問題を修正。
+
+**「嘘をつかない文言」への再修正 (user 指示)**: 中間版で「行ってみたら閉まってた**が起きません**」「チェックインに**間に合わないを起こしません**」と断言形で書いたが、事実整合チェックで以下の乖離が判明したため穏当化:
+- `outside_opening_hours` 残存 (lessons.md 既知、`run 13` で 6/run、hard self-healing 後も完全には消えない、opening_hours 不在 place は validator skip)
+- `transit_to_next` デフォルト None ([plan_routes.py:307](apps/api/src/routes/plan_routes.py#L307))、楽天 lodging 直前のみ haversine 補填 (Phase 3 第 9 段)
+- check-in 時刻 enforcement の validator は未実装 (lodging は 24h 営業扱い)
+
+**最終変更内容**:
+- `apps/web/src/components/landing/HeroSection.tsx`:
+  - 英字ラベル `A JOURNAL FOR THE JOURNEY` → `PLAN TOGETHER, IN ONE ROOM`
+  - メイン本文: 「みんなで1画面を囲んで、**AIと一緒に** 理想の旅行を計画する。」(coral underline は `AIと一緒に`)
+  - 補助コピーは追加せず (中間版で書いた「LINE で議論…」は user 指示で削除)
+- `apps/web/src/app/page.tsx`: Feature を 2→3 個に拡張、各 description は「実装で確実にできる事実」だけを語る形:
+  - 01 `PLANNING TOGETHER` (UsersThree、軸 i): 全員の希望を、1 つのプランに編む / 「2〜5 人ぶんの希望を一度に入力でき、AI が全員の希望文を読み合わせて、誰か一人に偏らない配分を**目指します**。」(成功断言を回避)
+  - 02 `EVIDENCE-BACKED PLACES` (MapTrifold、軸 ii): 実在の場所だけを使う / 「提案されるスポットは Google Places で実在を確認したものだけ。各アイテムの営業時間・評価・出典を**バッヂから 1 件ずつ確認できます**。」(零保証は約束しない、Modal で検証可能であることだけ言う)
+  - 03 `MEASURED ROUTING` (Clock、軸 iii): 移動時間を実測して、時刻を組み立てる / 「Google Maps で実際の経路と所要時間を取得し、それを含めて時刻を並べます。距離に応じて徒歩・電車・車を切り替えます。」(「破綻しない」「間に合う」断言を削除)
+- 旧 description にあった「Google Places API を使って」等の技術ワードは削除、ユーザー価値ベースで書き直し済
+
+**検証**: web test 174/175 PASS (1 件 fail は flaky な transit fallback test、本変更無関係)、tsc clean、Home (landing) smoke test PASS。
+
+**事実整合チェックで残った既知の不整合 (今回はコピー側を寄せて解消)**:
+- 営業時間が空の place は validator が検証 skip ([assembly.py:753-754](apps/api/src/llm/assembly.py#L753) コメント「情報不足、reject しない」)
+- transit_to_next が UI に表示されないケース (楽天以外の lodging 直前 等)
+- 旧コピー「閉まってた が起きません」を実装側で 0 化したいなら別タスク (opening_hours 必須化 / fallback 検索 等)
+
+**次のアクション (user 手動)**:
+1. `pnpm dev` で見た目確認 (Feature 03 追加で縦スクロール量増、AIと一緒に の coral underline 動作確認)
+2. ブランチ `feat/landing-copy-rewrite` に 1 commit → develop merge → push → Vercel auto deploy
 
 ---
 
