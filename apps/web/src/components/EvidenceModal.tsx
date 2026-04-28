@@ -38,6 +38,7 @@ export function EvidenceModal({ item, open, onOpenChange }: Props) {
   // estimated として埋まっていれば「¥X,XXX (推定)」で表示する。価格帯=不明のまま
   // plan には cost が出てる乖離を解消する。
   const priceLevel = formatPriceLevel(
+    evidence.price_range_jpy,
     evidence.price_level,
     item.cost_jpy ?? null,
     item.cost_confidence,
@@ -169,11 +170,30 @@ function formatRating(
 }
 
 function formatPriceLevel(
+  priceRange: { start: number; end: number } | undefined,
   level: number | undefined,
   costJpy: number | null,
   costConfidence: "verified" | "estimated" | "unknown",
 ): { text: string; dim: boolean } {
-  // Google Places の price_level が verified に取れている場合: ¥¥¥¥ 記号で表示
+  // Phase 3 polish 第 9 段 Modal 配線 fix (2026-04-28): Google Places (New) の
+  // priceRange が取れていれば「¥1,500〜¥3,000」と実数値レンジで表示する (最優先)。
+  // ¥¥¥ 記号より具体的、cost_jpy より範囲表示で user に有益。
+  if (
+    priceRange &&
+    typeof priceRange.start === "number" &&
+    typeof priceRange.end === "number" &&
+    priceRange.start >= 0 &&
+    priceRange.end >= priceRange.start
+  ) {
+    if (priceRange.start === priceRange.end) {
+      return { text: formatJpy(priceRange.start), dim: false };
+    }
+    return {
+      text: `${formatJpy(priceRange.start)}〜${formatJpy(priceRange.end)}`,
+      dim: false,
+    };
+  }
+  // priceRange が無い時の fallback: Google Places の price_level (1〜4) → ¥¥¥¥ 記号
   if (typeof level === "number" && level >= 1 && level <= 4) {
     return { text: "¥".repeat(level), dim: false };
   }

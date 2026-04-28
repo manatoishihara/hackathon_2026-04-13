@@ -187,6 +187,52 @@ describe("EvidenceModal", () => {
     expect(screen.getByText("¥¥¥¥")).toBeInTheDocument();
   });
 
+  // Phase 3 polish 第 9 段 Modal 配線 fix (2026-04-28): Google Places (New) の
+  // priceRange を最優先で表示。¥¥¥ 記号より具体的な「¥1,500〜¥3,000」表記。
+  it("price_range_jpy が start ≠ end なら「￥X,XXX〜￥Y,YYY」レンジ表示", () => {
+    const item = makeItem({
+      evidence: {
+        price_range_jpy: { start: 1500, end: 3000 },
+        price_level: 3, // priceRange があれば price_level は無視される
+        sources: ["Google Places"],
+      },
+    });
+    render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+    const priceLabel = screen.getByText("価格帯");
+    const text = priceLabel.parentElement?.textContent ?? "";
+    expect(text).toContain("1,500");
+    expect(text).toContain("3,000");
+    expect(text).toContain("〜");
+  });
+
+  it("price_range_jpy が start == end なら単一値「￥X,XXX」表示", () => {
+    const item = makeItem({
+      evidence: {
+        price_range_jpy: { start: 2000, end: 2000 },
+        sources: ["Google Places"],
+      },
+    });
+    render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+    const priceLabel = screen.getByText("価格帯");
+    const text = priceLabel.parentElement?.textContent ?? "";
+    expect(text).toContain("2,000");
+    expect(text).not.toContain("〜");
+  });
+
+  it("price_range_jpy 不在で price_level あれば ¥¥¥ 記号 fallback", () => {
+    const item = makeItem({
+      evidence: {
+        price_level: 2,
+        sources: ["Google Places"],
+      },
+    });
+    render(<EvidenceModal item={item} open={true} onOpenChange={() => {}} />);
+    const priceLabel = screen.getByText("価格帯");
+    const text = priceLabel.parentElement?.textContent ?? "";
+    expect(text).toContain("¥¥");
+    expect(text).not.toContain("〜");
+  });
+
   it("複数 sources は ' / ' 区切りで連結", () => {
     const item = makeItem({
       evidence: {
