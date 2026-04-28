@@ -112,17 +112,22 @@ _BASE_AXES = [
     "箱根 温泉",
     "箱根 神社 寺",
     "箱根 食事処",
-    "箱根 旅館 ホテル",  # Phase 2 polish v6 で追加 (lodging 候補確保)
+    # Phase 3 polish 案 2 (2026-04-28、lodging keyword 細分化):
+    # 旧「箱根 旅館 ホテル」(2 単語複合) を `旅館` / `ホテル` / `温泉宿` の 3 keyword
+    # に分割。Google relevance ranking で各カテゴリ別に top-N を取れるように。
+    "箱根 旅館",
+    "箱根 ホテル",
+    "箱根 温泉宿",
     "箱根 名所",  # Phase 3 polish (2026-04-28): iconic spot coverage 改善
 ]
 
 
-def test_generate_keywords_auto_no_tags_returns_6_base_axes():
-    """Phase 3 polish (2026-04-28): 基本 6 軸 (観光地 / 温泉 / 神社寺 / 食事処 / 旅館ホテル / 名所) を必ず投入。
+def test_generate_keywords_auto_no_tags_returns_8_base_axes():
+    """Phase 3 polish 案 2 (2026-04-28): 基本 8 軸を必ず投入。
 
-    旧 v6 の 5 軸から「名所」追加で 6 軸に拡張。Google relevance ranking が
-    ガイドブック系語彙にバイアスされるので大涌谷・芦ノ湖等の iconic spot を
-    取り逃しにくくなる。
+    観光地 / 温泉 / 神社寺 / 食事処 / 旅館 / ホテル / 温泉宿 / 名所 の 8 軸。
+    lodging keyword を 3 分割で多様性向上、楽天 API 未設定でも Google Places
+    fallback で lodging 候補 5-10 件確保できる。
     """
     ctx = _make_ctx(tags_per_participant=[[]])
     keywords = _generate_keywords(ctx)
@@ -132,17 +137,17 @@ def test_generate_keywords_auto_no_tags_returns_6_base_axes():
 def test_generate_keywords_auto_with_unique_tag_appends_one():
     ctx = _make_ctx(tags_per_participant=[["写真映え"]])
     keywords = _generate_keywords(ctx)
-    assert len(keywords) == 7
+    assert len(keywords) == 9
     assert "箱根 写真映え" in keywords
-    # 基本 6 軸が先頭にある
-    assert keywords[:6] == _BASE_AXES
+    # 基本 8 軸が先頭にある
+    assert keywords[:8] == _BASE_AXES
 
 
 def test_generate_keywords_auto_with_duplicate_tag_skips():
     ctx = _make_ctx(tags_per_participant=[["温泉"]])
     keywords = _generate_keywords(ctx)
-    # 「箱根 温泉」は基本 6 軸に既に含まれるので tag からは追加されない
-    assert len(keywords) == 6
+    # 「箱根 温泉」は基本 8 軸に既に含まれるので tag からは追加されない
+    assert len(keywords) == 8
     assert keywords.count("箱根 温泉") == 1
 
 
@@ -151,8 +156,8 @@ def test_generate_keywords_auto_caps_tag_at_one():
         tags_per_participant=[["温泉", "和食", "写真映え", "茶道", "着物"]]
     )
     keywords = _generate_keywords(ctx)
-    # 基本 6 軸 + tag 最大 1 個（"温泉" は重複 skip → "和食" が採用）
-    assert len(keywords) == 7
+    # 基本 8 軸 + tag 最大 1 個（"温泉" は重複 skip → "和食" が採用）
+    assert len(keywords) == 9
     assert "箱根 和食" in keywords
     assert "箱根 写真映え" not in keywords  # 1 個目で打ち切り
 
@@ -164,30 +169,35 @@ def test_generate_keywords_theme_mode_adds_theme_words_within_cap():
         tags_per_participant=[[]],
     )
     keywords = _generate_keywords(ctx)
-    # Phase 3: 基本 6 軸 + theme 語彙 (cap _MAX_KEYWORDS=8 まで詰める)
-    assert len(keywords) == 8
-    assert keywords[:6] == _BASE_AXES
-    # 残り 2 件が theme 語彙
+    # Phase 3 案 2: 基本 8 軸 + theme 語彙
+    # onsen theme keywords = ["温泉", "露天風呂", "旅館"] のうち
+    # 「温泉」「旅館」は基本 8 軸に含まれて skip、「露天風呂」だけ extra として追加。
+    # 結果: 8 + 1 = 9 keywords (cap 10 内)
+    assert len(keywords) == 9
+    assert keywords[:8] == _BASE_AXES
+    # 残り 1 件が theme 語彙 (重複 skip)
     extra = [k for k in keywords if k not in set(_BASE_AXES)]
-    assert len(extra) == 2
+    assert len(extra) == 1
+    assert "箱根 露天風呂" in keywords
 
 
-def test_generate_keywords_anchor_mode_returns_base_6_axes():
+def test_generate_keywords_anchor_mode_returns_base_8_axes():
     ctx = _make_ctx(
         mode="anchor",
         payload={"anchor_place_ids": ["place_X"]},
         tags_per_participant=[[]],
     )
     keywords = _generate_keywords(ctx)
-    # anchor mode でも基本 6 軸（anchor は別経路で fetch）
+    # anchor mode でも基本 8 軸（anchor は別経路で fetch）
     assert keywords == _BASE_AXES
 
 
 def test_generate_keywords_theme_with_tag_keeps_theme_word():
     """Codex review 2 Major 2 反映: theme + tag 入力で theme 語彙が tag より先に入る。
 
-    Phase 3: cap _MAX_KEYWORDS=8。基本 6 + theme 2 = 8 で枠埋まり、tag は入らない。
-    theme bias 維持の意図 (Codex review 2 Major 2) は保たれる。
+    Phase 3 案 2: cap _MAX_KEYWORDS=10。onsen theme keyword は base と 2 つ重複する
+    ので extra=1 (露天風呂)、合計 9。tag は cap 10 内に余地があり、写真映え が入って
+    最終的に 10 keyword。tag より theme が先に入る順序は維持される。
     """
     ctx = _make_ctx(
         mode="theme",
@@ -195,18 +205,17 @@ def test_generate_keywords_theme_with_tag_keeps_theme_word():
         tags_per_participant=[["写真映え"]],
     )
     keywords = _generate_keywords(ctx)
-    # 基本 6 軸 + theme 語彙 2 個 (合計 8、cap で打ち切り)。tag は枠不足で入らない
-    assert len(keywords) == 8
-    assert "箱根 写真映え" not in keywords
-    # 基本 6 軸以外で theme bias が反映されている（onsen 系語彙）
-    extra = [k for k in keywords if k not in set(_BASE_AXES)]
-    # extra = theme 2 個 (tag は入らない、theme より優先順位低い)
-    assert len(extra) == 2
+    # 基本 8 軸 + theme 語彙 1 個 (露天風呂、温泉/旅館は重複 skip) + tag 1 個 = 10
+    assert len(keywords) == 10
+    assert "箱根 露天風呂" in keywords  # theme 残った 1 個
+    assert "箱根 写真映え" in keywords  # tag は枠余地ありで入る
+    # theme が tag より先に挿入される順序確認
+    assert keywords.index("箱根 露天風呂") < keywords.index("箱根 写真映え")
 
 
-def test_generate_keywords_max_8_regardless_of_input():
-    """mode 別キーワード回帰: Phase 3 で _MAX_KEYWORDS=8 (6 base + theme + tag) に拡張。
-    いかなる入力でも合計 8 を超えない。
+def test_generate_keywords_max_10_regardless_of_input():
+    """mode 別キーワード回帰: Phase 3 案 2 で _MAX_KEYWORDS=10 (8 base + theme + tag) に拡張。
+    いかなる入力でも合計 10 を超えない。
     """
     for mode, payload in [
         ("auto", None),
@@ -219,7 +228,7 @@ def test_generate_keywords_max_8_regardless_of_input():
             tags_per_participant=[["温泉", "和食", "写真"]],
         )
         keywords = _generate_keywords(ctx)
-        assert len(keywords) <= 8, f"{mode} mode produced {len(keywords)} keywords"
+        assert len(keywords) <= 10, f"{mode} mode produced {len(keywords)} keywords"
 
 
 # =================================================================
@@ -298,40 +307,46 @@ def test_bucket_quota_day_trip_zero_lodging():
 
 
 def test_bucket_quota_one_night():
+    """Phase 3 polish 案 1 (2026-04-28): lodging quota +1 増量で multi-night plan の
+    `item_type_category_mismatch` を緩和。1 泊 plan は 1→2 に増。"""
     quota = _bucket_quota(2)
-    assert quota["lodging"] == 1
+    assert quota["lodging"] == 2
     assert sum(quota.values()) == 15
 
 
 def test_bucket_quota_two_nights():
-    """3 日 plan は v4 で 14 slot に対応するため合計 17 (旧 15 から拡張)。"""
+    """Phase 3 polish 案 1 (2026-04-28): 3 日 plan の lodging quota を 2 → 3 に増量。
+    LLM が lodging slot に spa/restaurant 系を選ぶ問題対策で pack 候補を厚くする。
+    合計は 17 維持 (attraction 7 → 6 でバランス)。"""
     quota = _bucket_quota(3)
-    assert quota["lodging"] == 2
+    assert quota["lodging"] == 3
+    assert quota["attraction"] == 6
+    assert quota["meal"] == 6
     assert sum(quota.values()) == 17
 
 
-def test_bucket_quota_three_nights_phase2_v4():
-    """Phase 2 polish v4: 4 日 plan は 19 slot に対し合計 22 places (lodging=3)。"""
+def test_bucket_quota_three_nights_phase3():
+    """Phase 3 polish 案 1: 4 日 plan の lodging quota を 3 → 4 に増量、合計 22 places 維持。"""
     quota = _bucket_quota(4)
-    assert quota["lodging"] == 3
-    assert quota["attraction"] == 9
+    assert quota["lodging"] == 4
+    assert quota["attraction"] == 8
     assert quota["meal"] == 8
     assert sum(quota.values()) == 22
 
 
-def test_bucket_quota_five_days_phase2_v4():
-    """Phase 2 polish v4: 5 日 plan は 24 slot、合計 27 places (lodging=4、other=3 で残差吸収)。
+def test_bucket_quota_five_days_phase3():
+    """Phase 3 polish 案 1: 5 日 plan の lodging quota を 4 → 5 に増量。
 
     Codex review 1 Major 2 反映: max_places_for(total_days) と sum(quota.values()) の
     contract 一致を保証する。
     """
     from src.evidence.builder import max_places_for
     quota = _bucket_quota(5)
-    assert quota["lodging"] == 4
+    assert quota["lodging"] == 5
     assert quota["attraction"] == 10
     assert quota["meal"] == 10
-    # 残差 = max_places_for(5) - 24 = 3 が other に入る
-    assert quota["other"] == 3
+    # 残差 = max_places_for(5) - (10+10+5) = 27 - 25 = 2 が other に入る
+    assert quota["other"] == 2
     assert sum(quota.values()) == max_places_for(5)
 
 
@@ -460,7 +475,8 @@ def _spread(prefix: str, n: int, lat0: float, bucket_cat: list[str]) -> list[Pla
 
 
 def test_merge_full_buckets_at_two_nights():
-    """2 泊 (total_days=3) で全 bucket 充足。Phase 2 polish v4 で quota 拡張により合計 17 件。"""
+    """Phase 3 polish 案 1: 2 泊 (total_days=3) の bucket quota が
+    attraction 6 / meal 6 / lodging 3 / other 2 = 17 になっていることを確認。"""
     attractions = _spread("a", 10, 35.0, ["tourist_attraction"])
     meals = _spread("m", 10, 36.0, ["restaurant"])
     lodgings = _spread("l", 5, 37.0, ["lodging"])
@@ -473,9 +489,9 @@ def test_merge_full_buckets_at_two_nights():
     )
     assert len(out) == 17
     buckets = [_classify_bucket(p) for p in out]
-    assert buckets.count("attraction") == 7
+    assert buckets.count("attraction") == 6
     assert buckets.count("meal") == 6
-    assert buckets.count("lodging") == 2
+    assert buckets.count("lodging") == 3
     assert buckets.count("other") == 2
 
 
@@ -524,9 +540,14 @@ def test_merge_day_trip_zero_lodging_quota():
 
 
 def test_merge_min_places_fill_when_attraction_short():
-    """observation 不足時、MIN_PLACES=12 まで meal/other/attraction の余りで補填。"""
-    # attraction は 3 件のみ、meal/other/lodging は余裕
-    attractions = _spread("a", 3, 35.0, ["tourist_attraction"])
+    """observation 不足時、MIN_PLACES=12 まで meal/other/attraction の余りで補填。
+
+    Phase 3 polish 案 1 で total_days=2 の lodging quota が 1 → 2 に増えたので、
+    baseline 計算: attraction 3 + meal 5 + lodging 2 + other 2 = 12、すでに MIN_PLACES に
+    到達するので補填路は走らない (旧設計では baseline 11 で補填 1 件、今は不要)。
+    """
+    # attraction は 1 件のみ、meal/other/lodging は余裕
+    attractions = _spread("a", 1, 35.0, ["tourist_attraction"])
     meals = _spread("m", 10, 36.0, ["restaurant"])
     lodgings = _spread("l", 3, 37.0, ["lodging"])
     others = _spread("o", 5, 38.0, ["shopping_mall"])
@@ -536,7 +557,7 @@ def test_merge_min_places_fill_when_attraction_short():
         cap=15,
         total_days=2,
     )
-    # baseline 採用 = attraction 3 + meal 5 + lodging 1 + other 2 = 11、補填で >=12 に
+    # baseline 採用 = attraction 1 + meal 5 + lodging 2 + other 2 = 10、補填で >=12 に
     assert len(out) >= 12
     buckets = [_classify_bucket(p) for p in out]
     # 補填は meal が最初、distance ok の余りから 1 件以上採用
@@ -939,8 +960,8 @@ def test_generate_keywords_history_theme():
 def test_generate_keywords_auto_mode_no_theme_extension():
     """auto モードでは theme keyword は追加されない（regression check）。
 
-    Phase 3 polish (2026-04-28): 基本 6 軸 (観光地 / 温泉 / 神社 寺 / 食事処 / 旅館 ホテル / 名所)
-    + tag「温泉」は重複 skip = 合計 6 件。
+    Phase 3 polish 案 2 (2026-04-28): 基本 8 軸 (観光地 / 温泉 / 神社 寺 / 食事処 /
+    旅館 / ホテル / 温泉宿 / 名所) + tag「温泉」は重複 skip = 合計 8 件。
     """
     ctx = QueryContext(
         region="箱根",
@@ -952,10 +973,12 @@ def test_generate_keywords_auto_mode_no_theme_extension():
         participants=[QueryContextParticipant(name="a", wishes="", tags=["温泉"])],
     )
     keywords = _generate_keywords(ctx)
-    # 基本 6 軸（"温泉" は重複 skip）= 6 件
-    assert len(keywords) == 6
-    assert "箱根 温泉" in keywords  # 基本 6 軸の 1 つとして含まれる
-    assert "箱根 旅館 ホテル" in keywords  # v6 追加分
+    # 基本 8 軸（"温泉" は重複 skip）= 8 件
+    assert len(keywords) == 8
+    assert "箱根 温泉" in keywords  # 基本 8 軸の 1 つとして含まれる
+    assert "箱根 旅館" in keywords  # Phase 3 案 2 で「旅館 ホテル」を分割
+    assert "箱根 ホテル" in keywords
+    assert "箱根 温泉宿" in keywords
     assert "箱根 名所" in keywords  # Phase 3 polish 追加分
 
 

@@ -216,21 +216,27 @@ _BASE_KEYWORD_SUFFIXES: tuple[str, ...] = (
     "温泉",
     "神社 寺",
     "食事処",
-    # Phase 2 polish v6 (2026-04-28、本番 4 日 plan で lodging 欠損対策):
-    # 楽天トラベル API が UUID applicationId で 400 失敗中、Google Places search で
-    # lodging 候補を確保する必要がある。「旅館 ホテル」を keyword に追加して
-    # 4 日 plan の 3 lodging slot (連泊許容で 1 unique でも可) を埋められるようにする。
-    "旅館 ホテル",
+    # Phase 3 polish 案 2 (2026-04-28、lodging 多様性強化):
+    # 旧「旅館 ホテル」(2 単語複合) は Google relevance ranking が両単語含む place
+    # を要求し、結果が薄い問題があった。`旅館` / `ホテル` / `温泉宿` の 3 keyword
+    # に分割することで、各カテゴリで pageSize 20 件 (合計 60 件) を取得 → dedup
+    # 後の lodging 候補を 5-10 件確保できる。楽天トラベル API 未設定時の Google
+    # Places fallback として lodging 多様性を robust に確保する狙い。
+    # 楽天 API が動く環境では、これらに加えて lodging.py が rakuten_search で
+    # 追加候補を取得する (合算で 8-12 件)。
+    "旅館",
+    "ホテル",
+    "温泉宿",
     # Phase 3 polish (2026-04-28、iconic spot coverage 改善):
     # 「箱根 観光地」だけだと relevance ranking で取り逃す iconic spot
     # (大涌谷・芦ノ湖・ポーラ美術館・ガラスの森) を「箱根 名所」で拾う狙い。
     # ガイドブック系 keyword は人気度 ranking が強くバイアスされる傾向がある。
     "名所",
 )
-# Phase 3 polish (2026-04-28、5 → 6 base axes):
-# 旧 5 から 6 に拡張、PARALLEL_WORKERS=5 で 2 batch 直列だが許容範囲のレイテンシ。
-# theme + tag で +1〜2 されると上限 8 だが _MAX_KEYWORDS=8 まで許容。
-_MAX_KEYWORDS = 8
+# Phase 3 polish 案 2 (2026-04-28、6 → 8 base axes):
+# 旧 6 から 8 に拡張 (lodging keyword 分割で +2)。PARALLEL_WORKERS=5 で 2 batch
+# 直列だがレイテンシ ~5 秒、許容範囲。theme + tag で +1〜2 されると上限 10。
+_MAX_KEYWORDS = 10
 
 
 def _generate_keywords(ctx: QueryContext) -> list[str]:
@@ -382,11 +388,49 @@ _BUCKET_DISTANCE_KM: dict[str, float] = {
 # bucket の出力順（pack 先頭から並べる順番）
 _BUCKET_OUTPUT_ORDER: tuple[str, ...] = ("attraction", "lodging", "meal", "other")
 
+# Phase 3 polish 対策 A (2026-04-28、public_bath only place の pack 混入対策):
+# `_classify_bucket` が "other" を返す place のうち、ショッピング/お土産系は観光体験
+# として価値があるので pack に残す。それ以外 (public_bath / sauna / spa only) は LLM
+# が「温泉 = 食事もできる」と誤判断して meal/lodging slot に割当 → validator catch
+# 量産する原因なので pack 投入前に弾く。
+_OTHER_KEEP_CATEGORIES: frozenset[str] = frozenset({
+    "shopping_mall",
+    "shop",
+    "souvenir_shop",
+    "store",
+    "department_store",
+    "market",
+    "supermarket",
+    "convenience_store",
+})
+
 # 補填の優先順位（MIN_PLACES 未満時に余り候補から取る順）。
 # total_days >= 2 のときは lodging 余りも補填対象に含める（Codex review 2 Major 1 反映、
 # 候補は十分あるのに 12 未達となるケースを回避）。
 _BUCKET_FILL_ORDER_DAY_TRIP: tuple[str, ...] = ("meal", "other", "attraction")
 _BUCKET_FILL_ORDER_OVERNIGHT: tuple[str, ...] = ("meal", "other", "attraction", "lodging")
+
+
+def _is_useful_place(place: PlacePoint) -> bool:
+    """全 slot に不適合な place を pack 投入時に弾く (Phase 3 polish 対策 A、2026-04-28)。
+
+    `_classify_bucket` が `"other"` を返す place のうち、`_OTHER_KEEP_CATEGORIES`
+    (shopping_mall / souvenir_shop / market 等) を含むものだけ残す。
+
+    public_bath / sauna / spa only の place を弾くのが本対策の狙い:
+    - これらは meal / activity / lodging いずれの item_type にも適合しない
+    - LLM が「温泉 = 食事もできる」「サウナ = 宿」と誤判断して slot に割当 →
+      assembler の swap も通らず → validator が `item_type_category_mismatch` で
+      reject → 4 attempts retry 尽きて 422
+
+    一方、shopping/store 系は観光体験として価値があり (お土産屋・市場・物産展)、
+    `_BUCKET_OUTPUT_ORDER` の `other` quota (2 件) で観光地に軽く混ざる程度なら
+    plan の彩りとして OK。LLM がこれらを meal/lodging に誤選するリスクは低い。
+    """
+    bucket = _classify_bucket(place)
+    if bucket != "other":
+        return True
+    return any(c in _OTHER_KEEP_CATEGORIES for c in (place.category or []))
 
 
 def _classify_bucket(place: PlacePoint) -> str:
@@ -411,29 +455,38 @@ def _bucket_quota(total_days: int) -> dict[str, int]:
     ように `other` で残差を吸収する (Codex review 1 Major 2: contract 一致保証)。
 
     Phase 2 polish v4 (2026-04-28): 3 日以上のプランで quota が slot 数を満たさず
-    重複完全禁止で詰む問題を解消。以下の slot 数別 sizing:
+    重複完全禁止で詰む問題を解消。
+
+    Phase 3 polish 案 1 (2026-04-28): lodging quota を増量。LLM が lodging slot に
+    spa / restaurant 系の不適合 place を選ぶ問題 (item_type_category_mismatch
+    主因) は、pack の lodging 候補が quota=2 で余裕ゼロのときに、重複防止 swap で
+    枯渇 → LLM が苦し紛れに非 lodging を選ぶ流れで発生していた。lodging quota を
+    +1 増やすことで pack に lodging 候補が +1 入り、LLM の選択肢が増えて mismatch
+    確率が下がる。attraction / meal は -1 ずつで均衡。
+
+    以下の slot 数別 sizing:
 
     - 日帰り (total_days <= 1, 4 slot): lodging=0、attraction +1 / meal +1 → 15 places
-    - 1 泊 (total_days == 2, 9 slot): lodging=1、attraction +1 → 15 places
-    - 2 泊 (total_days == 3, 14 slot): lodging=2、3 日 plan の attraction/meal に
-      余裕を持たせる → 17 places
-    - 3 泊 (total_days == 4, 19 slot): lodging=3 (3 泊分)、activity 8 + meal 8 +
+    - 1 泊 (total_days == 2, 9 slot): lodging=2 (1→2)、attraction +1 → 15 places
+    - 2 泊 (total_days == 3, 14 slot): lodging=3 (2→3)、attraction 6 / meal 6 / other 2 → 17 places
+    - 3 泊 (total_days == 4, 19 slot): lodging=4 (3→4)、attraction 8 + meal 8 +
       buffer 2 → 22 places
     - 4 泊 以上 (total_days >= 5, 24+ slot): activity = meal = 2*total_days、
-      lodging = total_days - 1、`other` で max_places_for との差分を吸収
+      lodging = total_days、`other` で max_places_for との差分を吸収
     """
     if total_days <= 1:
         return {"attraction": 7, "meal": 6, "lodging": 0, "other": 2}  # 15
     if total_days == 2:
-        return {"attraction": 7, "meal": 5, "lodging": 1, "other": 2}  # 15
+        return {"attraction": 6, "meal": 5, "lodging": 2, "other": 2}  # 15
     if total_days == 3:
-        return {"attraction": 7, "meal": 6, "lodging": 2, "other": 2}  # 17
+        return {"attraction": 6, "meal": 6, "lodging": 3, "other": 2}  # 17
     if total_days == 4:
-        return {"attraction": 9, "meal": 8, "lodging": 3, "other": 2}  # 22
-    # 5+ 日 (slot 24+): activity = meal = 2 * total_days, lodging = total_days - 1
+        return {"attraction": 8, "meal": 8, "lodging": 4, "other": 2}  # 22
+    # 5+ 日 (slot 24+): activity = meal = 2 * total_days, lodging = total_days
+    # (旧 lodging = total_days - 1 から +1 増量)
     activity_q = 2 * total_days
     meal_q = 2 * total_days
-    lodging_q = total_days - 1
+    lodging_q = total_days
     # other で max_places_for との差分を吸収して合計一致を保証する。
     other_q = max(2, max_places_for(total_days) - activity_q - meal_q - lodging_q)
     return {"attraction": activity_q, "meal": meal_q, "lodging": lodging_q, "other": other_q}
@@ -490,13 +543,16 @@ def _merge_anchors_and_search(
             out.append(p)
             seen_ids.add(p.place_id)
 
-    # search 結果を flatten + area filter + 既 seen 除外
+    # search 結果を flatten + area filter + 既 seen 除外 + 全 slot 不適合 place 除外
     candidates: list[PlacePoint] = []
     for batch in search_results:
         for p in batch:
             if p.place_id in seen_ids:
                 continue
             if _is_area_place(p):
+                continue
+            # Phase 3 polish 対策 A (2026-04-28): public_bath/sauna only を pre-filter
+            if not _is_useful_place(p):
                 continue
             candidates.append(p)
             seen_ids.add(p.place_id)
@@ -582,22 +638,36 @@ def _fetch_lodging_safe(
     temporal: TemporalConstraints,
     budget: BudgetConstraints,
 ) -> list[LodgingOption]:
-    """楽天トラベル API で宿泊候補を取得する。失敗時は空リストを返す（fail-soft）。"""
-    # 日帰り（1 泊なし）なら宿泊不要
+    """楽天トラベル API で宿泊候補を取得する。失敗時は空リストを返す (fail-soft)。
+
+    Phase 3 polish 案 D (2026-04-28、API spec 準拠書き換え):
+    旧コードは region (str) を keyword として渡していたが、楽天 SimpleHotelSearch
+    は keyword 検索を提供しないので、本コードでは Geocoding API で region → lat/lng
+    に変換 → 半径 3km 圏内検索に切り替えた。SimpleHotelSearch は施設情報のみ返すので
+    checkinDate/checkoutDate/adultNum/maxCharge は API spec に存在せず削除済。
+    """
+    from .geocoding import GeocodingError, geocode_region
+
+    # 日帰り (1 泊なし) なら宿泊不要
     if temporal.total_days <= 1:
         return []
+
+    # region → lat/lng に変換 (失敗時は lodging skip)
     try:
-        checkin = request.start_date.isoformat()
-        checkout = request.end_date.isoformat()
-        adult_num = max(1, len(request.participants))
-        max_charge = budget.breakdown_jpy.lodging
-        return fetch_lodging_options(
-            region=ctx.region,
-            checkin_date=checkin,
-            checkout_date=checkout,
-            adult_num=adult_num,
-            max_charge_per_night=max_charge,
+        coords = geocode_region(ctx.region)
+    except GeocodingError as e:
+        _logger.warning("rakuten lodging fetch skipped (geocoding failed): %s", e)
+        return []
+    if coords is None:
+        _logger.info(
+            "rakuten lodging fetch skipped: geocoding returned no result for region=%r",
+            ctx.region,
         )
+        return []
+
+    lat, lng = coords
+    try:
+        return fetch_lodging_options(lat=lat, lng=lng)
     except RakutenLodgingError as e:
         _logger.warning("rakuten lodging fetch skipped: %s", e)
         return []
