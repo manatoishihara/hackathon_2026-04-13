@@ -9,6 +9,23 @@
 
 ---
 
+## 🟡 Phase 3 polish 第 9 段 + Modal 価格帯 hotfix2 (verified cost_jpy 優先順位) (2026-04-28、現状)
+
+**🟡 Modal 価格帯 hotfix2 (2026-04-28、楽天宿 ¥ 表示問題対応、ブランチ `fix/evidence-modal-verified-cost-priority`、working tree 未 commit)**:
+- 症状: 楽天宿 Modal で「価格帯 ¥」(price_level=1 単独記号) 表示、実取得済の楽天価格が捨てられていた (user 報告「宿はまだお金回収できてないぞ」)
+- 真因: `formatPriceLevel` の優先順位が「priceRange → price_level 記号 → cost_jpy」で、verified cost_jpy が price_level 記号 (推定) に劣後していた
+- 修正: 優先順位を 5 段階に再定義し、`verified cost_jpy` を `price_level` 記号より上に昇格
+  1. priceRange あり (Google Places New 最具体)
+  2. **verified cost_jpy** (外部 API 実取得値、楽天等) ← 新規昇格
+  3. price_level (1〜4) 記号 (推定 4 段階)
+  4. estimated cost_jpy (_PRICE_MAP 推定)
+  5. 不明
+- 検証: Web test 28/28 PASS (既存 2 件 setup 更新 + 新規 1 件)、tsc clean
+- **次のアクション (user 手動)**: 該当ブランチで commit → develop merge → push、本番 verify で楽天宿の Modal が「￥X,XXX」(実価格) 表示になることを確認
+- 詳細: lessons.md「Modal 価格帯の優先順位ミス — verified cost_jpy が price_level 記号 (推定 4 段階) に劣後していた」エントリ参照
+
+---
+
 ## 🟡 Phase 3 polish 第 9 段 + Modal priceRange 配線 hotfix (2026-04-28、現状)
 
 **現在のブランチ状況**:

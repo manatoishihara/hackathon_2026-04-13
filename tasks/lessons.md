@@ -27,6 +27,18 @@
 
 ## ログ
 
+## 2026-04-28: Modal 価格帯の優先順位ミス — verified cost_jpy が price_level 記号 (推定 4 段階) に劣後していた
+- 問題: priceRange 配線 hotfix 後の verify で、楽天宿 (箱根小涌園 美山楓林) の Modal が「価格帯 ¥」(price_level=1 の単独 ¥ 記号) になり、楽天で実取得済の価格 (例: 12,000 円) が **捨てられていた**。user が「宿はまだお金回収できてないぞ」と指摘
+- 真因: `formatPriceLevel` の優先順位が「priceRange → price_level 記号 → cost_jpy」の順。楽天 lodging は両方持っている (`price_level=1` from `_price_jpy_to_level(価格<8000)` + `cost_confidence="verified"` + `cost_jpy=実価格`) ため、**先に price_level 記号が選ばれて実価格が捨てられる**構造。cost_confidence の「verified vs estimated」区別を表示順位に反映していなかった
+- 解決: 優先順位を 5 段階に再定義 (commit `<次の commit>`):
+  1. **priceRange あり** (Google Places New の最具体情報): 「￥1,500〜￥3,000」
+  2. **cost_confidence="verified" + cost_jpy** (外部 API 実取得値、楽天等): 「￥12,000」 ← 新規昇格
+  3. **price_level (1〜4)** (Google Places の推定 4 段階記号): ¥¥¥¥
+  4. **cost_confidence="estimated" + cost_jpy** (_PRICE_MAP 推定): 「￥X,XXX (推定)」
+  5. **不明**
+- ルール: **「verified」は表示順位で「estimated/記号」より上に来るべき**。backend で confidence を埋めても UI で区別しないと verified の価値が出ない。表示優先順位は **「具体度 + 確度」の 2 軸** で考える (具体度: 数値 > 記号、確度: verified > estimated > unknown)
+- → 本 case と前段「priceRange 配線抜け」を合わせて **「データ field を増やしたら UI 側で全 fallback path を見直す」** 運用が必要。3 回目に同種問題が起きたら `.claude/rules/frontend-design.md` に「価格帯の表示優先順位ルール」として昇格
+
 ## 2026-04-28: Evidence Modal の priceRange 配線抜け — backend で抽出 + serialize しても UI 引数で受け取らないと表示されない
 - 問題: 第 9 段 Task A1 で `places.py` に `_parse_price_range_jpy` 実装、`PlacePoint.price_range_jpy` フィールド追加、`plan_routes.py` で `evidence.price_range_jpy = {start, end}` serialize、`packages/shared-types/src/index.ts` の `Evidence` 型にも `price_range_jpy?: { start: number; end: number }` 追加。**しかし `EvidenceModal.tsx:formatPriceLevel` が `evidence.price_range_jpy` を引数で受け取らず無視していた**。GORA BREWERY&GRILL のような Google Places で priceRange が取れている place で「価格帯 ¥¥¥」と price_level 記号のみ表示され、user が「数字が入ってない、取れてはいるんじゃないのか」と指摘
 - 原因: 第 9 段の sub-agent 実装で **「データを抽出する」(Task A1) と「UI で表示する」(Modal 配線) を別タスクと意識せず、A1 完了で UI も使えると暗黙に思い込んだ**。実際は formatPriceLevel の signature 変更まで行わないと UI 反映されない。pack.py / schemas / shared-types / evidence serialize / Modal の 5 段階のうち 4 段階は実装したが Modal 引数追加が抜けた
