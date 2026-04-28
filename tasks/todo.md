@@ -7,7 +7,22 @@
 
 ## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中）
 
-**🟡 Phase 3 polish 案 D 第 2 段 (2026-04-28、楽天 lodging を pack.places に forced 注入を再実装、working tree 未 commit)**: 9e8643b の壊れた merge (conflict marker 50+ 件込みで commit) を `be29b15 fix(merge): ...` で修復後、ローカル verify で「楽天 API は fetch するが plan に楽天宿が登場しない」構造問題が再発。`_lodging_to_place_point` helper + 2 段階 merge (interim 計算 → 重心で楽天 fetch → forced_places 再 merge) で再実装:
+**🟡 Phase 3 polish 案 D 第 6 段 (2026-04-28、楽天 lodging に verified cost 経路、working tree 未 commit)**: 第 3 段で Evidence Modal の価格帯は ¥¥ 表示できたが、user が inline Evidence Badge が「推定」のままと指摘。`_PRICE_MAP[lodging][N] = (jpy, "estimated")` で実価格 (15,000 円) が上書きされる構造的問題を `_resolve_cost_with_rakuten_override` で解消:
+- `apps/api/src/llm/assembly.py`: 楽天 lodging (place_id `rakuten_` prefix) は `pack.lodging_options.price_jpy_per_night` を実価格として使用、`cost_confidence="verified"` に設定。Google Places / 楽天マッチしない / lodging_options 空などは `_PRICE_MAP` 経由 fallback
+- `apps/api/tests/test_llm_assembly.py`: 新規 3 件 (verified path / Google estimated 維持 / fallback)
+- API test **458 PASS**
+- **次のアクション (user verify)**: 再 submit で inline Evidence Badge が楽天宿で「✓ 検証済」表示になることを確認
+- 詳細: lessons.md「2026-04-28: Phase 3 polish 案 D 第 6 段 — 楽天 lodging に verified cost 経路を追加」エントリ参照
+
+**🟡 Phase 3 polish 案 D 第 3〜5 段 (2026-04-28、楽天評価/価格帯引き継ぎ + Evidence「不明 vs 推定」区別 + forced 注入副作用 fix、第 3-4 段は commit `db10d17/0e4f796/f7d4008` で develop merge 済、第 5 段は working tree 未 commit)**: forced 注入後の verify で発覚した 3 点を一括対応:
+- **第 3 段 (backend)**: 楽天 lodging の評価 (`hotelRatingInfo.reviewAverage`) と価格帯 (`hotelMinCharge` → `_price_jpy_to_level` で 1〜4 変換) を `LodgingOption` → `PlacePoint` で引き継ぎ。Evidence Modal で「評価 — 不明」「価格帯 — 不明」表示を解消
+- **第 4 段 (frontend)**: `formatPriceLevel` に `cost_jpy` + `cost_confidence` fallback 追加。price_level 無しでも cost_confidence=estimated なら「￥X,XXX (推定)」、verified なら「￥X,XXX」、どれも無ければ「— 不明」。「価格帯=不明」と「plan に推定 cost が出てる」の乖離を解消
+- **第 5 段 (transit fetch、副作用 fix)**: forced 注入で楽天 place_id が pack.places に入った結果、フロント `transit.ts` の DirectionsService が `'rakuten_172961' is not a valid Place ID.` で INVALID_REQUEST 大量発生 (100+ 件 Console エラー)。`fetchTransitMatrix` で `rakuten_` prefix place を transit fetch 対象から除外する filter 追加で解消
+- API test 455 PASS / Web test 167 PASS / tsc clean
+- **次のアクション (user verify)**: 再 submit で (i) Console エラー消失、(ii) 楽天宿が lodging slot に登場、(iii) Evidence Modal で評価 + 価格帯が数値表示 (不在時は「— 不明」or「(推定)」タグ付き)、の 3 点確認
+- 詳細: lessons.md「2026-04-28: Phase 3 polish 案 D 第 3〜5 段 — 楽天評価/価格帯引き継ぎ + Evidence「不明 vs 推定」区別 + forced 注入副作用」エントリ参照
+
+**🟡 Phase 3 polish 案 D 第 2 段 (2026-04-28、楽天 lodging を pack.places に forced 注入を再実装、develop merge 済 commit `bf5cf72`)**: 9e8643b の壊れた merge (conflict marker 50+ 件込みで commit) を `be29b15 fix(merge): ...` で修復後、ローカル verify で「楽天 API は fetch するが plan に楽天宿が登場しない」構造問題が再発。`_lodging_to_place_point` helper + 2 段階 merge (interim 計算 → 重心で楽天 fetch → forced_places 再 merge) で再実装:
 - `apps/api/src/evidence/builder.py`: `_lodging_to_place_point` 追加 (LodgingOption → PlacePoint 変換、category `["lodging", "hotel", "ryokan"]` 固定、opening_hours 全曜日 unknown)、`build_evidence_pack` を 2 段階 merge に refactor (anchor 同等扱いで pack.places 先頭注入、area filter / quota / 距離ガード bypass)
 - `apps/api/tests/test_evidence_builder.py`: forced 注入の専用 test 4 件追加 (`test_rakuten_lodging_injected_into_pack_places` / `test_rakuten_lodging_empty_does_not_break_pack` / `test_lodging_to_place_point_conversion` / `test_lodging_to_place_point_handles_missing_coords`) + 既存 2 件に `_fetch_lodging_safe` mock 追加で hermetic 化
 - API test **450 PASS** (既知 env 系 2 件 fail のみ)
