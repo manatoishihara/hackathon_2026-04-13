@@ -7,6 +7,13 @@
 
 ## 🏁 進捗サマリ（2026-04-28 更新、v6 deploy で 4 日 plan も初成功、v6.1 で UX 完成度 hotfix 中）
 
+**🟡 Phase 3 polish 案 D 第 2 段 (2026-04-28、楽天 lodging を pack.places に forced 注入を再実装、working tree 未 commit)**: 9e8643b の壊れた merge (conflict marker 50+ 件込みで commit) を `be29b15 fix(merge): ...` で修復後、ローカル verify で「楽天 API は fetch するが plan に楽天宿が登場しない」構造問題が再発。`_lodging_to_place_point` helper + 2 段階 merge (interim 計算 → 重心で楽天 fetch → forced_places 再 merge) で再実装:
+- `apps/api/src/evidence/builder.py`: `_lodging_to_place_point` 追加 (LodgingOption → PlacePoint 変換、category `["lodging", "hotel", "ryokan"]` 固定、opening_hours 全曜日 unknown)、`build_evidence_pack` を 2 段階 merge に refactor (anchor 同等扱いで pack.places 先頭注入、area filter / quota / 距離ガード bypass)
+- `apps/api/tests/test_evidence_builder.py`: forced 注入の専用 test 4 件追加 (`test_rakuten_lodging_injected_into_pack_places` / `test_rakuten_lodging_empty_does_not_break_pack` / `test_lodging_to_place_point_conversion` / `test_lodging_to_place_point_handles_missing_coords`) + 既存 2 件に `_fetch_lodging_safe` mock 追加で hermetic 化
+- API test **450 PASS** (既知 env 系 2 件 fail のみ)
+- **次のアクション (user verify)**: 5〜10 回連続 submit で安定性 + plan の lodging slot に `rakuten_<数字>` 形式の楽天宿が登場するか確認 → 安定性 OK なら commit + push → 本番 env (Render / Vercel) に `RAKUTEN_APPLICATION_ID` (UUID) + `RAKUTEN_ACCESS_KEY` (`pk_...`) + `RAKUTEN_AFFILIATE_ID` + `SITE_BASE_URL` 投入
+- 詳細: lessons.md「2026-04-28: Phase 3 polish 案 D 第 2 段 — 楽天 lodging を pack.places に forced 注入する再設計を採用」エントリ参照
+
 **Phase 2 polish v6 (2026-04-28、本番 deploy 完了): 4 日 plan 生成成功実証**: 🟢 commits `c7c2983 / 586ae86 / 95c3fcd`、`707a4e3` で develop merge + push 済。
 - 主要変更:
   - assembler **item_type pre-check** (LLM が meal slot に park 等を選んだら事前 swap)

@@ -22,7 +22,7 @@ from src.evidence.builder import (
     _merge_anchors_and_search,
     build_evidence_pack,
 )
-from src.evidence.pack import PlacePoint, QueryContext, QueryContextParticipant
+from src.evidence.pack import LodgingOption, PlacePoint, QueryContext, QueryContextParticipant
 from src.schemas import (
     BudgetBreakdown,
     GeneratePlanRequest,
@@ -853,12 +853,19 @@ def test_dedupe_keeps_place_with_secondary_area_tag_if_primary_is_specific():
 # ==============================
 
 
+@patch("src.evidence.builder._fetch_lodging_safe")
 @patch("src.evidence.builder.search_by_text")
-def test_build_evidence_pack_assembles_structure(mock_search):
+def test_build_evidence_pack_assembles_structure(mock_search, mock_lodging):
+    """Phase 3 polish 案 D 第 2 段 (2026-04-28): 楽天 lodging を pack.places に
+    forced 注入する変更後、本 test は楽天 API を mock してフラットなフィクスチャ環境で
+    pack.places の純粋な search 結果のみを検証する。
+    """
     mock_search.return_value = [
         _place("p1", "箱根神社", 35.20, 139.02),
         _place("p2", "箱根湯本駅", 35.23, 139.10),
     ]
+    # 楽天 lodging は本 test の責務外なので空で mock (本 fetch logic は test_lodging.py)
+    mock_lodging.return_value = []
 
     req = _sample_request()
     pack = build_evidence_pack(req)
@@ -908,17 +915,143 @@ def test_search_failure_does_not_abort_build(mock_search):
     assert pack.transit_matrix == []
 
 
+@patch("src.evidence.builder._fetch_lodging_safe")
 @patch("src.evidence.builder.search_by_text")
-def test_all_searches_failing_still_returns_pack(mock_search):
-    """全 Places クエリが失敗しても、空 places で pack は返る（LLM 側で空処理可）。"""
+def test_all_searches_failing_still_returns_pack(mock_search, mock_lodging):
+    """全 Places クエリが失敗しても、空 places で pack は返る（LLM 側で空処理可）。
+
+    Phase 3 polish 案 D 第 2 段 (2026-04-28): 楽天 lodging も pack.places に
+    forced 注入されるので本 test は楽天も空で mock。
+    """
     from src.evidence.places import PlacesError
 
     mock_search.side_effect = PlacesError("everything broken")
+    mock_lodging.return_value = []
     pack = build_evidence_pack(_sample_request())
     assert pack.places == []
     assert pack.transit_matrix == []
     # budget/temporal は Places の成否と無関係に計算される
     assert pack.budget_constraints.total_jpy_per_person == 30000
+
+
+# ==============================
+# Phase 3 polish 案 D 第 2 段: 楽天 lodging を pack.places に forced 注入
+# (2026-04-28)
+# ==============================
+
+
+@patch("src.evidence.builder._fetch_lodging_safe")
+@patch("src.evidence.builder.search_by_text")
+def test_rakuten_lodging_injected_into_pack_places(mock_search, mock_lodging):
+    """Phase 3 polish 案 D 第 2 段: 楽天 fetch 結果が PlacePoint 化されて pack.places
+    の先頭 (anchor 同等扱い) に注入される。LLM の slot 候補に登場させるための再設計。
+
+    Before: 楽天 lodging は pack.lodging_options にのみ入り pack.places に居なかったため
+    LLM プロンプトの slot 候補から落ちて plan に楽天宿が出ない構造的問題があった。
+    """
+    mock_search.return_value = [
+        _place("p1", "箱根神社", 35.20, 139.02),
+        _place("p2", "箱根湯本駅", 35.23, 139.10),
+    ]
+    mock_lodging.return_value = [
+        LodgingOption(
+            place_id="rakuten_12345",
+            name="箱根温泉旅館 テスト館",
+            price_jpy_per_night=15000,
+            lat=35.23,
+            lng=139.10,
+            url="https://travel.rakuten.co.jp/hotel/12345/",
+        ),
+        LodgingOption(
+            place_id="rakuten_67890",
+            name="箱根ホテル",
+            price_jpy_per_night=20000,
+            lat=35.24,
+            lng=139.05,
+            url="https://travel.rakuten.co.jp/hotel/67890/",
+        ),
+    ]
+
+    pack = build_evidence_pack(_sample_request())
+
+    # 楽天 lodging が pack.places に登場している (LLM slot 候補に届く)
+    rakuten_in_places = [p for p in pack.places if p.place_id.startswith("rakuten_")]
+    assert len(rakuten_in_places) == 2
+    assert {p.place_id for p in rakuten_in_places} == {"rakuten_12345", "rakuten_67890"}
+
+    # category は固定で lodging 系 (LLM が lodging slot で識別可能)
+    for p in rakuten_in_places:
+        assert "lodging" in p.category
+        assert "hotel" in p.category
+
+    # opening_hours_unknown_days 全曜日 (lodging は 24h 営業仮定で eligibility skip)
+    for p in rakuten_in_places:
+        assert set(p.opening_hours_unknown_days) == {0, 1, 2, 3, 4, 5, 6}
+
+    # pack.lodging_options も維持 (将来の表示拡張・bookings 機能用)
+    assert pack.lodging_options is not None
+    assert len(pack.lodging_options) == 2
+
+
+@patch("src.evidence.builder._fetch_lodging_safe")
+@patch("src.evidence.builder.search_by_text")
+def test_rakuten_lodging_empty_does_not_break_pack(mock_search, mock_lodging):
+    """楽天 fetch 0 件 (env 未設定 / API 失敗) でも pack 構築は続行 (fail-soft)。"""
+    mock_search.return_value = [
+        _place("p1", "箱根神社", 35.20, 139.02),
+    ]
+    mock_lodging.return_value = []
+
+    pack = build_evidence_pack(_sample_request())
+    # 楽天 0 件でも Google Places は pack.places に入る
+    assert len(pack.places) == 1
+    assert pack.places[0].place_id == "p1"
+    # lodging_options は None (空のとき)
+    assert pack.lodging_options is None
+
+
+def test_lodging_to_place_point_conversion():
+    """_lodging_to_place_point が LodgingOption → PlacePoint に正しく変換することを単体検証。"""
+    from src.evidence.builder import _lodging_to_place_point
+
+    lo = LodgingOption(
+        place_id="rakuten_99999",
+        name="変換テスト旅館",
+        price_jpy_per_night=12000,
+        lat=35.5,
+        lng=139.5,
+        url="https://example.com/",
+    )
+    pp = _lodging_to_place_point(lo)
+    assert pp.place_id == "rakuten_99999"
+    assert pp.name == "変換テスト旅館"
+    assert "lodging" in pp.category
+    assert "hotel" in pp.category
+    assert pp.lat == 35.5
+    assert pp.lng == 139.5
+    # opening_hours は空、unknown_days は全曜日
+    assert pp.opening_hours == []
+    assert set(pp.opening_hours_unknown_days) == {0, 1, 2, 3, 4, 5, 6}
+    # rating / user_ratings_total は LodgingOption に無いので None
+    assert pp.rating is None
+    assert pp.user_ratings_total is None
+
+
+def test_lodging_to_place_point_handles_missing_coords():
+    """LodgingOption.lat/lng が None でも PlacePoint は生成可能 (0.0 にフォールバック)。"""
+    from src.evidence.builder import _lodging_to_place_point
+
+    lo = LodgingOption(
+        place_id="rakuten_no_coords",
+        name="座標欠損テスト",
+        price_jpy_per_night=8000,
+        lat=None,
+        lng=None,
+        url=None,
+    )
+    pp = _lodging_to_place_point(lo)
+    assert pp.lat == 0.0
+    assert pp.lng == 0.0
 
 
 # ==============================

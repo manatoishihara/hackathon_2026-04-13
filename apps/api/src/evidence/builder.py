@@ -155,15 +155,34 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
     temporal = _compute_temporal_constraints(request)
     budget = _compute_budget_constraints(request)
     cap = max_places_for(temporal.total_days)
-    places = _merge_anchors_and_search(
+
+    # 楽天 lodging を fetch するために、まず Google Places の重心を取るための先行 merge を実行。
+    # places の重心座標を楽天宿泊検索の中心として使う (新 API は座標必須、docs/rakuten-travel-api.md)。
+    _interim_places = _merge_anchors_and_search(
         anchor_places, search_results, cap, total_days=temporal.total_days
     )
-    # places の重心座標を楽天宿泊検索の中心として使う (新 API は座標必須、docs/rakuten-travel-api.md)
-    _center_lat = (sum(p.lat for p in places) / len(places)) if places else None
-    _center_lng = (sum(p.lng for p in places) / len(places)) if places else None
+    _center_lat = (sum(p.lat for p in _interim_places) / len(_interim_places)) if _interim_places else None
+    _center_lng = (sum(p.lng for p in _interim_places) / len(_interim_places)) if _interim_places else None
     lodging_options = _fetch_lodging_safe(
         ctx, request, temporal, budget, lat=_center_lat, lng=_center_lng,
     )
+
+    # Phase 3 polish 案 D 第 2 段 (2026-04-28): 楽天 LodgingOption を PlacePoint 化して
+    # pack.places に forced 注入し、LLM の slot 候補として認識させる。
+    # 旧構造は楽天 lodging が pack.lodging_options にしか入らず LLM プロンプトに届か
+    # なかったため、楽天 5 件取得しても plan には Google Places の hotel しか登場しない
+    # 問題があった (本番 dev で確認、ログで `rakuten_<数字>` place_id が swap log に
+    # 一度も登場しなかった事実)。anchor 同等扱いで area filter / quota / 距離ガード
+    # を bypass する forced_places として再 merge する。
+    rakuten_lodging_places = [_lodging_to_place_point(lo) for lo in lodging_options]
+    if rakuten_lodging_places:
+        forced_places = anchor_places + rakuten_lodging_places
+        places = _merge_anchors_and_search(
+            forced_places, search_results, cap, total_days=temporal.total_days
+        )
+    else:
+        # 楽天 fetch 失敗 / fail-soft で 0 件のときは interim をそのまま採用 (再 merge 無駄なので)
+        places = _interim_places
 
     return EvidencePack(
         query_context=ctx,
@@ -172,6 +191,34 @@ def build_evidence_pack(request: GeneratePlanRequest) -> EvidencePack:
         lodging_options=lodging_options if lodging_options else None,
         budget_constraints=budget,
         temporal_constraints=temporal,
+    )
+
+
+def _lodging_to_place_point(lodging: LodgingOption) -> PlacePoint:
+    """楽天 LodgingOption を PlacePoint に変換して pack.places に投入可能にする
+    (Phase 3 polish 案 D 第 2 段、2026-04-28)。
+
+    LodgingOption は category 情報を持たないので、固定で lodging 系 category を割当て
+    LLM が lodging slot に正しく choose できるようにする。opening_hours は空 +
+    全曜日 unknown 扱いで `is_place_eligible_for_slot` を通す (lodging は 24 時間営業
+    仮定、validator も unknown_days はスキップ対象)。
+
+    rating / user_ratings_total は LodgingOption に無いので None (post-rank sort で
+    末尾に配置されるが、anchor 同等扱いで forced 注入されるので問題なし)。
+    """
+    return PlacePoint(
+        place_id=lodging.place_id,  # "rakuten_<数字>" 形式
+        name=lodging.name,
+        category=["lodging", "hotel", "ryokan"],
+        lat=lodging.lat or 0.0,
+        lng=lodging.lng or 0.0,
+        address="",
+        opening_hours=[],
+        opening_hours_unknown_days=[0, 1, 2, 3, 4, 5, 6],
+        price_level=None,
+        rating=None,
+        user_ratings_total=None,
+        relevance_tags=[],
     )
 
 
