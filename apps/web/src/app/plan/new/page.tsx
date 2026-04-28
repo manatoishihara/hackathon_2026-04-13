@@ -21,7 +21,6 @@ import { formatJpy } from "@/lib/format";
 import {
   planFormSchema,
   type PlanFormValues,
-  type ThemeKey,
 } from "@/lib/schemas/planForm";
 import { ensureAnonymousSession, getCurrentUserId } from "@/lib/supabase";
 import { AnchorPicker } from "@/components/AnchorPicker";
@@ -29,7 +28,6 @@ import { BudgetBreakdownSlider } from "@/components/BudgetBreakdownSlider";
 import { DateRangePicker } from "@/components/DateRangePicker";
 import { ModeSelector } from "@/components/ModeSelector";
 import { ParticipantTabs } from "@/components/ParticipantTabs";
-import { ThemePicker } from "@/components/ThemePicker";
 import { StepProgressRunway } from "@/components/plan-new/StepProgressRunway";
 import { useGenerationSessionStore } from "@/stores/generationSessionStore";
 
@@ -178,12 +176,6 @@ export default function NewPlanPage() {
         { anchor_place_ids: [] },
         { shouldDirty: true },
       );
-    } else if (next === "theme") {
-      setValue(
-        "mode_payload",
-        { theme: "onsen" },
-        { shouldDirty: true },
-      );
     }
     clearErrors("mode_payload");
   };
@@ -196,31 +188,12 @@ export default function NewPlanPage() {
     );
   };
 
-  const handleThemeChange = (theme: ThemeKey | null) => {
-    if (theme === null) {
-      // 選択解除 → auto モードに戻す（discriminated union を壊さない安全側）
-      handleModeChange("auto");
-      return;
-    }
-    setValue(
-      "mode_payload",
-      { theme },
-      { shouldDirty: true, shouldValidate: true },
-    );
-  };
-
   const anchorIds =
     startMode === "anchor" &&
     watched.mode_payload &&
     "anchor_place_ids" in watched.mode_payload
       ? watched.mode_payload.anchor_place_ids
       : [];
-  const currentTheme: ThemeKey | null =
-    startMode === "theme" &&
-    watched.mode_payload &&
-    "theme" in watched.mode_payload
-      ? watched.mode_payload.theme
-      : null;
 
   // 入力埋まり率（飛行機の進行に使う）
   // D 案 (2026-04-28): departure_point は demo スコープから外したので進捗計算からも除外。
@@ -461,7 +434,7 @@ export default function NewPlanPage() {
             id="start-mode-heading"
             className="text-sm font-semibold text-[color:var(--color-text-secondary)]"
           >
-            出発モード
+            モード
           </h2>
           <ModeSelector
             value={startMode}
@@ -474,15 +447,9 @@ export default function NewPlanPage() {
               <AnchorPicker value={anchorIds} onChange={handleAnchorChange} />
               {formState.errors.mode_payload ? (
                 <p className="mt-2 text-xs text-[color:var(--color-danger)]">
-                  {formState.errors.mode_payload.message ?? "アンカーを 1 件以上指定してください"}
+                  {formState.errors.mode_payload.message ?? "こだわりを 1 件以上指定してください"}
                 </p>
               ) : null}
-            </div>
-          ) : null}
-
-          {startMode === "theme" ? (
-            <div className="mt-2 rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-surface)] p-4">
-              <ThemePicker value={currentTheme} onChange={handleThemeChange} />
             </div>
           ) : null}
         </section>
